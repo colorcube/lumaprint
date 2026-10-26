@@ -58,8 +58,18 @@ impl DriverColorControl {
         )
     }
 
-    /// Human-readable German status message for the Color Management panel.
+    /// Concise German status badge for the Color Management panel.
     pub const fn status_badge_de(self) -> &'static str {
+        match self {
+            Self::EpsonEscpr { .. } | Self::Gutenprint | Self::TurboPrint => {
+                "Treiber-Farbkorrektur deaktiviert"
+            }
+            Self::GenericCups => "Generischer CUPS-Treiber",
+        }
+    }
+
+    /// Detailed German tooltip describing the exact CUPS flag sent to disable driver color correction.
+    pub const fn status_tooltip_de(self) -> &'static str {
         match self {
             Self::EpsonEscpr { .. } => {
                 "Treiber-Farbkorrektur wird automatisch deaktiviert (EpsonColorMode=NoColorAdjustment)"
@@ -547,7 +557,18 @@ pub fn parse_lpstat_output(lpstat_p_d: &str, lpstat_v: &str) -> Vec<SystemPrinte
                 if q_name.is_empty() {
                     continue;
                 }
-                let status_rest = parts.next().unwrap_or("idle").trim().to_string();
+                let raw_status = parts.next().unwrap_or("idle").trim();
+                let status_rest = raw_status
+                    .split("enabled since")
+                    .next()
+                    .unwrap_or(raw_status)
+                    .split("disabled since")
+                    .next()
+                    .unwrap_or(raw_status)
+                    .trim()
+                    .trim_end_matches('.')
+                    .trim()
+                    .to_string();
                 let uri = uris
                     .get(&q_name)
                     .cloned()

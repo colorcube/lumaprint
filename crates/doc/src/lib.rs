@@ -1097,6 +1097,9 @@ pub struct PrintJobDocument {
     /// Shows dashed light-gray slot boundary lines on the paper sheet.
     #[serde(default = "default_true")]
     pub show_slot_guides: bool,
+    /// Shows millimeter/inch rulers along the top and left edges of the paper sheet.
+    #[serde(default = "default_true")]
+    pub show_rulers: bool,
     pub canvas_backdrop: CanvasBackdropTone,
     pub show_settings_panel: bool,
     /// The Image Pool (`Bilder-Pool`).
@@ -1128,6 +1131,7 @@ impl Default for PrintJobDocument {
             print_scope: PrintScope::AllPages,
             pool_filter_unassigned_only: false,
             show_slot_guides: true,
+            show_rulers: true,
             canvas_backdrop: CanvasBackdropTone::DarkGray,
             show_settings_panel: true,
             images: Vec::new(),

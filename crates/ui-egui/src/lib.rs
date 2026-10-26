@@ -1309,6 +1309,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             &mut self.session.doc.show_slot_guides,
                             "Zeige Rahmen um Slots (gestrichelte Linie)",
                         );
+                        let _ = ui.checkbox(
+                            &mut self.session.doc.show_rulers,
+                            "Zeige Lineal",
+                        );
 
                         ui.separator();
                         let mut sp = self.session.doc.color.softproof;
@@ -1543,6 +1547,12 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         .clicked()
                     {
                         self.session.doc.show_slot_guides = !self.session.doc.show_slot_guides;
+                    }
+                    if draw_rulers_toolbar_button(ui, &t, self.session.doc.show_rulers)
+                        .on_hover_text("Zeige Lineal")
+                        .clicked()
+                    {
+                        self.session.doc.show_rulers = !self.session.doc.show_rulers;
                     }
 
                     ui.separator();
@@ -2963,6 +2973,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         ph_mm: f32,
         scale: f32,
     ) {
+        if !self.session.doc.show_rulers {
+            return;
+        }
         let unit = self.session.doc.display_unit;
         let step_mm: f32 = match unit {
             DisplayUnit::Mm => 20.0,
@@ -4207,7 +4220,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         RichText::new(format!("{prefix} {}", drv_ctrl.status_badge_de()))
                             .small()
                             .color(badge_col),
-                    );
+                    )
+                    .on_hover_text(drv_ctrl.status_tooltip_de());
                     ui.end_row();
                 }
 
@@ -6435,6 +6449,71 @@ fn draw_slot_guides_toolbar_button(
 
     let inner = Rect::from_center_size(rect.center(), Vec2::new(16.0, 12.0));
     draw_dashed_rect(p, inner, Stroke::new(1.5_f32, fg), 3.0, 2.0);
+
+    resp
+}
+
+/// Paints a toolbar toggle icon button for sheet rulers (`Zeige Lineal`).
+fn draw_rulers_toolbar_button(
+    ui: &mut Ui,
+    tokens: &Tokens,
+    active: bool,
+) -> egui::Response {
+    let size = Vec2::new(28.0, 24.0);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+
+    let bg = if resp.is_pointer_button_down_on() {
+        tokens.accent.gamma_multiply(0.38)
+    } else if active {
+        tokens.accent.gamma_multiply(0.24)
+    } else if resp.hovered() {
+        tokens.hover
+    } else {
+        tokens.field
+    };
+    let border_col = if active || resp.hovered() {
+        tokens.accent
+    } else {
+        tokens.field_border
+    };
+    let fg = if active {
+        tokens.accent
+    } else if resp.hovered() {
+        tokens.text
+    } else {
+        tokens.text_dim
+    };
+
+    let p = ui.painter();
+    p.rect_filled(rect, CornerRadius::same(4), bg);
+    p.rect_stroke(
+        rect,
+        CornerRadius::same(4),
+        Stroke::new(1.0_f32, border_col),
+        StrokeKind::Middle,
+    );
+
+    // Crisp horizontal ruler bar with graduation tick marks
+    let r_bar = Rect::from_center_size(rect.center(), Vec2::new(18.0, 9.0));
+    let stroke = Stroke::new(1.4_f32, fg);
+    p.rect_stroke(r_bar, CornerRadius::same(1), stroke, StrokeKind::Middle);
+    for (dx, tick_h) in [
+        (-6.0_f32, 4.5_f32),
+        (-3.0, 2.8),
+        (0.0, 4.5),
+        (3.0, 2.8),
+        (6.0, 4.5),
+    ] {
+        let x = r_bar.center().x + dx;
+        p.line_segment(
+            [
+                Pos2::new(x, r_bar.min.y),
+                Pos2::new(x, r_bar.min.y + tick_h),
+            ],
+            Stroke::new(1.2_f32, fg),
+        );
+    }
 
     resp
 }
