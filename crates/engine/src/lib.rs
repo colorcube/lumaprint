@@ -20,14 +20,18 @@ use lumaprint_cups::{
     discover_system_printers, sn_id_to_base_media_key, submit_cups_job,
 };
 use lumaprint_doc::{
-    CenteringMode, ColorManagementMode, CropSpec, CustomMediaSpec, DetailedPrinterSettings,
-    DocError, FrameLineSpec, GalleryWrapSpec, LayoutMode, OutputSharpening, PaperSource, PlatenGap,
-    PrintJobDocument, PrintPreset, PrintQuality, SourceImageEntry, find_media_type,
+    CanvasViewMode, CenteringMode, ColorManagementMode, CropSpec, CustomMediaSpec,
+    DetailedPrinterSettings, DocError, FrameLineSpec, GalleryWrapSpec, LayoutMode,
+    OutputSharpening, PaperSource, PlatenGap, PrintJobDocument, PrintPreset, PrintQuality,
+    PrintScope, PrintSheetPage, SourceImageEntry, find_media_type,
 };
 use lumaprint_geom::{MarginsMm, Orientation, RectMm, SizeMm};
 use lumaprint_ipp::{IppError, PrinterStatus, query_printer_status_ipp};
-use lumaprint_layout::{SolvedPageLayout, build_grid_template, solve_page_layout};
-use lumaprint_render::{RenderError, render_page_16bit};
+use lumaprint_layout::{
+    SolvedPageLayout, build_grid_template, slots_capacity_for_layout, solve_page_layout,
+    solve_page_layout_at,
+};
+use lumaprint_render::{RenderError, render_page_16bit, render_page_at_16bit};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -51,6 +55,33 @@ pub enum EngineError {
     InvalidParam(String),
 }
 
+/// Scans a directory (non-recursively) for supported image files and returns sorted paths.
+pub fn scan_folder_for_images(folder: impl AsRef<Path>) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(folder.as_ref()) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<String> = entries
+        .flatten()
+        .filter_map(|e| {
+            let p = e.path();
+            if !p.is_file() {
+                return None;
+            }
+            let ext = p.extension()?.to_str()?.to_ascii_lowercase();
+            if matches!(
+                ext.as_str(),
+                "tif" | "tiff" | "png" | "jpg" | "jpeg" | "webp" | "bmp"
+            ) {
+                Some(p.to_string_lossy().to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+    paths.sort();
+    paths
+}
+
 /// Metadata descriptor for a registered Engine Command.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommandSpec {
@@ -63,7 +94,7 @@ pub struct CommandSpec {
 pub const COMMAND_CATALOG: &[CommandSpec] = &[
     CommandSpec {
         id: "file.add_image",
-        label_de: "Bilddatei öffnen",
+        label_de: "Bilddatei in den Bilder-Pool importieren",
         category: "Datei",
     },
     CommandSpec {
@@ -85,6 +116,21 @@ pub const COMMAND_CATALOG: &[CommandSpec] = &[
         id: "edit.redo",
         label_de: "Wiederholen (Ctrl+Y)",
         category: "Bearbeiten",
+    },
+    CommandSpec {
+        id: "page.add",
+        label_de: "Neuen Druckbogen anlegen",
+        category: "Bogen",
+    },
+    CommandSpec {
+        id: "page.remove",
+        label_de: "Druckbogen entfernen (Bilder bleiben im Pool)",
+        category: "Bogen",
+    },
+    CommandSpec {
+        id: "page.auto_distribute",
+        label_de: "Bilder aus dem Pool automatisch auf Bögen verteilen",
+        category: "Bogen",
     },
     CommandSpec {
         id: "printer.refresh_printers",
@@ -127,6 +173,11 @@ pub const COMMAND_CATALOG: &[CommandSpec] = &[
         category: "Layout",
     },
     CommandSpec {
+        id: "layout.apply_all_pages",
+        label_de: "Layout des aktuellen Bogens auf alle Bögen anwenden",
+        category: "Layout",
+    },
+    CommandSpec {
         id: "layout.set_margins",
         label_de: "Seitenränder (Oben/Links/Unten/Rechts) setzen",
         category: "Layout",
@@ -162,6 +213,7 @@ pub const COMMAND_CATALOG: &[CommandSpec] = &[
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EngineCommand {
     AddImageFile { path: String },
+    ImportImageFiles { paths: Vec<String> },
     AddDemoImages,
     RemoveImage { image_id: u64 },
     SelectActiveImage { index: usize },
@@ -180,6 +232,7 @@ pub enum EngineCommand {
     SetCopies(u32),
     AddCustomMedia(CustomMediaSpec),
     SetLayoutMode(LayoutMode),
+    ApplyLayoutToAllPages,
     SetOrientation(Orientation),
     SetStandardMargins(MarginsMm),
     SetStandardManualRect(RectMm),
@@ -196,6 +249,45 @@ pub enum EngineCommand {
         slot_index: usize,
         image_id: Option<u64>,
     },
+    AssignImageToPageSlot {
+        page_index: usize,
+        slot_index: usize,
+        image_id: Option<u64>,
+    },
+    SwapPageSlots {
+        page_a: usize,
+        slot_a: usize,
+        page_b: usize,
+        slot_b: usize,
+    },
+    SelectPage {
+        page_index: usize,
+    },
+    SelectSlot {
+        page_index: usize,
+        slot_index: usize,
+    },
+    AddPage {
+        initial_image_id: Option<u64>,
+    },
+    DuplicatePage {
+        page_index: usize,
+    },
+    RemovePage {
+        page_index: usize,
+    },
+    ClearPageSlots {
+        page_index: usize,
+    },
+    MovePage {
+        from_index: usize,
+        to_index: usize,
+    },
+    AutoDistributePoolImages {
+        only_unassigned: bool,
+    },
+    SetCanvasViewMode(CanvasViewMode),
+    SetPrintScope(PrintScope),
     SetImageCrop {
         image_id: u64,
         crop: CropSpec,
@@ -527,6 +619,7 @@ impl Session {
 
     /// Executes a typed `EngineCommand`, recording Undo state and enforcing constraints.
     pub fn execute(&mut self, cmd: EngineCommand) -> Result<(), EngineError> {
+        self.doc.sync_active_page_to_list();
         match cmd {
             EngineCommand::Undo => {
                 if let Some(prev) = self.undo_stack.pop() {
@@ -581,31 +674,18 @@ impl Session {
 
         match cmd {
             EngineCommand::AddImageFile { path } => {
-                let loaded = load_image_file(&path)?;
-                let id = self.next_image_id;
-                self.next_image_id += 1;
-                let fname = Path::new(&path)
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(&path)
-                    .to_string();
-                let aspect = f64::from(loaded.meta.width) / f64::from(loaded.meta.height.max(1));
-                self.image_buffers
-                    .insert(id, (loaded.buffer, loaded.meta.color_space));
-                self.doc.images.push(SourceImageEntry {
-                    id,
-                    path,
-                    display_name: fname.clone(),
-                    meta: loaded.meta,
-                    crop: CropSpec::default(),
-                    composer_size_mm: SizeMm {
-                        width_mm: 90.0 * aspect.clamp(0.5, 2.0),
-                        height_mm: 90.0,
-                    },
-                    composer_pos_mm: (15.0, 15.0),
-                });
-                self.doc.active_image_index = self.doc.images.len().saturating_sub(1);
-                self.status_message = format!("Bild '{}' geladen (16-Bit Pipeline).", fname);
+                let fname = self.import_single_image_into_pool(&path)?;
+                self.status_message =
+                    format!("Bild '{}' in den Bilder-Pool aufgenommen (16-Bit).", fname);
+            }
+            EngineCommand::ImportImageFiles { paths } => {
+                let mut count = 0usize;
+                for p in paths {
+                    if self.import_single_image_into_pool(&p).is_ok() {
+                        count += 1;
+                    }
+                }
+                self.status_message = format!("{count} Bild(er) in den Bilder-Pool importiert.");
             }
             EngineCommand::AddDemoImages => {
                 self.add_synthetic_demo_images()?;
@@ -618,9 +698,17 @@ impl Session {
                         *slot = None;
                     }
                 }
+                for page in &mut self.doc.pages {
+                    for slot in &mut page.slot_assignments {
+                        if *slot == Some(image_id) {
+                            *slot = None;
+                        }
+                    }
+                }
                 if self.doc.active_image_index >= self.doc.images.len() {
                     self.doc.active_image_index = self.doc.images.len().saturating_sub(1);
                 }
+                self.status_message = String::from("Bild aus dem Bilder-Pool entfernt.");
             }
             EngineCommand::SelectActiveImage { index } => {
                 if index < self.doc.images.len() {
@@ -768,6 +856,17 @@ impl Session {
             EngineCommand::SetLayoutMode(mode) => {
                 self.doc.layout = mode;
             }
+            EngineCommand::ApplyLayoutToAllPages => {
+                let current_layout = self.doc.layout.clone();
+                for page in &mut self.doc.pages {
+                    page.layout = current_layout.clone();
+                }
+                self.status_message = format!(
+                    "Layout '{}' auf alle {} Bögen angewendet.",
+                    current_layout.kind_label_de(),
+                    self.doc.page_count()
+                );
+            }
             EngineCommand::SetOrientation(ori) => match &mut self.doc.layout {
                 LayoutMode::Standard(s) => s.orientation = ori,
                 LayoutMode::Panorama(p) => p.orientation = ori,
@@ -836,6 +935,301 @@ impl Session {
                 if let Some(slot) = self.doc.slot_assignments.get_mut(slot_index) {
                     *slot = image_id;
                 }
+                self.doc.active_slot_index = slot_index;
+            }
+            EngineCommand::AssignImageToPageSlot {
+                page_index,
+                slot_index,
+                image_id,
+            } => {
+                self.doc.sync_active_page_to_list();
+                if let Some(page) = self.doc.pages.get_mut(page_index) {
+                    if slot_index >= page.slot_assignments.len() {
+                        page.slot_assignments.resize(slot_index + 1, None);
+                    }
+                    if let Some(slot) = page.slot_assignments.get_mut(slot_index) {
+                        *slot = image_id;
+                    }
+                }
+                self.doc.active_page_index = page_index.min(self.doc.pages.len().saturating_sub(1));
+                self.doc.active_slot_index = slot_index;
+                self.doc.load_active_page_from_list();
+                if let Some(id) = image_id {
+                    if let Some((idx, img)) = self
+                        .doc
+                        .images
+                        .iter()
+                        .enumerate()
+                        .find(|(_, i)| i.id == id)
+                    {
+                        self.doc.active_image_index = idx;
+                        self.status_message = format!(
+                            "Bild '{}' auf Bogen {} (Bildstelle {}) platziert.",
+                            img.display_name,
+                            page_index + 1,
+                            slot_index + 1
+                        );
+                    }
+                } else {
+                    self.status_message = format!(
+                        "Bildstelle {} auf Bogen {} geleert.",
+                        slot_index + 1,
+                        page_index + 1
+                    );
+                }
+                return Ok(());
+            }
+            EngineCommand::SwapPageSlots {
+                page_a,
+                slot_a,
+                page_b,
+                slot_b,
+            } => {
+                self.doc.sync_active_page_to_list();
+                let val_a = self
+                    .doc
+                    .pages
+                    .get(page_a)
+                    .and_then(|p| p.slot_assignments.get(slot_a))
+                    .copied()
+                    .flatten();
+                let val_b = self
+                    .doc
+                    .pages
+                    .get(page_b)
+                    .and_then(|p| p.slot_assignments.get(slot_b))
+                    .copied()
+                    .flatten();
+                if let Some(pa) = self.doc.pages.get_mut(page_a) {
+                    if slot_a >= pa.slot_assignments.len() {
+                        pa.slot_assignments.resize(slot_a + 1, None);
+                    }
+                    pa.slot_assignments[slot_a] = val_b;
+                }
+                if let Some(pb) = self.doc.pages.get_mut(page_b) {
+                    if slot_b >= pb.slot_assignments.len() {
+                        pb.slot_assignments.resize(slot_b + 1, None);
+                    }
+                    pb.slot_assignments[slot_b] = val_a;
+                }
+                self.doc.load_active_page_from_list();
+                return Ok(());
+            }
+            EngineCommand::SelectPage { page_index } => {
+                self.doc.sync_active_page_to_list();
+                if page_index < self.doc.pages.len() {
+                    self.doc.active_page_index = page_index;
+                    self.doc.active_slot_index = 0;
+                    self.doc.load_active_page_from_list();
+                }
+                return Ok(());
+            }
+            EngineCommand::SelectSlot {
+                page_index,
+                slot_index,
+            } => {
+                self.doc.sync_active_page_to_list();
+                if page_index < self.doc.pages.len() {
+                    self.doc.active_page_index = page_index;
+                    self.doc.active_slot_index = slot_index;
+                    self.doc.load_active_page_from_list();
+                    if let Some(Some(img_id)) = self.doc.slot_assignments.get(slot_index) {
+                        if let Some((idx, _)) = self
+                            .doc
+                            .images
+                            .iter()
+                            .enumerate()
+                            .find(|(_, i)| i.id == *img_id)
+                        {
+                            self.doc.active_image_index = idx;
+                        }
+                    }
+                }
+                return Ok(());
+            }
+            EngineCommand::AddPage { initial_image_id } => {
+                self.doc.sync_active_page_to_list();
+                let next_id = self
+                    .doc
+                    .pages
+                    .iter()
+                    .map(|p| p.id)
+                    .max()
+                    .unwrap_or(0)
+                    + 1;
+                let mut slots = vec![None; 25];
+                slots[0] = initial_image_id;
+                let new_page = PrintSheetPage {
+                    id: next_id,
+                    layout: self.doc.layout.clone(),
+                    slot_assignments: slots,
+                };
+                self.doc.pages.push(new_page);
+                self.doc.active_page_index = self.doc.pages.len() - 1;
+                self.doc.active_slot_index = 0;
+                self.doc.load_active_page_from_list();
+                self.status_message = format!("Neuer Bogen {} angelegt.", self.doc.pages.len());
+                return Ok(());
+            }
+            EngineCommand::DuplicatePage { page_index } => {
+                self.doc.sync_active_page_to_list();
+                if let Some(src_page) = self.doc.pages.get(page_index).cloned() {
+                    let next_id = self
+                        .doc
+                        .pages
+                        .iter()
+                        .map(|p| p.id)
+                        .max()
+                        .unwrap_or(0)
+                        + 1;
+                    let dup = PrintSheetPage {
+                        id: next_id,
+                        layout: src_page.layout,
+                        slot_assignments: src_page.slot_assignments,
+                    };
+                    let insert_idx = (page_index + 1).min(self.doc.pages.len());
+                    self.doc.pages.insert(insert_idx, dup);
+                    self.doc.active_page_index = insert_idx;
+                    self.doc.load_active_page_from_list();
+                    self.status_message = format!("Bogen {} dupliziert.", page_index + 1);
+                }
+                return Ok(());
+            }
+            EngineCommand::RemovePage { page_index } => {
+                self.doc.sync_active_page_to_list();
+                if self.doc.pages.len() <= 1 {
+                    if let Some(first) = self.doc.pages.first_mut() {
+                        first.slot_assignments = vec![None; 25];
+                    }
+                    self.doc.active_page_index = 0;
+                    self.doc.load_active_page_from_list();
+                    self.status_message =
+                        String::from("Bogen 1 geleert (Bilder bleiben im Bilder-Pool).");
+                } else if page_index < self.doc.pages.len() {
+                    self.doc.pages.remove(page_index);
+                    if self.doc.active_page_index >= self.doc.pages.len() {
+                        self.doc.active_page_index = self.doc.pages.len() - 1;
+                    }
+                    self.doc.load_active_page_from_list();
+                    self.status_message = format!(
+                        "Bogen {} entfernt (Bilder bleiben frei im Bilder-Pool).",
+                        page_index + 1
+                    );
+                }
+                return Ok(());
+            }
+            EngineCommand::ClearPageSlots { page_index } => {
+                self.doc.sync_active_page_to_list();
+                if let Some(p) = self.doc.pages.get_mut(page_index) {
+                    p.slot_assignments = vec![None; 25];
+                }
+                self.doc.load_active_page_from_list();
+                self.status_message = format!(
+                    "Alle Bildstellen auf Bogen {} geleert.",
+                    page_index + 1
+                );
+                return Ok(());
+            }
+            EngineCommand::MovePage {
+                from_index,
+                to_index,
+            } => {
+                self.doc.sync_active_page_to_list();
+                let len = self.doc.pages.len();
+                if from_index < len && to_index < len && from_index != to_index {
+                    let page = self.doc.pages.remove(from_index);
+                    self.doc.pages.insert(to_index, page);
+                    self.doc.active_page_index = to_index;
+                    self.doc.load_active_page_from_list();
+                    self.status_message = format!(
+                        "Bogen von Position {} nach {} verschoben.",
+                        from_index + 1,
+                        to_index + 1
+                    );
+                }
+                return Ok(());
+            }
+            EngineCommand::AutoDistributePoolImages { only_unassigned } => {
+                self.doc.sync_active_page_to_list();
+                let target_ids: Vec<u64> = if only_unassigned {
+                    self.doc
+                        .images
+                        .iter()
+                        .filter(|img| {
+                            let (cnt, _) = self.doc.image_usage_summary(img.id);
+                            cnt == 0
+                        })
+                        .map(|img| img.id)
+                        .collect()
+                } else {
+                    // Clear existing pages and distribute all images in the pool cleanly
+                    let base_layout = self.doc.layout.clone();
+                    self.doc.pages = vec![PrintSheetPage {
+                        id: 1,
+                        layout: base_layout,
+                        slot_assignments: vec![None; 25],
+                    }];
+                    self.doc.active_page_index = 0;
+                    self.doc.images.iter().map(|img| img.id).collect()
+                };
+
+                for img_id in target_ids {
+                    let mut placed = false;
+                    let page_len = self.doc.pages.len();
+                    for p_idx in 0..page_len {
+                        let cap = slots_capacity_for_layout(&self.doc, &self.doc.pages[p_idx].layout);
+                        if let Some(page) = self.doc.pages.get_mut(p_idx) {
+                            if page.slot_assignments.len() < cap {
+                                page.slot_assignments.resize(25, None);
+                            }
+                            if let Some(empty_slot) = page
+                                .slot_assignments
+                                .iter_mut()
+                                .take(cap)
+                                .find(|s| s.is_none())
+                            {
+                                *empty_slot = Some(img_id);
+                                placed = true;
+                                break;
+                            }
+                        }
+                    }
+                    if !placed {
+                        let next_id = self
+                            .doc
+                            .pages
+                            .iter()
+                            .map(|p| p.id)
+                            .max()
+                            .unwrap_or(0)
+                            + 1;
+                        let inherited_layout = self
+                            .doc
+                            .pages
+                            .last()
+                            .map(|p| p.layout.clone())
+                            .unwrap_or_else(|| self.doc.layout.clone());
+                        let mut slots = vec![None; 25];
+                        slots[0] = Some(img_id);
+                        self.doc.pages.push(PrintSheetPage {
+                            id: next_id,
+                            layout: inherited_layout,
+                            slot_assignments: slots,
+                        });
+                    }
+                }
+                self.doc.load_active_page_from_list();
+                self.status_message = format!(
+                    "Bilder aus dem Pool auf {} Bogen/Bögen verteilt.",
+                    self.doc.pages.len()
+                );
+                return Ok(());
+            }
+            EngineCommand::SetCanvasViewMode(mode) => {
+                self.doc.canvas_view_mode = mode;
+            }
+            EngineCommand::SetPrintScope(scope) => {
+                self.doc.print_scope = scope;
             }
             EngineCommand::SetImageCrop { image_id, crop } => {
                 if let Some(img) = self.doc.images.iter_mut().find(|i| i.id == image_id) {
@@ -924,10 +1318,39 @@ impl Session {
             EngineCommand::Undo | EngineCommand::Redo | EngineCommand::RefreshPrinters => {}
         }
 
+        self.doc.sync_active_page_to_list();
         Ok(())
     }
 
-    /// Generates two synthetic 16-bit Fine-Art demo images so the user or snapshot tests have immediate content.
+    fn import_single_image_into_pool(&mut self, path: &str) -> Result<String, EngineError> {
+        let loaded = load_image_file(path)?;
+        let id = self.next_image_id;
+        self.next_image_id += 1;
+        let fname = Path::new(path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(path)
+            .to_string();
+        let aspect = f64::from(loaded.meta.width) / f64::from(loaded.meta.height.max(1));
+        self.image_buffers
+            .insert(id, (loaded.buffer, loaded.meta.color_space));
+        self.doc.images.push(SourceImageEntry {
+            id,
+            path: path.to_string(),
+            display_name: fname.clone(),
+            meta: loaded.meta,
+            crop: CropSpec::default(),
+            composer_size_mm: SizeMm {
+                width_mm: 90.0 * aspect.clamp(0.5, 2.0),
+                height_mm: 90.0,
+            },
+            composer_pos_mm: (15.0, 15.0),
+        });
+        self.doc.active_image_index = self.doc.images.len().saturating_sub(1);
+        Ok(fname)
+    }
+
+    /// Generates two synthetic 16-bit Fine-Art demo images into the Image Pool and places the landscape onto Bogen 1.
     pub fn add_synthetic_demo_images(&mut self) -> Result<(), EngineError> {
         let chart = generate_test_chart_16bit(480, 320)?;
         let id1 = self.next_image_id;
@@ -1000,6 +1423,10 @@ impl Session {
             composer_pos_mm: (15.0, 105.0),
         });
         self.doc.active_image_index = 1;
+        if self.doc.slot_assignments.first().copied().flatten().is_none() {
+            self.doc.slot_assignments[0] = Some(id2);
+            self.doc.sync_active_page_to_list();
+        }
         Ok(())
     }
 
@@ -1036,6 +1463,11 @@ impl Session {
         solve_page_layout(&self.doc)
     }
 
+    /// Solves the geometry of a specific sheet (`page_index`) without rasterizing pixels.
+    pub fn solve_layout_at(&self, page_index: usize) -> SolvedPageLayout {
+        solve_page_layout_at(&self.doc, page_index)
+    }
+
     /// Renders the current page at `dpi` (`for_screen_preview = true` applies Softproof; `false` applies Printer ICC).
     pub fn render_page(
         &self,
@@ -1045,6 +1477,24 @@ impl Session {
         let icc = self.active_icc_profile();
         Ok(render_page_16bit(
             &self.doc,
+            &self.image_buffers,
+            icc,
+            dpi,
+            for_screen_preview,
+        )?)
+    }
+
+    /// Renders a specific sheet (`page_index`) at `dpi`.
+    pub fn render_page_at(
+        &self,
+        page_index: usize,
+        dpi: u32,
+        for_screen_preview: bool,
+    ) -> Result<(ImageBuffer16, SolvedPageLayout), EngineError> {
+        let icc = self.active_icc_profile();
+        Ok(render_page_at_16bit(
+            &self.doc,
+            page_index,
             &self.image_buffers,
             icc,
             dpi,
@@ -1152,25 +1602,52 @@ impl Session {
         }
     }
 
-    /// Renders the 16-bit print sheet and submits it to the selected CUPS system printer queue via `lp`.
+    /// Renders the 16-bit print sheet(s) and submits them to the selected CUPS system printer queue via `lp`.
     pub fn send_print_job_to_printer(&mut self, dpi: u32) -> Result<String, EngineError> {
-        let (buf, _) = self.render_page(dpi, false)?;
-        let tmp = tempfile::Builder::new()
-            .prefix("lumaprint_job_")
-            .suffix(".tif")
-            .tempfile()
-            .map_err(|e| {
-                EngineError::Codec(CodecError::Io {
-                    path: String::from("tempfile"),
-                    reason: e.to_string(),
-                })
-            })?;
-        save_tiff16(&buf, tmp.path())?;
+        self.doc.sync_active_page_to_list();
+        let page_indices: Vec<usize> = match self.doc.print_scope {
+            PrintScope::CurrentPage => vec![self.doc.active_page_index],
+            PrintScope::AllPages => {
+                let total = self.doc.page_count();
+                let non_empty: Vec<usize> = (0..total)
+                    .filter(|&pi| self.doc.page_slots(pi).iter().any(Option::is_some))
+                    .collect();
+                if non_empty.is_empty() {
+                    vec![self.doc.active_page_index]
+                } else {
+                    non_empty
+                }
+            }
+        };
 
-        let req = self.build_cups_spool_request();
-        let msg = submit_cups_job(&req, tmp.path())?;
-        self.status_message = msg.clone();
-        Ok(msg)
+        let mut last_msg = String::new();
+        for &pi in &page_indices {
+            let (buf, _) = self.render_page_at(pi, dpi, false)?;
+            let tmp = tempfile::Builder::new()
+                .prefix(&format!("lumaprint_p{}_", pi + 1))
+                .suffix(".tif")
+                .tempfile()
+                .map_err(|e| {
+                    EngineError::Codec(CodecError::Io {
+                        path: String::from("tempfile"),
+                        reason: e.to_string(),
+                    })
+                })?;
+            save_tiff16(&buf, tmp.path())?;
+
+            let mut req = self.build_cups_spool_request();
+            if page_indices.len() > 1 {
+                req.job_title = format!("LumaPrint FineArt Sheet (Bogen {})", pi + 1);
+            }
+            last_msg = submit_cups_job(&req, tmp.path())?;
+        }
+        let summary = if page_indices.len() > 1 {
+            format!("{} Bögen gesendet — {last_msg}", page_indices.len())
+        } else {
+            last_msg
+        };
+        self.status_message = summary.clone();
+        Ok(summary)
     }
 }
 
@@ -1278,5 +1755,59 @@ mod tests {
         assert_eq!(req.bottom_edge_priority, Some(true));
         assert_eq!(req.rubbing_reduction, Some(1));
         assert!(req.app_manages_color);
+    }
+
+    #[test]
+    fn image_pool_drag_drop_and_multi_page_auto_distribution_work() {
+        let mut session = Session::new();
+        // Populate 20 pool images
+        for idx in 1..=20 {
+            session.doc.images.push(SourceImageEntry {
+                id: idx,
+                path: format!("photo_{idx:02}.tif"),
+                display_name: format!("photo_{idx:02}.tif"),
+                meta: Default::default(),
+                crop: CropSpec::default(),
+                composer_size_mm: SizeMm {
+                    width_mm: 100.0,
+                    height_mm: 100.0,
+                },
+                composer_pos_mm: (10.0, 10.0),
+            });
+        }
+        session.next_image_id = 21;
+
+        // Set 2x2 grid template (4 slots per sheet)
+        session
+            .execute(EngineCommand::SetLayoutMode(LayoutMode::Template(
+                lumaprint_doc::TemplateLayoutSpec {
+                    template_id: String::from("EPL_Grid_2x2"),
+                    ..Default::default()
+                },
+            )))
+            .unwrap();
+
+        // Auto-distribute all 20 pool images -> must create 5 pages with 4 slots each
+        session
+            .execute(EngineCommand::AutoDistributePoolImages {
+                only_unassigned: true,
+            })
+            .unwrap();
+        assert_eq!(session.doc.page_count(), 5);
+        for id in 1..=20 {
+            let (cnt, _) = session.doc.image_usage_summary(id);
+            assert_eq!(cnt, 1);
+        }
+
+        // Remove page 2 (index 1, containing images 5..=8) -> 4 pages left, images 5..=8 become unassigned in Pool
+        session
+            .execute(EngineCommand::RemovePage { page_index: 1 })
+            .unwrap();
+        assert_eq!(session.doc.page_count(), 4);
+        assert_eq!(session.doc.images.len(), 20);
+        for id in 5..=8 {
+            let (cnt, _) = session.doc.image_usage_summary(id);
+            assert_eq!(cnt, 0);
+        }
     }
 }

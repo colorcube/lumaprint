@@ -20,7 +20,7 @@ use lumaprint_doc::{
     find_media_type,
 };
 use lumaprint_geom::{RectMm, mm_to_dots};
-use lumaprint_layout::{SolvedPageLayout, solve_page_layout};
+use lumaprint_layout::{SolvedPageLayout, solve_page_layout_at};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use thiserror::Error;
@@ -31,7 +31,7 @@ pub enum RenderError {
     Color(#[from] ColorError),
 }
 
-/// Renders a complete page (or its active 1:1 Test-Strip region) into a 16-bit RGB buffer at `target_dpi`.
+/// Renders the currently active page (`doc.active_page_index`) into a 16-bit RGB buffer at `target_dpi`.
 pub fn render_page_16bit(
     doc: &PrintJobDocument,
     image_buffers: &HashMap<u64, (ImageBuffer16, WorkingColorSpace)>,
@@ -39,12 +39,31 @@ pub fn render_page_16bit(
     target_dpi: u32,
     for_screen_preview: bool,
 ) -> Result<(ImageBuffer16, SolvedPageLayout), RenderError> {
-    let solved = solve_page_layout(doc);
+    render_page_at_16bit(
+        doc,
+        doc.active_page_index,
+        image_buffers,
+        icc_profile,
+        target_dpi,
+        for_screen_preview,
+    )
+}
+
+/// Renders a specific sheet (`page_index`) into a 16-bit RGB buffer at `target_dpi`.
+pub fn render_page_at_16bit(
+    doc: &PrintJobDocument,
+    page_index: usize,
+    image_buffers: &HashMap<u64, (ImageBuffer16, WorkingColorSpace)>,
+    icc_profile: Option<&IccProfile>,
+    target_dpi: u32,
+    for_screen_preview: bool,
+) -> Result<(ImageBuffer16, SolvedPageLayout), RenderError> {
+    let solved = solve_page_layout_at(doc, page_index);
     let (full_w, full_h) = solved.paper_size_mm.to_dots(target_dpi);
 
     // Base paper background color (white, or custom margin/template background color, or ABW FullPage shift)
     let mut base_fill = Rgb16::WHITE;
-    match &doc.layout {
+    match doc.page_layout(page_index) {
         LayoutMode::Standard(s) if s.margin_color_enabled => {
             base_fill = s.margin_color.to_rgb16();
         }
@@ -202,12 +221,29 @@ fn extract_cropped_and_rotated(
 
     let cropped = extract_subrect(src, x0, y0, cw, ch)?;
     let total_rot = (crop.rotation_deg + if extra_rot90 { 90 } else { 0 }) % 360;
-    match total_rot {
-        90 => rotate_90_cw(&cropped),
-        180 => rotate_180(&cropped),
-        270 => rotate_270_cw(&cropped),
-        _ => Ok(cropped),
+    let rotated = match total_rot {
+        90 => rotate_90_cw(&cropped)?,
+        180 => rotate_180(&cropped)?,
+        270 => rotate_270_cw(&cropped)?,
+        _ => cropped,
+    };
+    if crop.flip_horizontal {
+        flip_horizontal_16(&rotated)
+    } else {
+        Ok(rotated)
     }
+}
+
+fn flip_horizontal_16(src: &ImageBuffer16) -> Result<ImageBuffer16, ColorError> {
+    let mut dst = ImageBuffer16::new_solid(src.width, src.height, Rgb16::WHITE)?;
+    for y in 0..src.height {
+        for x in 0..src.width {
+            if let Some(px) = src.get_pixel(x, y) {
+                dst.set_pixel(src.width - 1 - x, y, px);
+            }
+        }
+    }
+    Ok(dst)
 }
 
 fn extract_subrect(
@@ -539,6 +575,7 @@ mod tests {
             },
             composer_pos_mm: (10.0, 10.0),
         });
+        doc.slot_assignments = vec![Some(1)];
         let mut map = HashMap::new();
         map.insert(1, (img, WorkingColorSpace::Srgb));
 

@@ -217,12 +217,40 @@ pub fn resolve_paper_and_printable_area(
     (paper_size, printable)
 }
 
-/// Solves the complete page layout for `doc`.
-pub fn solve_page_layout(doc: &PrintJobDocument) -> SolvedPageLayout {
-    let mut warnings = Vec::new();
-    let active_img = doc.images.get(doc.active_image_index);
+/// Returns the number of image slots available on a single sheet for `layout`.
+pub fn slots_capacity_for_layout(doc: &PrintJobDocument, layout: &LayoutMode) -> usize {
+    match layout {
+        LayoutMode::Standard(_) | LayoutMode::Panorama(_) | LayoutMode::GalleryWrap(_) => 1,
+        LayoutMode::Template(tpl_spec) => {
+            let all_templates = builtin_templates();
+            doc.user_backup
+                .custom_templates
+                .iter()
+                .chain(all_templates.iter())
+                .find(|t| t.id == tpl_spec.template_id)
+                .map(|t| t.normalized_slots.len().max(1))
+                .unwrap_or(4)
+        }
+        LayoutMode::FreeComposer(_) => 25,
+    }
+}
 
-    match &doc.layout {
+/// Solves the complete page layout for `doc`'s currently active page (`doc.active_page_index`).
+pub fn solve_page_layout(doc: &PrintJobDocument) -> SolvedPageLayout {
+    solve_page_layout_at(doc, doc.active_page_index)
+}
+
+/// Solves the complete page layout for a specific sheet (`page_index`).
+pub fn solve_page_layout_at(doc: &PrintJobDocument, page_index: usize) -> SolvedPageLayout {
+    let mut warnings = Vec::new();
+    let page_layout = doc.page_layout(page_index);
+    let page_slots = doc.page_slots(page_index);
+
+    // For single-slot modes, read slot 0 of this page.
+    let slot0_id = page_slots.first().copied().flatten();
+    let active_img = slot0_id.and_then(|id| doc.images.iter().find(|i| i.id == id));
+
+    match page_layout {
         LayoutMode::Standard(std_spec) => {
             let (paper_size_mm, printable_rect_mm) = resolve_paper_and_printable_area(
                 doc,
@@ -257,7 +285,9 @@ pub fn solve_page_layout(doc: &PrintJobDocument) -> SolvedPageLayout {
                 }
             };
 
-            let image_draw_rect_mm = if doc.printer.borderless && std_spec.fit_to_scale {
+            let image_draw_rect_mm = if active_img.is_none() {
+                slot_rect_mm
+            } else if doc.printer.borderless && std_spec.fit_to_scale {
                 slot_rect_mm.fill_aspect(img_aspect)
             } else if std_spec.keep_aspect_ratio {
                 let fitted = slot_rect_mm.fit_aspect(img_aspect);
@@ -460,21 +490,19 @@ pub fn solve_page_layout(doc: &PrintJobDocument) -> SolvedPageLayout {
                     nw * printable_rect_mm.width_mm,
                     nh * printable_rect_mm.height_mm,
                 );
-                let assigned_id = doc
-                    .slot_assignments
-                    .get(idx)
-                    .copied()
-                    .flatten()
-                    .or_else(|| doc.images.get(idx % doc.images.len().max(1)).map(|i| i.id));
-                let assigned_img = assigned_id.and_then(|id| doc.images.iter().find(|i| i.id == id));
+                let assigned_id = page_slots.get(idx).copied().flatten();
+                let assigned_img =
+                    assigned_id.and_then(|id| doc.images.iter().find(|i| i.id == id));
 
-                let img_aspect = assigned_img
-                    .map(effective_cropped_aspect)
-                    .unwrap_or_else(|| slot_rect_mm.width_mm / slot_rect_mm.height_mm.max(1.0));
-                let image_draw_rect_mm = if tpl_spec.show_full_images {
-                    slot_rect_mm.fit_aspect(img_aspect)
+                let image_draw_rect_mm = if let Some(img) = assigned_img {
+                    let img_aspect = effective_cropped_aspect(img);
+                    if tpl_spec.show_full_images {
+                        slot_rect_mm.fit_aspect(img_aspect)
+                    } else {
+                        slot_rect_mm.fill_aspect(img_aspect)
+                    }
                 } else {
-                    slot_rect_mm.fill_aspect(img_aspect)
+                    slot_rect_mm
                 };
                 let effective_ppi = assigned_img.map(|img| {
                     let (cw, ch) = effective_cropped_pixels(img);
@@ -485,7 +513,7 @@ pub fn solve_page_layout(doc: &PrintJobDocument) -> SolvedPageLayout {
                     slot_index: idx,
                     slot_rect_mm,
                     image_draw_rect_mm,
-                    assigned_image_id: assigned_id,
+                    assigned_image_id: assigned_img.map(|i| i.id),
                     effective_ppi,
                     frame_line: tpl_spec.frame_line,
                     rotated_90: false,
@@ -508,14 +536,32 @@ pub fn solve_page_layout(doc: &PrintJobDocument) -> SolvedPageLayout {
                 BorderlessExpandLevel::None,
                 &mut warnings,
             );
-            let slots = solve_auto_nested_slots(
-                &doc.images,
+            let page_images: Vec<SourceImageEntry> = page_slots
+                .iter()
+                .copied()
+                .flatten()
+                .filter_map(|id| doc.images.iter().find(|img| img.id == id).cloned())
+                .collect();
+
+            let mut slots = solve_auto_nested_slots(
+                &page_images,
                 printable_rect_mm,
                 comp_spec.nest_gap_mm,
                 comp_spec.allow_rotation_in_nest,
                 comp_spec.frame_line,
                 &mut warnings,
             );
+            if slots.is_empty() {
+                slots.push(SolvedImageSlot {
+                    slot_index: 0,
+                    slot_rect_mm: printable_rect_mm,
+                    image_draw_rect_mm: printable_rect_mm,
+                    assigned_image_id: None,
+                    effective_ppi: None,
+                    frame_line: comp_spec.frame_line,
+                    rotated_90: false,
+                });
+            }
             SolvedPageLayout {
                 paper_size_mm,
                 printable_rect_mm,

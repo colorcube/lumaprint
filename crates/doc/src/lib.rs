@@ -739,7 +739,7 @@ impl LayoutMode {
     }
 }
 
-/// Non-destructive image crop and rotation (`Bildbeschnitt`, EPL manual p. 15, 43).
+/// Non-destructive image crop, rotation, and mirror (`Bildbeschnitt`, EPL manual p. 15, 43).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct CropSpec {
     /// Normalized crop rectangle `[x0, y0, width, height]` in `0.0..=1.0`.
@@ -749,6 +749,9 @@ pub struct CropSpec {
     pub norm_h: f64,
     /// Rotation in 90-degree steps (`0, 90, 180, 270`).
     pub rotation_deg: u16,
+    /// Horizontal mirror (`Horizontal spiegeln`).
+    #[serde(default)]
+    pub flip_horizontal: bool,
 }
 
 impl Default for CropSpec {
@@ -759,11 +762,12 @@ impl Default for CropSpec {
             norm_w: 1.0,
             norm_h: 1.0,
             rotation_deg: 0,
+            flip_horizontal: false,
         }
     }
 }
 
-/// Source image entry in the `Originalbildliste` (`E` on EPL main screen, manual p. 16).
+/// Source image entry in the `Bilder-Pool` (`Originalbildliste`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SourceImageEntry {
     pub id: u64,
@@ -888,6 +892,56 @@ pub enum FilmstripPosition {
     Hidden,
 }
 
+/// Central workspace view mode (`Einzelbogen` vs. `Alle Bögen Übersicht`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum CanvasViewMode {
+    #[default]
+    SinglePage,
+    AllPagesOverview,
+}
+
+/// Scope for printing or exporting sheets (`Alle Bögen` vs. `Aktueller Bogen`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum PrintScope {
+    #[default]
+    AllPages,
+    CurrentPage,
+}
+
+impl PrintScope {
+    pub fn label_de(self, total_pages: usize, active_page: usize) -> String {
+        match self {
+            Self::AllPages => {
+                if total_pages <= 1 {
+                    String::from("Alle Bögen (1 Bogen)")
+                } else {
+                    format!("Alle Bögen (1..{total_pages})")
+                }
+            }
+            Self::CurrentPage => format!("Nur aktueller Bogen ({}/{total_pages})", active_page + 1),
+        }
+    }
+}
+
+/// A single print sheet (`Bogen`) with its own layout and explicit slot assignments (`None` = empty slot).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PrintSheetPage {
+    pub id: u64,
+    pub layout: LayoutMode,
+    /// Mapping from slot index `0..25` -> `SourceImageEntry.id` (`None` = unassigned drop zone).
+    pub slot_assignments: Vec<Option<u64>>,
+}
+
+impl Default for PrintSheetPage {
+    fn default() -> Self {
+        Self {
+            id: 1,
+            layout: LayoutMode::default(),
+            slot_assignments: vec![None; 25],
+        }
+    }
+}
+
 /// Canvas surround background tone (`Hintergrundfarbe`, EPL manual p. 45).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum CanvasBackdropTone {
@@ -959,17 +1013,32 @@ impl UserSettingsBackup {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PrintJobDocument {
     pub printer: PrinterSettings,
+    /// Layout of the currently active page (`pages[active_page_index]`).
     pub layout: LayoutMode,
     pub color: ColorSettings,
     pub test_strip: TestStripSpec,
     pub display_unit: DisplayUnit,
     pub filmstrip_position: FilmstripPosition,
+    #[serde(default)]
+    pub canvas_view_mode: CanvasViewMode,
+    #[serde(default)]
+    pub print_scope: PrintScope,
+    #[serde(default)]
+    pub pool_filter_unassigned_only: bool,
     pub canvas_backdrop: CanvasBackdropTone,
     pub show_settings_panel: bool,
+    /// The Image Pool (`Bilder-Pool`).
     pub images: Vec<SourceImageEntry>,
     pub active_image_index: usize,
-    /// Mapping from template slot index -> `SourceImageEntry.id`.
+    /// Mapping from slot index -> `SourceImageEntry.id` on the currently active page.
     pub slot_assignments: Vec<Option<u64>>,
+    /// Multi-page print sheets (`Bogen 1..N`).
+    #[serde(default)]
+    pub pages: Vec<PrintSheetPage>,
+    #[serde(default)]
+    pub active_page_index: usize,
+    #[serde(default)]
+    pub active_slot_index: usize,
     pub active_preset_name: Option<String>,
     pub user_backup: UserSettingsBackup,
 }
@@ -983,14 +1052,103 @@ impl Default for PrintJobDocument {
             test_strip: TestStripSpec::default(),
             display_unit: DisplayUnit::Mm,
             filmstrip_position: FilmstripPosition::Left,
+            canvas_view_mode: CanvasViewMode::SinglePage,
+            print_scope: PrintScope::AllPages,
+            pool_filter_unassigned_only: false,
             canvas_backdrop: CanvasBackdropTone::DarkGray,
             show_settings_panel: true,
             images: Vec::new(),
             active_image_index: 0,
             slot_assignments: vec![None; 25],
+            pages: vec![PrintSheetPage::default()],
+            active_page_index: 0,
+            active_slot_index: 0,
             active_preset_name: None,
             user_backup: UserSettingsBackup::default(),
         }
+    }
+}
+
+impl PrintJobDocument {
+    /// Total number of sheets (`Bögen`), always at least `1`.
+    pub fn page_count(&self) -> usize {
+        self.pages.len().max(1)
+    }
+
+    /// Synchronizes `self.layout` and `self.slot_assignments` into `self.pages[self.active_page_index]`.
+    pub fn sync_active_page_to_list(&mut self) {
+        if self.pages.is_empty() {
+            self.pages.push(PrintSheetPage {
+                id: 1,
+                layout: self.layout.clone(),
+                slot_assignments: self.slot_assignments.clone(),
+            });
+            self.active_page_index = 0;
+            return;
+        }
+        if self.active_page_index >= self.pages.len() {
+            self.active_page_index = self.pages.len() - 1;
+        }
+        if let Some(p) = self.pages.get_mut(self.active_page_index) {
+            p.layout = self.layout.clone();
+            p.slot_assignments = self.slot_assignments.clone();
+        }
+    }
+
+    /// Loads `self.layout` and `self.slot_assignments` from `self.pages[self.active_page_index]`.
+    pub fn load_active_page_from_list(&mut self) {
+        if self.pages.is_empty() {
+            self.pages.push(PrintSheetPage::default());
+        }
+        if self.active_page_index >= self.pages.len() {
+            self.active_page_index = self.pages.len() - 1;
+        }
+        if let Some(p) = self.pages.get(self.active_page_index) {
+            self.layout = p.layout.clone();
+            self.slot_assignments = p.slot_assignments.clone();
+            if self.slot_assignments.len() < 25 {
+                self.slot_assignments.resize(25, None);
+            }
+        }
+    }
+
+    /// Returns the `LayoutMode` of `page_index`.
+    pub fn page_layout(&self, page_index: usize) -> &LayoutMode {
+        if page_index == self.active_page_index {
+            &self.layout
+        } else {
+            self.pages
+                .get(page_index)
+                .map(|p| &p.layout)
+                .unwrap_or(&self.layout)
+        }
+    }
+
+    /// Returns the `slot_assignments` slice of `page_index`.
+    pub fn page_slots(&self, page_index: usize) -> &[Option<u64>] {
+        if page_index == self.active_page_index {
+            &self.slot_assignments
+        } else {
+            self.pages
+                .get(page_index)
+                .map(|p| p.slot_assignments.as_slice())
+                .unwrap_or(&self.slot_assignments)
+        }
+    }
+
+    /// Returns `(total_count, formatted_pages_str)` (e.g. `(2, "B1, B3")`) for `image_id` across all sheets.
+    pub fn image_usage_summary(&self, image_id: u64) -> (usize, String) {
+        let mut total_count = 0usize;
+        let mut pages_str = Vec::new();
+        for p_idx in 0..self.page_count() {
+            let slots = self.page_slots(p_idx);
+            let count_on_page = slots.iter().filter(|&&s| s == Some(image_id)).count();
+            if count_on_page > 0 {
+                total_count += count_on_page;
+                pages_str.push(format!("B{}", p_idx + 1));
+            }
+        }
+        (total_count, pages_str.join(", "))
     }
 }
 

@@ -465,6 +465,10 @@ fn configure_session_from_args(
 
     if !has_inputs {
         session.execute(EngineCommand::AddDemoImages)?;
+    } else {
+        session.execute(EngineCommand::AutoDistributePoolImages {
+            only_unassigned: true,
+        })?;
     }
 
     Ok((session, out_path, dpi))

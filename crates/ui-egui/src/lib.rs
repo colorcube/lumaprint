@@ -19,20 +19,34 @@ use egui::{
 use lumaprint_cms::{RenderingIntent, ViewingLight};
 use lumaprint_color::{AbwHighlightShift, AbwMidtone, AbwTonePreset, ImageBuffer16, Rgb8};
 use lumaprint_doc::{
-    CanvasBackdropTone, CenteringMode, ColorManagementMode,
-    FilmstripPosition, GalleryWrapEffect, GalleryWrapSpec, LayoutMode, OutputSharpening,
-    PaperSource, PrintQuality, SizingCriterion, StandardLayoutSpec, TemplateLayoutSpec,
-    MEDIA_TYPES, find_media_type,
+    CanvasBackdropTone, CanvasViewMode, CenteringMode, ColorManagementMode, FilmstripPosition,
+    GalleryWrapEffect, GalleryWrapSpec, LayoutMode, MEDIA_TYPES, OutputSharpening, PaperSource,
+    PrintQuality, PrintScope, SizingCriterion, StandardLayoutSpec, TemplateLayoutSpec,
+    find_media_type,
 };
-use lumaprint_engine::{EngineCommand, Session};
-use lumaprint_geom::{
-    BorderlessExpandLevel, DisplayUnit, Orientation, PAPER_SIZES,
-};
+use lumaprint_engine::{EngineCommand, Session, scan_folder_for_images};
+use lumaprint_geom::{BorderlessExpandLevel, DisplayUnit, Orientation, PAPER_SIZES};
 use lumaprint_layout::{SolvedPageLayout, builtin_templates};
 use std::collections::HashMap;
+use std::path::Path;
 pub use theme::{
     KdeTypography, ThemeKind, Tokens, apply_theme_and_typography, install_kde_system_fonts,
 };
+
+/// Drag & Drop payload shared between the Image Pool, Page Slots, and Page Navigator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DragPayload {
+    /// Dragging an image from the Image Pool by its `image_id`.
+    PoolImage(u64),
+    /// Dragging an assigned image out of a specific page slot.
+    PageSlot {
+        page_index: usize,
+        slot_index: usize,
+        image_id: u64,
+    },
+    /// Reordering a page in the Page-Thumbnail Navigator.
+    ReorderPage(usize),
+}
 
 /// Main LumaPrint GUI Application state.
 pub struct LumaPrintApp {
@@ -43,8 +57,10 @@ pub struct LumaPrintApp {
     pub ui_scale: f32,
     fonts_installed: bool,
     page_texture: Option<TextureHandle>,
+    page_thumb_textures: HashMap<usize, TextureHandle>,
     thumbnail_textures: HashMap<u64, TextureHandle>,
     cached_solved: Option<SolvedPageLayout>,
+    cached_all_solved: Vec<SolvedPageLayout>,
     dirty_preview: bool,
     pub zoom: f32,
     pub show_crop_modal: bool,
@@ -54,6 +70,8 @@ pub struct LumaPrintApp {
     pub new_template_rows: usize,
     pub new_template_cols: usize,
     pub open_file_path_input: String,
+    pub open_folder_path_input: String,
+    pub pending_folder_import: Option<Vec<String>>,
     pub export_path_input: String,
 }
 
@@ -76,17 +94,21 @@ impl LumaPrintApp {
             ui_scale: 1.0,
             fonts_installed: false,
             page_texture: None,
+            page_thumb_textures: HashMap::new(),
             thumbnail_textures: HashMap::new(),
             cached_solved: None,
+            cached_all_solved: Vec::new(),
             dirty_preview: true,
             zoom: 1.0,
             show_crop_modal: false,
             show_template_builder_modal: false,
             new_preset_name: String::from("Meine Baryta Voreinstellung"),
-            new_template_name: String::from("Kontaktbogen 3x2"),
-            new_template_rows: 3,
+            new_template_name: String::from("Kontaktbogen 2x2"),
+            new_template_rows: 2,
             new_template_cols: 2,
             open_file_path_input: String::new(),
+            open_folder_path_input: String::new(),
+            pending_folder_import: None,
             export_path_input: String::from("/tmp/lumaprint_sheet.tif"),
         }
     }
@@ -110,6 +132,42 @@ impl LumaPrintApp {
             self.session.status_message = format!("Hinweis: {e}");
         }
         self.dirty_preview = true;
+    }
+
+    fn import_folder_with_guard(&mut self, folder_path: &Path) {
+        let paths = scan_folder_for_images(folder_path);
+        if paths.is_empty() {
+            self.session.status_message = format!(
+                "Keine unterstützten Bilddateien in '{}' gefunden.",
+                folder_path.display()
+            );
+        } else if paths.len() > 50 {
+            self.pending_folder_import = Some(paths);
+        } else {
+            self.exec(EngineCommand::ImportImageFiles { paths });
+        }
+    }
+
+    fn handle_os_dropped_files(&mut self, ctx: &Context) {
+        let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+        if dropped.is_empty() {
+            return;
+        }
+        let mut direct_files = Vec::new();
+        for df in dropped {
+            if let Some(path) = df.path {
+                if path.is_dir() {
+                    self.import_folder_with_guard(&path);
+                } else {
+                    direct_files.push(path.to_string_lossy().into_owned());
+                }
+            }
+        }
+        if !direct_files.is_empty() {
+            self.exec(EngineCommand::ImportImageFiles {
+                paths: direct_files,
+            });
+        }
     }
 
     fn ensure_thumbnails(&mut self, ctx: &Context) {
@@ -137,20 +195,53 @@ impl LumaPrintApp {
         if !self.dirty_preview && self.page_texture.is_some() {
             return;
         }
-        // Render page at interactive screen DPI (36 dpi) with live Softproof / ABW / ICC
+        // Render active page at interactive screen DPI (36 dpi) with live Softproof / ABW / ICC
         if let Ok((buf16, solved)) = self.session.render_page(36, true) {
             let rgb8 = buf16.to_rgb8_vec();
             let img = ColorImage::from_rgb([buf16.width as usize, buf16.height as usize], &rgb8);
             self.page_texture =
                 Some(ctx.load_texture("page_preview", img, TextureOptions::LINEAR));
             self.cached_solved = Some(solved);
-            self.dirty_preview = false;
+        }
+
+        // Render miniature thumbnails & solved layouts for all sheets (for Page Navigator & Overview)
+        self.page_thumb_textures.clear();
+        self.cached_all_solved.clear();
+        let total_pages = self.session.doc.page_count();
+        for pi in 0..total_pages {
+            if let Ok((buf16, solved)) = self.session.render_page_at(pi, 18, true) {
+                let rgb8 = buf16.to_rgb8_vec();
+                let img =
+                    ColorImage::from_rgb([buf16.width as usize, buf16.height as usize], &rgb8);
+                let tex = ctx.load_texture(format!("page_thumb_{pi}"), img, TextureOptions::LINEAR);
+                self.page_thumb_textures.insert(pi, tex);
+                self.cached_all_solved.push(solved);
+            }
+        }
+        self.dirty_preview = false;
+    }
+
+    fn rotate_image_by(&mut self, image_id: u64, delta_deg: i32) {
+        if let Some(img) = self.session.doc.images.iter().find(|i| i.id == image_id) {
+            let mut crop = img.crop;
+            crop.rotation_deg =
+                (i32::from(crop.rotation_deg) + delta_deg).rem_euclid(360) as u16;
+            self.exec(EngineCommand::SetImageCrop { image_id, crop });
+        }
+    }
+
+    fn toggle_flip_horizontal(&mut self, image_id: u64) {
+        if let Some(img) = self.session.doc.images.iter().find(|i| i.id == image_id) {
+            let mut crop = img.crop;
+            crop.flip_horizontal = !crop.flip_horizontal;
+            self.exec(EngineCommand::SetImageCrop { image_id, crop });
         }
     }
 
     /// Renders the complete UI into `ctx` (callable both from `eframe::App` and offscreen tests).
     pub fn render_ui(&mut self, ctx: &Context) {
         self.ensure_theme_and_fonts(ctx);
+        self.handle_os_dropped_files(ctx);
         self.ensure_thumbnails(ctx);
         self.refresh_preview_if_needed(ctx);
 
@@ -168,7 +259,53 @@ impl LumaPrintApp {
         }
 
         self.draw_central_canvas(ctx);
+        self.draw_drag_tooltip(ctx);
         self.draw_modals(ctx);
+    }
+
+    fn draw_drag_tooltip(&self, ctx: &Context) {
+        let Some(payload) = egui::DragAndDrop::payload::<DragPayload>(ctx) else {
+            return;
+        };
+        let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) else {
+            return;
+        };
+        let label = match *payload {
+            DragPayload::PoolImage(id) => {
+                let name = self
+                    .session
+                    .doc
+                    .images
+                    .iter()
+                    .find(|i| i.id == id)
+                    .map(|i| i.display_name.as_str())
+                    .unwrap_or("Bild");
+                format!("🖼 {name} → Auf Bildstelle ziehen")
+            }
+            DragPayload::PageSlot {
+                page_index,
+                slot_index,
+                ..
+            } => format!(
+                "🔄 Bogen {} · Slot {} (auf anderen Slot oder zurück in den Pool ziehen)",
+                page_index + 1,
+                slot_index + 1
+            ),
+            DragPayload::ReorderPage(pi) => format!("📄 Bogen {} verschieben", pi + 1),
+        };
+        egui::Area::new(egui::Id::new("lumaprint_dnd_floating_badge"))
+            .order(egui::Order::Tooltip)
+            .fixed_pos(pos + Vec2::new(14.0, 14.0))
+            .interactable(false)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style())
+                    .fill(self.tokens.chrome)
+                    .stroke(Stroke::new(1.5_f32, self.tokens.accent))
+                    .inner_margin(egui::Margin::symmetric(10, 6))
+                    .show(ui, |ui| {
+                        ui.label(RichText::new(label).strong().color(self.tokens.text));
+                    });
+            });
     }
 
     fn draw_top_menu_and_toolbar(&mut self, ctx: &Context) {
@@ -181,11 +318,20 @@ impl LumaPrintApp {
                     .stroke(Stroke::new(1.0_f32, t.separator)),
             )
             .show(ctx, |ui| {
-                // A: Main Menu Bar (EPL manual p. 15)
+                // A: Main Menu Bar
                 egui::menu::bar(ui, |ui| {
                     ui.menu_button("Datei", |ui| {
                         if ui.button("Demo-Kalibrierungsbilder hinzufügen").clicked() {
                             self.exec(EngineCommand::AddDemoImages);
+                            ui.close_menu();
+                        }
+                        if ui
+                            .button("🪄 Unplatzierte Pool-Bilder auf Bögen verteilen")
+                            .clicked()
+                        {
+                            self.exec(EngineCommand::AutoDistributePoolImages {
+                                only_unassigned: true,
+                            });
                             ui.close_menu();
                         }
                         ui.separator();
@@ -220,14 +366,26 @@ impl LumaPrintApp {
                             ui.close_menu();
                         }
                         ui.separator();
-                        if ui.button("Bildbeschnitt (Crop)...").clicked() {
-                            self.show_crop_modal = true;
+                        if ui.button("+ Neuer leerer Bogen").clicked() {
+                            self.exec(EngineCommand::AddPage {
+                                initial_image_id: None,
+                            });
+                            ui.close_menu();
+                        }
+                        if ui.button("⧉ Aktuellen Bogen duplizieren").clicked() {
+                            let pi = self.session.doc.active_page_index;
+                            self.exec(EngineCommand::DuplicatePage { page_index: pi });
+                            ui.close_menu();
+                        }
+                        if ui.button("🧹 Aktuellen Bogen leeren").clicked() {
+                            let pi = self.session.doc.active_page_index;
+                            self.exec(EngineCommand::ClearPageSlots { page_index: pi });
                             ui.close_menu();
                         }
                     });
 
                     ui.menu_button("Ansicht", |ui| {
-                        ui.label(RichText::new("Oberflächen-Theme (PhotoCraft)").strong());
+                        ui.label(RichText::new("Oberflächen-Theme").strong());
                         for tk in ThemeKind::ALL {
                             if ui.radio(self.theme_kind == tk, tk.label()).clicked() {
                                 self.theme_kind = tk;
@@ -274,11 +432,11 @@ impl LumaPrintApp {
                             }
                         }
                         ui.separator();
-                        ui.label(RichText::new("Bildschirmanordnung (EPL S. 45)").strong());
+                        ui.label(RichText::new("Bilder-Pool Position").strong());
                         for (pos, lbl) in [
-                            (FilmstripPosition::Left, "Originalbildliste Links"),
-                            (FilmstripPosition::Bottom, "Originalbildliste Unten"),
-                            (FilmstripPosition::Hidden, "Originalbildliste Ausblenden"),
+                            (FilmstripPosition::Left, "Bilder-Pool Links"),
+                            (FilmstripPosition::Bottom, "Bilder-Pool Unten"),
+                            (FilmstripPosition::Hidden, "Bilder-Pool Ausblenden"),
                         ] {
                             if ui
                                 .radio(self.session.doc.filmstrip_position == pos, lbl)
@@ -312,42 +470,54 @@ impl LumaPrintApp {
                 ui.separator();
                 ui.add_space(4.0);
 
-                // B: Toolbar (Werkzeugleiste, EPL manual p. 15)
+                // B: Strictly Global Toolbar (Undo/Redo, View Mode, Global Softproof/Gamut, Panel Toggles)
                 ui.horizontal_wrapped(|ui| {
-                    if ui.button("✂ Bildbeschnitt").clicked() {
-                        self.show_crop_modal = true;
-                    }
                     if ui
-                        .add_enabled(self.session.can_undo(), egui::Button::new("↶ Rückgängig"))
+                        .add_enabled(self.session.can_undo(), egui::Button::new("↶"))
+                        .on_hover_text("Rückgängig")
                         .clicked()
                     {
                         self.exec(EngineCommand::Undo);
                     }
                     if ui
-                        .add_enabled(self.session.can_redo(), egui::Button::new("↷ Wiederholen"))
+                        .add_enabled(self.session.can_redo(), egui::Button::new("↷"))
+                        .on_hover_text("Wiederholen")
                         .clicked()
                     {
                         self.exec(EngineCommand::Redo);
                     }
-                    if ui.button("⟳ 90° Drehen").clicked() {
-                        if let Some(img) = self
-                            .session
-                            .doc
-                            .images
-                            .get(self.session.doc.active_image_index)
-                        {
-                            let mut crop = img.crop;
-                            crop.rotation_deg = (crop.rotation_deg + 90) % 360;
-                            self.exec(EngineCommand::SetImageCrop {
-                                image_id: img.id,
-                                crop,
-                            });
-                        }
+
+                    ui.separator();
+
+                    // Canvas View Mode Switcher: Single Sheet vs. All Sheets Overview
+                    let view_mode = self.session.doc.canvas_view_mode;
+                    let page_cnt = self.session.doc.page_count();
+                    if ui
+                        .selectable_label(
+                            view_mode == CanvasViewMode::SinglePage,
+                            "▢ Einzelbogen",
+                        )
+                        .on_hover_text("Detailansicht des aktiven Bogens mit Linealen")
+                        .clicked()
+                    {
+                        self.exec(EngineCommand::SetCanvasViewMode(CanvasViewMode::SinglePage));
+                    }
+                    if ui
+                        .selectable_label(
+                            view_mode == CanvasViewMode::AllPagesOverview,
+                            format!("⊞ Alle Bögen ({page_cnt})"),
+                        )
+                        .on_hover_text("Leuchtpult-Übersicht aller Druckbögen nebeneinander")
+                        .clicked()
+                    {
+                        self.exec(EngineCommand::SetCanvasViewMode(
+                            CanvasViewMode::AllPagesOverview,
+                        ));
                     }
 
                     ui.separator();
 
-                    // Softproof & Gamut Warning bar
+                    // Global Softproof & Gamut Warning
                     let mut sp = self.session.doc.color.softproof;
                     let mut sp_changed = false;
                     if ui
@@ -367,7 +537,7 @@ impl LumaPrintApp {
                         }
                         egui::ComboBox::from_id_salt("viewing_light_combo")
                             .selected_text(sp.viewing_light.label_de())
-                            .width(155.0)
+                            .width(150.0)
                             .show_ui(ui, |ui| {
                                 for vl in ViewingLight::ALL {
                                     if ui
@@ -408,6 +578,7 @@ impl LumaPrintApp {
                         });
                     }
 
+                    // Right-aligned Panel Visibility Toggles
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let show_set = self.session.doc.show_settings_panel;
                         if ui
@@ -416,27 +587,32 @@ impl LumaPrintApp {
                         {
                             self.session.doc.show_settings_panel = !show_set;
                         }
-                        let show_film =
-                            self.session.doc.filmstrip_position != FilmstripPosition::Hidden;
-                        if ui
-                            .selectable_label(show_film, "🖼 Durchsuchen")
-                            .clicked()
-                        {
-                            self.session.doc.filmstrip_position = if show_film {
-                                FilmstripPosition::Hidden
-                            } else {
-                                FilmstripPosition::Left
-                            };
-                        }
 
-                        // Quick Theme switcher directly in the toolbar
-                        egui::ComboBox::from_id_salt("toolbar_theme_combo")
-                            .selected_text(format!("🎨 {}", self.theme_kind.label()))
-                            .width(205.0)
+                        let cur_pos = self.session.doc.filmstrip_position;
+                        let pos_lbl = match cur_pos {
+                            FilmstripPosition::Left => "🖼 Pool: Links",
+                            FilmstripPosition::Bottom => "🖼 Pool: Unten",
+                            FilmstripPosition::Hidden => "🖼 Pool: Aus",
+                        };
+                        egui::ComboBox::from_id_salt("toolbar_pool_pos_combo")
+                            .selected_text(pos_lbl)
+                            .width(125.0)
                             .show_ui(ui, |ui| {
-                                for tk in ThemeKind::ALL {
-                                    ui.selectable_value(&mut self.theme_kind, tk, tk.label());
-                                }
+                                ui.selectable_value(
+                                    &mut self.session.doc.filmstrip_position,
+                                    FilmstripPosition::Left,
+                                    "🖼 Pool: Links",
+                                );
+                                ui.selectable_value(
+                                    &mut self.session.doc.filmstrip_position,
+                                    FilmstripPosition::Bottom,
+                                    "🖼 Pool: Unten",
+                                );
+                                ui.selectable_value(
+                                    &mut self.session.doc.filmstrip_position,
+                                    FilmstripPosition::Hidden,
+                                    "🖼 Pool: Ausblenden",
+                                );
                             });
                     });
                 });
@@ -444,94 +620,95 @@ impl LumaPrintApp {
     }
 
     fn draw_bottom_status_bar(&mut self, ctx: &Context) {
-        egui::TopBottomPanel::bottom("bottom_status_bar").show(ctx, |ui| {
-            let warnings = self
-                .cached_solved
-                .as_ref()
-                .map(|s| s.warnings.clone())
-                .unwrap_or_default();
-            let eff_ppi = self
-                .cached_solved
-                .as_ref()
-                .and_then(|s| s.slots.first())
-                .and_then(|sl| sl.effective_ppi)
-                .unwrap_or(360.0);
+        let t = self.tokens;
+        egui::TopBottomPanel::bottom("bottom_status_bar")
+            .frame(
+                egui::Frame::new()
+                    .fill(t.chrome)
+                    .inner_margin(egui::Margin::symmetric(12, 6))
+                    .stroke(Stroke::new(1.0_f32, t.separator)),
+            )
+            .show(ctx, |ui| {
+                let warnings = self
+                    .cached_solved
+                    .as_ref()
+                    .map(|s| s.warnings.clone())
+                    .unwrap_or_default();
+                let active_slot = self.session.doc.active_slot_index;
+                let eff_ppi = self
+                    .cached_solved
+                    .as_ref()
+                    .and_then(|s| s.slots.get(active_slot).or_else(|| s.slots.first()))
+                    .and_then(|sl| sl.effective_ppi);
 
-            ui.horizontal(|ui| {
-                // F: Message Area (Nachrichtenbereich, EPL manual p. 16)
-                if let Some(first_warn) = warnings.first() {
-                    let col = if first_warn.starts_with("FEHLER") {
-                        Color32::from_rgb(255, 95, 95)
+                ui.horizontal(|ui| {
+                    // Left: Message / Warning Area
+                    if let Some(first_warn) = warnings.first() {
+                        let col = if first_warn.starts_with("FEHLER") {
+                            Color32::from_rgb(255, 95, 95)
+                        } else {
+                            Color32::from_rgb(255, 200, 80)
+                        };
+                        ui.label(RichText::new(format!("⚠ {first_warn}")).color(col).strong());
                     } else {
-                        Color32::from_rgb(255, 200, 80)
-                    };
-                    ui.label(RichText::new(format!("⚠ {first_warn}")).color(col).strong());
-                } else {
-                    ui.label(
-                        RichText::new(&self.session.status_message)
-                            .color(Color32::from_rgb(175, 215, 185)),
-                    );
-                }
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // K: Prominent Print Button (EPL manual p. 16)
-                    let print_btn = egui::Button::new(
-                        RichText::new("  🖨 Drucken  ")
-                            .size(15.0)
-                            .strong()
-                            .color(Color32::WHITE),
-                    )
-                    .fill(Color32::from_rgb(0, 120, 215));
-                    if ui.add(print_btn).clicked() {
-                        if let Err(e) = self.session.send_print_job_to_printer(360) {
-                            self.session.status_message = format!("Druckfehler: {e}");
-                        }
-                    }
-
-                    if ui.button("💾 Export (.tif / .png)").clicked() {
-                        let path = self.export_path_input.clone();
-                        match self.session.export_print_file(&path, 360) {
-                            Ok(()) => {
-                                self.session.status_message =
-                                    format!("Druckbogen erfolgreich nach '{path}' exportiert.");
-                            }
-                            Err(e) => {
-                                self.session.status_message = format!("Export-Fehler: {e}");
-                            }
-                        }
+                        ui.label(
+                            RichText::new(&self.session.status_message)
+                                .color(Color32::from_rgb(175, 215, 185)),
+                        );
                     }
 
                     ui.separator();
 
-                    // J: Copies (Kopien)
-                    let mut copies = self.session.doc.printer.copies;
-                    if ui
-                        .add(egui::DragValue::new(&mut copies).range(1..=99).prefix("Kopien: "))
-                        .changed()
-                    {
-                        self.exec(EngineCommand::SetCopies(copies));
-                    }
-
-                    ui.separator();
-
-                    // H: Effective Resolution (Auflösung) & G: Paper Format (Papierformat)
+                    let ppi_str = eff_ppi
+                        .map(|p| format!("{p:.0} ppi"))
+                        .unwrap_or_else(|| String::from("Slot leer"));
                     ui.label(
                         RichText::new(format!(
-                            "Auflösung: {:.0} ppi  |  Format: {}",
-                            eff_ppi, self.session.doc.printer.paper_size_key
+                            "Bogen {}/{}  |  Slot {}: {}  |  Format: {}",
+                            self.session.doc.active_page_index + 1,
+                            self.session.doc.page_count(),
+                            active_slot + 1,
+                            ppi_str,
+                            self.session.doc.printer.paper_size_key
                         ))
-                        .color(Color32::from_rgb(200, 205, 215)),
+                        .color(t.text_dim),
                     );
+
+                    // Right: Zoom Slider & Fit Controls
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .button("100%")
+                            .on_hover_text("Ansicht auf Standard-Einpassung zurücksetzen")
+                            .clicked()
+                        {
+                            self.zoom = 1.0;
+                        }
+                        if ui.button("+").clicked() {
+                            self.zoom = (self.zoom + 0.15).min(2.5);
+                        }
+                        ui.add(
+                            egui::Slider::new(&mut self.zoom, 0.4..=2.5)
+                                .show_value(false)
+                                .text(""),
+                        );
+                        if ui.button("−").clicked() {
+                            self.zoom = (self.zoom - 0.15).max(0.4);
+                        }
+                        ui.label(
+                            RichText::new(format!("Zoom: {:.0}%", self.zoom * 100.0))
+                                .small()
+                                .color(t.text_dim),
+                        );
+                    });
                 });
             });
-        });
     }
 
     fn draw_left_filmstrip(&mut self, ctx: &Context) {
         let t = self.tokens;
         egui::SidePanel::left("left_filmstrip_panel")
-            .default_width(280.0)
-            .min_width(220.0)
+            .default_width(295.0)
+            .min_width(235.0)
             .max_width(580.0)
             .resizable(true)
             .frame(
@@ -548,7 +725,7 @@ impl LumaPrintApp {
     fn draw_bottom_filmstrip(&mut self, ctx: &Context) {
         let t = self.tokens;
         egui::TopBottomPanel::bottom("bottom_filmstrip_panel")
-            .default_height(165.0)
+            .default_height(175.0)
             .resizable(true)
             .frame(
                 egui::Frame::new()
@@ -566,11 +743,34 @@ impl LumaPrintApp {
         let panel_w = ui.available_width();
         ui.set_max_width(panel_w);
 
-        ui.label(RichText::new("Originalbildliste").strong().color(t.text));
+        // Header with Pool count & Auto-Distribute button
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(format!("Bilder-Pool ({})", self.session.doc.images.len()))
+                    .strong()
+                    .color(t.text),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .button("🪄 Auf Bögen verteilen")
+                    .on_hover_text(
+                        "Verteilt alle unplatzierten Bilder aus dem Pool automatisch auf freie Bildstellen und legt bei Bedarf neue Bögen an",
+                    )
+                    .clicked()
+                {
+                    self.exec(EngineCommand::AutoDistributePoolImages {
+                        only_unassigned: true,
+                    });
+                }
+            });
+        });
+
         ui.add_space(4.0);
+
+        // Single image path import
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("+ Laden").clicked() && !self.open_file_path_input.trim().is_empty() {
+                if ui.button("+ Bild").clicked() && !self.open_file_path_input.trim().is_empty() {
                     let p = self.open_file_path_input.trim().to_string();
                     self.exec(EngineCommand::AddImageFile { path: p });
                 }
@@ -578,39 +778,74 @@ impl LumaPrintApp {
                 ui.add(
                     egui::TextEdit::singleline(&mut self.open_file_path_input)
                         .desired_width(edit_w)
-                        .hint_text("Pfad zur Bilddatei..."),
+                        .hint_text("Bilddatei-Pfad (oder per Drag&Drop)..."),
                 );
             });
         });
-        ui.add_space(6.0);
+
+        // Folder import with >50 confirmation guard
+        ui.horizontal(|ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("📁 + Ordner").clicked()
+                    && !self.open_folder_path_input.trim().is_empty()
+                {
+                    let folder = Path::new(self.open_folder_path_input.trim()).to_path_buf();
+                    self.import_folder_with_guard(&folder);
+                }
+                let edit_w = ui.available_width().max(60.0);
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.open_folder_path_input)
+                        .desired_width(edit_w)
+                        .hint_text("Ordner-Pfad importieren..."),
+                );
+            });
+        });
+
+        ui.add_space(2.0);
+        ui.horizontal(|ui| {
+            ui.checkbox(
+                &mut self.session.doc.pool_filter_unassigned_only,
+                "Nur unplatzierte zeigen",
+            );
+            ui.label(
+                RichText::new("· Drag&Drop auf Bogen")
+                    .small()
+                    .color(t.text_faint),
+            );
+        });
+
+        ui.add_space(4.0);
         ui.separator();
-        ui.add_space(6.0);
+        ui.add_space(4.0);
 
         let images = self.session.doc.images.clone();
         let active_idx = self.session.doc.active_image_index;
+        let filter_unassigned = self.session.doc.pool_filter_unassigned_only;
         let mut clicked_idx: Option<usize> = None;
+        let mut pending_cmd: Option<EngineCommand> = None;
+        let mut open_crop_for_idx: Option<usize> = None;
 
-        egui::ScrollArea::vertical()
+        let scroll_resp = egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 let row_w = (ui.available_width() - 4.0).max(150.0);
-
-                // Scale thumbnail size proportionally with dock width without overflowing row_w
-                let thumb_w = (row_w - 165.0).clamp(68.0, 280.0);
+                let thumb_w = (row_w - 165.0).clamp(64.0, 240.0);
                 let thumb_h = (thumb_w * 0.72).round();
                 let thumb_slot_size = Vec2::new(thumb_w, thumb_h);
                 let text_col_w = (row_w - thumb_w - 12.0).max(60.0);
 
                 for (idx, img) in images.iter().enumerate() {
-                    let is_sel = idx == active_idx;
+                    let (usage_count, usage_pages) = self.session.doc.image_usage_summary(img.id);
+                    if filter_unassigned && usage_count > 0 {
+                        continue;
+                    }
 
-                    // Reserve background shape slot behind the entire entry
+                    let is_sel = idx == active_idx;
                     let bg_shape_idx = ui.painter().add(egui::Shape::Noop);
 
                     let row_inner = ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 12.0;
+                        ui.spacing_mut().item_spacing.x = 10.0;
 
-                        // Thumbnail preview (scales with dock width, aspect-ratio preserved)
                         let (thumb_rect, _) =
                             ui.allocate_exact_size(thumb_slot_size, Sense::hover());
 
@@ -634,6 +869,8 @@ impl LumaPrintApp {
 
                         let border_stroke = if is_sel {
                             Stroke::new(1.5_f32, t.accent)
+                        } else if usage_count > 0 {
+                            Stroke::new(1.2_f32, Color32::from_rgb(70, 190, 120))
                         } else {
                             Stroke::new(1.0_f32, t.field_border)
                         };
@@ -644,13 +881,12 @@ impl LumaPrintApp {
                             StrokeKind::Middle,
                         );
 
-                        // Image title and technical metadata bounded strictly to text_col_w
                         ui.allocate_ui_with_layout(
                             Vec2::new(text_col_w, thumb_h),
                             egui::Layout::top_down(egui::Align::Min),
                             |ui| {
                                 ui.set_max_width(text_col_w);
-                                ui.spacing_mut().item_spacing.y = 4.0;
+                                ui.spacing_mut().item_spacing.y = 2.0;
                                 ui.add(
                                     egui::Label::new(
                                         RichText::new(&img.display_name)
@@ -662,7 +898,7 @@ impl LumaPrintApp {
                                 ui.add(
                                     egui::Label::new(
                                         RichText::new(format!(
-                                            "{}×{} px · {}-Bit",
+                                            "{}×{} · {}-Bit",
                                             img.meta.width,
                                             img.meta.height,
                                             img.meta.bit_depth_per_channel
@@ -672,11 +908,24 @@ impl LumaPrintApp {
                                     )
                                     .truncate(),
                                 );
+
+                                // Usage badge (0, 1, or multiple placements across sheets)
+                                let (badge_txt, badge_col) = if usage_count == 0 {
+                                    (String::from("○ Nicht platziert"), t.text_faint)
+                                } else if usage_count == 1 {
+                                    (
+                                        format!("● Platziert ({usage_pages})"),
+                                        Color32::from_rgb(80, 210, 130),
+                                    )
+                                } else {
+                                    (
+                                        format!("● {usage_count}× ({usage_pages})"),
+                                        Color32::from_rgb(90, 195, 255),
+                                    )
+                                };
                                 ui.add(
                                     egui::Label::new(
-                                        RichText::new(&img.meta.icc_profile_name)
-                                            .small()
-                                            .color(t.text_faint),
+                                        RichText::new(badge_txt).small().color(badge_col),
                                     )
                                     .truncate(),
                                 );
@@ -684,7 +933,6 @@ impl LumaPrintApp {
                         );
                     });
 
-                    // Full-width hit rect & background highlight (expanded vertically only!)
                     let r = row_inner.response.rect;
                     let full_row_rect = Rect::from_min_max(
                         Pos2::new(r.min.x, r.min.y - 3.0),
@@ -695,13 +943,62 @@ impl LumaPrintApp {
                         .interact(
                             full_row_rect,
                             egui::Id::new(("filmstrip_entry_row", img.id)),
-                            Sense::click(),
+                            Sense::click_and_drag(),
                         )
-                        .on_hover_cursor(egui::CursorIcon::PointingHand);
+                        .on_hover_cursor(egui::CursorIcon::Grab)
+                        .on_hover_text(
+                            "In eine Bildstelle auf dem Bogen ziehen (oder Rechtsklick für Aktionen)",
+                        );
 
                     if row_resp.clicked() {
                         clicked_idx = Some(idx);
                     }
+                    if row_resp.drag_started() || row_resp.dragged() {
+                        egui::DragAndDrop::set_payload(
+                            ui.ctx(),
+                            DragPayload::PoolImage(img.id),
+                        );
+                    }
+
+                    row_resp.context_menu(|ui| {
+                        let active_page = self.session.doc.active_page_index;
+                        let active_slot = self.session.doc.active_slot_index;
+                        if ui
+                            .button(format!(
+                                "📥 Auf Bogen {} · Slot {} legen",
+                                active_page + 1,
+                                active_slot + 1
+                            ))
+                            .clicked()
+                        {
+                            pending_cmd = Some(EngineCommand::AssignImageToPageSlot {
+                                page_index: active_page,
+                                slot_index: active_slot,
+                                image_id: Some(img.id),
+                            });
+                            ui.close_menu();
+                        }
+                        if ui.button("📄 Auf neuen Bogen legen").clicked() {
+                            pending_cmd = Some(EngineCommand::AddPage {
+                                initial_image_id: Some(img.id),
+                            });
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button("✂ Bildbeschnitt…").clicked() {
+                            open_crop_for_idx = Some(idx);
+                            ui.close_menu();
+                        }
+                        if ui.button("↻ 90° rechts drehen").clicked() {
+                            self.rotate_image_by(img.id, 90);
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button("🗑 Aus Bilder-Pool entfernen").clicked() {
+                            pending_cmd = Some(EngineCommand::RemoveImage { image_id: img.id });
+                            ui.close_menu();
+                        }
+                    });
 
                     let bg_fill = if is_sel {
                         t.accent.gamma_multiply(0.20)
@@ -719,15 +1016,53 @@ impl LumaPrintApp {
                     }
 
                     if idx + 1 < images.len() {
-                        ui.add_space(8.0);
+                        ui.add_space(6.0);
                         ui.separator();
-                        ui.add_space(8.0);
+                        ui.add_space(6.0);
                     }
                 }
             });
 
+        // Support dragging a placed image from a page slot back into the Pool to unassign it!
+        let pool_rect = scroll_resp.inner_rect;
+        if let Some(payload) = egui::DragAndDrop::payload::<DragPayload>(ui.ctx()) {
+            if let DragPayload::PageSlot {
+                page_index,
+                slot_index,
+                ..
+            } = *payload
+            {
+                let pointer_in_pool = ui
+                    .ctx()
+                    .input(|i| i.pointer.hover_pos().is_some_and(|p| pool_rect.contains(p)));
+                if pointer_in_pool {
+                    ui.painter().rect_stroke(
+                        pool_rect.shrink(2.0),
+                        CornerRadius::same(4),
+                        Stroke::new(2.0_f32, Color32::from_rgb(255, 165, 60)),
+                        StrokeKind::Middle,
+                    );
+                    if ui.ctx().input(|i| i.pointer.any_released()) {
+                        let _ = egui::DragAndDrop::take_payload::<DragPayload>(ui.ctx());
+                        pending_cmd = Some(EngineCommand::AssignImageToPageSlot {
+                            page_index,
+                            slot_index,
+                            image_id: None,
+                        });
+                    }
+                }
+            }
+        }
+
         if let Some(idx) = clicked_idx {
             self.exec(EngineCommand::SelectActiveImage { index: idx });
+        }
+        if let Some(idx) = open_crop_for_idx {
+            self.exec(EngineCommand::SelectActiveImage { index: idx });
+            self.show_crop_modal = true;
+        }
+        if let Some(cmd) = pending_cmd {
+            self.exec(cmd);
         }
     }
 
@@ -739,192 +1074,898 @@ impl LumaPrintApp {
         egui::CentralPanel::default()
             .frame(panel_frame)
             .show(ctx, |ui| {
-                // D: Zoom Bar (Vergrößerungsleiste, EPL manual p. 16)
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("Bearbeitungsbereich (Blatt-Vorschau)")
-                            .color(Color32::from_rgb(210, 215, 222))
-                            .strong(),
-                    );
-                    if self.session.doc.color.softproof.enabled {
+                // 1. Bottom Page-Thumbnail Navigator Strip inside Central Workspace
+                egui::TopBottomPanel::bottom("central_page_navigator_strip")
+                    .resizable(false)
+                    .exact_height(104.0)
+                    .frame(
+                        egui::Frame::new()
+                            .fill(self.tokens.dock.gamma_multiply(0.95))
+                            .inner_margin(egui::Margin::symmetric(12, 8))
+                            .stroke(Stroke::new(1.0_f32, self.tokens.separator)),
+                    )
+                    .show_inside(ui, |ui| {
+                        self.draw_page_navigator_strip(ui);
+                    });
+
+                // 2. Main Canvas Area (Single-Page Detail or All-Pages Light-Table Overview)
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::NONE)
+                    .show_inside(ui, |ui| match self.session.doc.canvas_view_mode {
+                        CanvasViewMode::SinglePage => self.draw_single_page_canvas(ui),
+                        CanvasViewMode::AllPagesOverview => self.draw_all_pages_overview_canvas(ui),
+                    });
+            });
+    }
+
+    fn draw_single_page_canvas(&mut self, ui: &mut Ui) {
+        let t = self.tokens;
+        let active_page = self.session.doc.active_page_index;
+        let active_slot = self.session.doc.active_slot_index;
+
+        // Contextual Slot Action Bar at the bottom of the single-page view when an image is in the active slot
+        if let Some(Some(slot_img_id)) = self
+            .session
+            .doc
+            .slot_assignments
+            .get(active_slot)
+            .copied()
+        {
+            egui::TopBottomPanel::bottom("contextual_slot_action_bar")
+                .resizable(false)
+                .exact_height(38.0)
+                .frame(
+                    egui::Frame::new()
+                        .fill(t.chrome.gamma_multiply(0.92))
+                        .inner_margin(egui::Margin::symmetric(14, 5))
+                        .stroke(Stroke::new(1.0_f32, t.separator)),
+                )
+                .show_inside(ui, |ui| {
+                    let img_name = self
+                        .session
+                        .doc
+                        .images
+                        .iter()
+                        .find(|i| i.id == slot_img_id)
+                        .map(|i| i.display_name.clone())
+                        .unwrap_or_else(|| format!("Bild #{slot_img_id}"));
+                    ui.horizontal(|ui| {
                         ui.label(
                             RichText::new(format!(
-                                "[SOFTPROOF AKTIV: {}]",
-                                self.session
-                                    .active_icc_profile()
-                                    .map(|p| p.description.as_str())
-                                    .unwrap_or("Standard ICC")
+                                "🎯 Bogen {} · Bildstelle {}: {}",
+                                active_page + 1,
+                                active_slot + 1,
+                                img_name
                             ))
-                            .color(Color32::from_rgb(80, 210, 255))
-                            .strong(),
+                            .strong()
+                            .color(t.accent),
                         );
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("100%").clicked() {
-                            self.zoom = 1.0;
+                        ui.separator();
+                        if ui.button("✂ Bildbeschnitt…").clicked() {
+                            if let Some(idx) = self
+                                .session
+                                .doc
+                                .images
+                                .iter()
+                                .position(|i| i.id == slot_img_id)
+                            {
+                                self.exec(EngineCommand::SelectActiveImage { index: idx });
+                            }
+                            self.show_crop_modal = true;
                         }
-                        ui.add(
-                            egui::Slider::new(&mut self.zoom, 0.4..=2.5)
-                                .text("Zoom")
-                                .fixed_decimals(2),
-                        );
+                        if ui.button("↺ -90°").clicked() {
+                            self.rotate_image_by(slot_img_id, -90);
+                        }
+                        if ui.button("↻ +90°").clicked() {
+                            self.rotate_image_by(slot_img_id, 90);
+                        }
+                        if ui.button("↔ Spiegeln").clicked() {
+                            self.toggle_flip_horizontal(slot_img_id);
+                        }
+                        ui.separator();
+                        if ui
+                            .button("🗑 Von dieser Bildstelle entfernen")
+                            .on_hover_text("Entfernt das Bild von dieser Stelle auf dem Bogen (das Bild bleibt im Pool)")
+                            .clicked()
+                        {
+                            self.exec(EngineCommand::AssignImageToPageSlot {
+                                page_index: active_page,
+                                slot_index: active_slot,
+                                image_id: None,
+                            });
+                        }
                     });
                 });
+        }
 
-                let avail = ui.available_rect_before_wrap();
-                let Some(solved) = self.cached_solved.clone() else {
-                    return;
-                };
-                let pw_mm = solved.paper_size_mm.width_mm.max(10.0) as f32;
-                let ph_mm = solved.paper_size_mm.height_mm.max(10.0) as f32;
+        let avail = ui.available_rect_before_wrap();
+        let Some(solved) = self.cached_solved.clone() else {
+            return;
+        };
+        let pw_mm = solved.paper_size_mm.width_mm.max(10.0) as f32;
+        let ph_mm = solved.paper_size_mm.height_mm.max(10.0) as f32;
 
-                let margin_px = 36.0;
-                let max_w = (avail.width() - margin_px * 2.0).max(80.0);
-                let max_h = (avail.height() - margin_px * 2.0).max(80.0);
-                let base_scale = (max_w / pw_mm).min(max_h / ph_mm);
-                let scale = base_scale * self.zoom;
+        let margin_px = 34.0;
+        let max_w = (avail.width() - margin_px * 2.0).max(80.0);
+        let max_h = (avail.height() - margin_px * 2.0).max(80.0);
+        let base_scale = (max_w / pw_mm).min(max_h / ph_mm);
+        let scale = base_scale * self.zoom;
 
-                let sheet_w = pw_mm * scale;
-                let sheet_h = ph_mm * scale;
-                let sheet_rect = Rect::from_center_size(avail.center(), Vec2::new(sheet_w, sheet_h));
+        let sheet_w = pw_mm * scale;
+        let sheet_h = ph_mm * scale;
+        let sheet_rect = Rect::from_center_size(avail.center(), Vec2::new(sheet_w, sheet_h));
 
-                let painter = ui.painter();
-                // Drop shadow under paper sheet
-                let shadow_rect = sheet_rect.translate(Vec2::new(5.0, 6.0));
-                painter.rect_filled(
-                    shadow_rect,
-                    CornerRadius::ZERO,
-                    Color32::from_black_alpha(110),
+        {
+            let painter = ui.painter();
+            let shadow_rect = sheet_rect.translate(Vec2::new(5.0, 6.0));
+            painter.rect_filled(
+                shadow_rect,
+                CornerRadius::ZERO,
+                Color32::from_black_alpha(110),
+            );
+
+            if let Some(tex) = &self.page_texture {
+                painter.image(
+                    tex.id(),
+                    sheet_rect,
+                    Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                    Color32::WHITE,
                 );
+            } else {
+                painter.rect_filled(sheet_rect, CornerRadius::ZERO, Color32::WHITE);
+            }
 
-                // Draw rendered 16-bit -> texture page
-                if let Some(tex) = &self.page_texture {
-                    painter.image(
-                        tex.id(),
-                        sheet_rect,
-                        Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-                        Color32::WHITE,
-                    );
+            self.draw_sheet_rulers(painter, sheet_rect, pw_mm, ph_mm, scale);
+
+            if let Some(gw) = &solved.gallery_wrap {
+                let front_r = mm_rect_to_screen(gw.front_canvas_rect_mm, sheet_rect.min, scale);
+                let side_r = mm_rect_to_screen(gw.side_fold_rect_mm, sheet_rect.min, scale);
+                painter.rect_stroke(
+                    front_r,
+                    CornerRadius::ZERO,
+                    Stroke::new(1.5_f32, Color32::from_rgb(0, 165, 255)),
+                    StrokeKind::Middle,
+                );
+                painter.rect_stroke(
+                    side_r,
+                    CornerRadius::ZERO,
+                    Stroke::new(1.0_f32, Color32::from_rgb(255, 160, 0)),
+                    StrokeKind::Middle,
+                );
+            }
+        }
+
+        // Draw & interact with all page slots (empty drop zones + occupied image slots)
+        self.draw_interactive_sheet_slots(ui, active_page, &solved, sheet_rect, scale, true);
+
+        // Draw Test-Strip overlay rectangle if enabled
+        if self.session.doc.test_strip.enabled {
+            let [nx, ny, nw, nh] = self.session.doc.test_strip.norm_rect;
+            let ts_rect = Rect::from_min_size(
+                Pos2::new(
+                    sheet_rect.min.x + (nx as f32) * sheet_rect.width(),
+                    sheet_rect.min.y + (ny as f32) * sheet_rect.height(),
+                ),
+                Vec2::new(
+                    (nw as f32) * sheet_rect.width(),
+                    (nh as f32) * sheet_rect.height(),
+                ),
+            );
+            let painter = ui.painter();
+            painter.rect_stroke(
+                ts_rect,
+                CornerRadius::ZERO,
+                Stroke::new(2.0_f32, Color32::from_rgb(50, 230, 110)),
+                StrokeKind::Middle,
+            );
+            painter.text(
+                ts_rect.left_top() + Vec2::new(4.0, 2.0),
+                egui::Align2::LEFT_TOP,
+                "1:1 PROBESTREIFEN",
+                FontId::proportional(11.0),
+                Color32::from_rgb(50, 230, 110),
+            );
+        }
+    }
+
+    fn draw_all_pages_overview_canvas(&mut self, ui: &mut Ui) {
+        let t = self.tokens;
+        let total_pages = self.session.doc.page_count();
+        let active_page = self.session.doc.active_page_index;
+
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.add_space(12.0);
+                let avail_w = (ui.available_width() - 24.0).max(260.0);
+                let cols = ((avail_w / 320.0).floor() as usize).clamp(1, 4);
+                let card_w = ((avail_w - ((cols.saturating_sub(1)) as f32) * 18.0) / (cols as f32))
+                    .clamp(220.0, 440.0);
+                let card_h = (card_w * 0.82).round();
+
+                let mut page_idx = 0;
+                while page_idx <= total_pages {
+                    ui.horizontal(|ui| {
+                        ui.add_space(12.0);
+                        ui.spacing_mut().item_spacing.x = 18.0;
+                        for _col in 0..cols {
+                            if page_idx > total_pages {
+                                break;
+                            }
+                            if page_idx == total_pages {
+                                // "+ Neuer Bogen" card at the end of the grid
+                                let (card_rect, card_resp) = ui.allocate_exact_size(
+                                    Vec2::new(card_w, card_h),
+                                    Sense::click(),
+                                );
+                                let p = ui.painter();
+                                p.rect_filled(
+                                    card_rect,
+                                    CornerRadius::same(6),
+                                    t.dock.gamma_multiply(0.55),
+                                );
+                                draw_dashed_rect(
+                                    p,
+                                    card_rect.shrink(6.0),
+                                    Stroke::new(1.5_f32, t.field_border),
+                                    8.0,
+                                    5.0,
+                                );
+                                p.text(
+                                    card_rect.center(),
+                                    egui::Align2::CENTER_CENTER,
+                                    "+ Neuer Bogen\n(Klicken oder Bild hierher ziehen)",
+                                    FontId::proportional(13.0),
+                                    t.text_dim,
+                                );
+                                if card_resp.clicked() {
+                                    self.exec(EngineCommand::AddPage {
+                                        initial_image_id: None,
+                                    });
+                                }
+                                // Accept PoolImage drop on "+ Neuer Bogen" card
+                                if let Some(payload) =
+                                    egui::DragAndDrop::payload::<DragPayload>(ui.ctx())
+                                {
+                                    if let DragPayload::PoolImage(img_id) = *payload {
+                                        if ui.ctx().input(|i| {
+                                            i.pointer
+                                                .hover_pos()
+                                                .is_some_and(|pos| card_rect.contains(pos))
+                                        }) {
+                                            ui.painter().rect_stroke(
+                                                card_rect,
+                                                CornerRadius::same(6),
+                                                Stroke::new(2.0_f32, t.accent),
+                                                StrokeKind::Middle,
+                                            );
+                                            if ui.ctx().input(|i| i.pointer.any_released()) {
+                                                let _ = egui::DragAndDrop::take_payload::<
+                                                    DragPayload,
+                                                >(ui.ctx());
+                                                self.exec(EngineCommand::AddPage {
+                                                    initial_image_id: Some(img_id),
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                let pi = page_idx;
+                                let is_active_page = pi == active_page;
+                                let (card_rect, card_resp) = ui.allocate_exact_size(
+                                    Vec2::new(card_w, card_h),
+                                    Sense::click(),
+                                );
+                                {
+                                    let p = ui.painter();
+                                    p.rect_filled(
+                                        card_rect,
+                                        CornerRadius::same(6),
+                                        t.dock.gamma_multiply(0.82),
+                                    );
+                                    let stroke = if is_active_page {
+                                        Stroke::new(2.0_f32, t.accent)
+                                    } else {
+                                        Stroke::new(1.0_f32, t.separator)
+                                    };
+                                    p.rect_stroke(
+                                        card_rect,
+                                        CornerRadius::same(6),
+                                        stroke,
+                                        StrokeKind::Middle,
+                                    );
+
+                                    // Header label inside overview card
+                                    let layout_lbl =
+                                        self.session.doc.page_layout(pi).kind_label_de();
+                                    p.text(
+                                        card_rect.left_top() + Vec2::new(10.0, 6.0),
+                                        egui::Align2::LEFT_TOP,
+                                        format!("Bogen {} · {}", pi + 1, layout_lbl),
+                                        FontId::proportional(12.5),
+                                        if is_active_page { t.accent } else { t.text },
+                                    );
+                                }
+
+                                if let Some(solved) = self.cached_all_solved.get(pi).cloned() {
+                                    let inner_area = Rect::from_min_max(
+                                        Pos2::new(card_rect.min.x + 12.0, card_rect.min.y + 28.0),
+                                        Pos2::new(card_rect.max.x - 12.0, card_rect.max.y - 10.0),
+                                    );
+                                    let pw_mm = solved.paper_size_mm.width_mm.max(10.0) as f32;
+                                    let ph_mm = solved.paper_size_mm.height_mm.max(10.0) as f32;
+                                    let scale = (inner_area.width() / pw_mm)
+                                        .min(inner_area.height() / ph_mm);
+                                    let sheet_rect = Rect::from_center_size(
+                                        inner_area.center(),
+                                        Vec2::new(pw_mm * scale, ph_mm * scale),
+                                    );
+                                    if let Some(tex) = self.page_thumb_textures.get(&pi) {
+                                        ui.painter().image(
+                                            tex.id(),
+                                            sheet_rect,
+                                            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                                            Color32::WHITE,
+                                        );
+                                    } else {
+                                        ui.painter().rect_filled(
+                                            sheet_rect,
+                                            CornerRadius::ZERO,
+                                            Color32::WHITE,
+                                        );
+                                    }
+                                    self.draw_interactive_sheet_slots(
+                                        ui,
+                                        pi,
+                                        &solved,
+                                        sheet_rect,
+                                        scale,
+                                        false,
+                                    );
+                                }
+
+                                if card_resp.clicked() {
+                                    self.exec(EngineCommand::SelectPage { page_index: pi });
+                                }
+                                if card_resp.double_clicked() {
+                                    self.exec(EngineCommand::SelectPage { page_index: pi });
+                                    self.exec(EngineCommand::SetCanvasViewMode(
+                                        CanvasViewMode::SinglePage,
+                                    ));
+                                }
+                                self.attach_page_context_menu(&card_resp, pi, total_pages);
+                            }
+                            page_idx += 1;
+                        }
+                    });
+                    ui.add_space(16.0);
+                }
+            });
+    }
+
+    fn draw_interactive_sheet_slots(
+        &mut self,
+        ui: &mut Ui,
+        page_index: usize,
+        solved: &SolvedPageLayout,
+        sheet_rect: Rect,
+        scale: f32,
+        show_corner_handles: bool,
+    ) {
+        let is_active_page = page_index == self.session.doc.active_page_index;
+        let active_slot = self.session.doc.active_slot_index;
+        let mut pending_cmd: Option<EngineCommand> = None;
+        let mut open_crop_for_id: Option<u64> = None;
+
+        for slot in &solved.slots {
+            let slot_r = mm_rect_to_screen(slot.slot_rect_mm, sheet_rect.min, scale);
+            let img_r = mm_rect_to_screen(slot.image_draw_rect_mm, sheet_rect.min, scale);
+            let is_active_slot = is_active_page && slot.slot_index == active_slot;
+
+            if let Some(img_id) = slot.assigned_image_id {
+                let stroke = if is_active_slot {
+                    Stroke::new(2.0_f32, Color32::from_rgb(0, 145, 255))
                 } else {
-                    painter.rect_filled(sheet_rect, CornerRadius::ZERO, Color32::WHITE);
+                    Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(80, 120, 170, 140))
+                };
+                ui.painter()
+                    .rect_stroke(img_r, CornerRadius::ZERO, stroke, StrokeKind::Middle);
+
+                let resp = ui.interact(
+                    slot_r,
+                    egui::Id::new(("sheet_slot_interact", page_index, slot.slot_index)),
+                    Sense::click_and_drag(),
+                );
+                if resp.clicked() {
+                    if !is_active_page {
+                        pending_cmd = Some(EngineCommand::SelectPage { page_index });
+                    }
+                    self.session.doc.active_slot_index = slot.slot_index;
+                }
+                if resp.double_clicked() {
+                    open_crop_for_id = Some(img_id);
+                }
+                if resp.drag_started() || resp.dragged() {
+                    egui::DragAndDrop::set_payload(
+                        ui.ctx(),
+                        DragPayload::PageSlot {
+                            page_index,
+                            slot_index: slot.slot_index,
+                            image_id: img_id,
+                        },
+                    );
                 }
 
-                // Draw rulers (mm or inch ticks along top and left edges of sheet)
-                self.draw_sheet_rulers(painter, sheet_rect, pw_mm, ph_mm, scale);
-
-                // Draw Gallery Wrap fold guides (non-printing dashed lines, EPL manual p. 26)
-                if let Some(gw) = &solved.gallery_wrap {
-                    let front_r = mm_rect_to_screen(gw.front_canvas_rect_mm, sheet_rect.min, scale);
-                    let side_r = mm_rect_to_screen(gw.side_fold_rect_mm, sheet_rect.min, scale);
-                    painter.rect_stroke(
-                        front_r,
-                        CornerRadius::ZERO,
-                        Stroke::new(1.5_f32, Color32::from_rgb(0, 165, 255)),
-                        StrokeKind::Middle,
-                    );
-                    painter.rect_stroke(
-                        side_r,
-                        CornerRadius::ZERO,
-                        Stroke::new(1.0_f32, Color32::from_rgb(255, 160, 0)),
-                        StrokeKind::Middle,
+                resp.context_menu(|ui| {
+                    if ui.button("✂ Bildbeschnitt…").clicked() {
+                        open_crop_for_id = Some(img_id);
+                        ui.close_menu();
+                    }
+                    if ui.button("↺ 90° links drehen").clicked() {
+                        self.rotate_image_by(img_id, -90);
+                        ui.close_menu();
+                    }
+                    if ui.button("↻ 90° rechts drehen").clicked() {
+                        self.rotate_image_by(img_id, 90);
+                        ui.close_menu();
+                    }
+                    if ui.button("↔ Horizontal spiegeln").clicked() {
+                        self.toggle_flip_horizontal(img_id);
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui
+                        .button("🗑 Bild von dieser Stelle entfernen")
+                        .clicked()
+                    {
+                        pending_cmd = Some(EngineCommand::AssignImageToPageSlot {
+                            page_index,
+                            slot_index: slot.slot_index,
+                            image_id: None,
+                        });
+                        ui.close_menu();
+                    }
+                });
+            } else {
+                // Empty Slot Drop Zone: subtle dashed border + placeholder hint
+                let dash_col = if is_active_slot {
+                    Color32::from_rgb(0, 130, 230)
+                } else {
+                    Color32::from_rgb(155, 162, 175)
+                };
+                draw_dashed_rect(
+                    ui.painter(),
+                    slot_r.shrink(1.5),
+                    Stroke::new(1.2_f32, dash_col),
+                    7.0,
+                    4.0,
+                );
+                if slot_r.width() > 54.0 && slot_r.height() > 28.0 {
+                    let hint = if slot_r.width() > 110.0 {
+                        format!(
+                            "+ Bild hierher ziehen\n({:.0} × {:.0} mm)",
+                            slot.slot_rect_mm.width_mm, slot.slot_rect_mm.height_mm
+                        )
+                    } else {
+                        format!("Slot {}", slot.slot_index + 1)
+                    };
+                    ui.painter().text(
+                        slot_r.center(),
+                        egui::Align2::CENTER_CENTER,
+                        hint,
+                        FontId::proportional(11.0),
+                        Color32::from_rgb(130, 138, 150),
                     );
                 }
 
-                // Draw interactive 4-corner drag handles on the primary slot (EPL manual p. 19)
-                if let Some(slot) = solved.slots.first() {
-                    let img_r = mm_rect_to_screen(slot.image_draw_rect_mm, sheet_rect.min, scale);
-                    painter.rect_stroke(
-                        img_r,
+                let resp = ui.interact(
+                    slot_r,
+                    egui::Id::new(("sheet_empty_slot", page_index, slot.slot_index)),
+                    Sense::click(),
+                );
+                if resp.clicked() {
+                    if !is_active_page {
+                        pending_cmd = Some(EngineCommand::SelectPage { page_index });
+                    }
+                    self.session.doc.active_slot_index = slot.slot_index;
+                }
+                resp.context_menu(|ui| {
+                    if let Some(pool_img) = self
+                        .session
+                        .doc
+                        .images
+                        .get(self.session.doc.active_image_index)
+                    {
+                        if ui
+                            .button(format!(
+                                "📥 '{}' hier platzieren",
+                                pool_img.display_name
+                            ))
+                            .clicked()
+                        {
+                            pending_cmd = Some(EngineCommand::AssignImageToPageSlot {
+                                page_index,
+                                slot_index: slot.slot_index,
+                                image_id: Some(pool_img.id),
+                            });
+                            ui.close_menu();
+                        }
+                    } else {
+                        ui.label("Bilder-Pool ist leer.");
+                    }
+                });
+            }
+
+            // Check if a PoolImage or PageSlot is being dragged over this slot
+            if let Some(payload) = egui::DragAndDrop::payload::<DragPayload>(ui.ctx()) {
+                let hovered = ui
+                    .ctx()
+                    .input(|i| i.pointer.hover_pos().is_some_and(|p| slot_r.contains(p)));
+                if hovered {
+                    match *payload {
+                        DragPayload::PoolImage(img_id) => {
+                            ui.painter().rect_filled(
+                                slot_r,
+                                CornerRadius::ZERO,
+                                Color32::from_rgba_unmultiplied(0, 145, 255, 45),
+                            );
+                            ui.painter().rect_stroke(
+                                slot_r,
+                                CornerRadius::ZERO,
+                                Stroke::new(2.5_f32, Color32::from_rgb(0, 145, 255)),
+                                StrokeKind::Middle,
+                            );
+                            if ui.ctx().input(|i| i.pointer.any_released()) {
+                                let _ = egui::DragAndDrop::take_payload::<DragPayload>(ui.ctx());
+                                pending_cmd = Some(EngineCommand::AssignImageToPageSlot {
+                                    page_index,
+                                    slot_index: slot.slot_index,
+                                    image_id: Some(img_id),
+                                });
+                            }
+                        }
+                        DragPayload::PageSlot {
+                            page_index: src_page,
+                            slot_index: src_slot,
+                            ..
+                        } if (src_page, src_slot) != (page_index, slot.slot_index) => {
+                            ui.painter().rect_filled(
+                                slot_r,
+                                CornerRadius::ZERO,
+                                Color32::from_rgba_unmultiplied(60, 200, 120, 45),
+                            );
+                            ui.painter().rect_stroke(
+                                slot_r,
+                                CornerRadius::ZERO,
+                                Stroke::new(2.5_f32, Color32::from_rgb(60, 200, 120)),
+                                StrokeKind::Middle,
+                            );
+                            if ui.ctx().input(|i| i.pointer.any_released()) {
+                                let _ = egui::DragAndDrop::take_payload::<DragPayload>(ui.ctx());
+                                pending_cmd = Some(EngineCommand::SwapPageSlots {
+                                    page_a: src_page,
+                                    slot_a: src_slot,
+                                    page_b: page_index,
+                                    slot_b: slot.slot_index,
+                                });
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            // Optional 4 corner margin drag handles on the active slot in SinglePage Standard mode
+            if show_corner_handles && is_active_slot && slot.assigned_image_id.is_some() {
+                for (ci, corner_pos) in [
+                    img_r.left_top(),
+                    img_r.right_top(),
+                    img_r.left_bottom(),
+                    img_r.right_bottom(),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let h_rect = Rect::from_center_size(corner_pos, Vec2::splat(8.0));
+                    ui.painter().rect_filled(
+                        h_rect,
                         CornerRadius::ZERO,
-                        Stroke::new(1.0_f32, Color32::from_rgb(0, 140, 255)),
+                        Color32::from_rgb(0, 130, 240),
+                    );
+                    ui.painter().rect_stroke(
+                        h_rect,
+                        CornerRadius::ZERO,
+                        Stroke::new(1.0_f32, Color32::WHITE),
                         StrokeKind::Middle,
                     );
-
-                    // Double-click on image opens Crop modal (EPL manual p. 15, 43)
-                    let img_resp = ui.interact(
-                        img_r,
-                        egui::Id::new("canvas_active_image_slot"),
-                        Sense::click_and_drag(),
+                    let h_resp = ui.interact(
+                        h_rect,
+                        egui::Id::new(("corner_handle", page_index, slot.slot_index, ci)),
+                        Sense::drag(),
                     );
-                    if img_resp.double_clicked() {
-                        self.show_crop_modal = true;
+                    if h_resp.dragged() {
+                        let delta_mm = f64::from(h_resp.drag_delta().x / scale);
+                        if let LayoutMode::Standard(std_spec) = &self.session.doc.layout {
+                            let mut m = std_spec.margins_mm;
+                            let adjust = if ci == 0 || ci == 2 {
+                                delta_mm
+                            } else {
+                                -delta_mm
+                            };
+                            let new_m = (m.left_mm + adjust).clamp(0.0, 80.0);
+                            m.left_mm = new_m;
+                            m.right_mm = new_m;
+                            m.top_mm = new_m;
+                            m.bottom_mm = new_m;
+                            pending_cmd = Some(EngineCommand::SetStandardMargins(m));
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(img_id) = open_crop_for_id {
+            if let Some(idx) = self.session.doc.images.iter().position(|i| i.id == img_id) {
+                self.exec(EngineCommand::SelectActiveImage { index: idx });
+                self.show_crop_modal = true;
+            }
+        }
+        if let Some(cmd) = pending_cmd {
+            self.exec(cmd);
+        }
+    }
+
+    fn draw_page_navigator_strip(&mut self, ui: &mut Ui) {
+        let t = self.tokens;
+        let total_pages = self.session.doc.page_count();
+        let active_page = self.session.doc.active_page_index;
+        let mut pending_cmd: Option<EngineCommand> = None;
+
+        egui::ScrollArea::horizontal()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 10.0;
+
+                    for pi in 0..total_pages {
+                        let is_active = pi == active_page;
+                        let card_size = Vec2::new(98.0, 86.0);
+                        let (card_rect, card_resp) =
+                            ui.allocate_exact_size(card_size, Sense::click_and_drag());
+
+                        let p = ui.painter();
+                        let bg = if is_active {
+                            t.accent.gamma_multiply(0.22)
+                        } else if card_resp.hovered() {
+                            t.hover
+                        } else {
+                            t.field
+                        };
+                        p.rect_filled(card_rect, CornerRadius::same(4), bg);
+                        let border = if is_active {
+                            Stroke::new(2.0_f32, t.accent)
+                        } else {
+                            Stroke::new(1.0_f32, t.field_border)
+                        };
+                        p.rect_stroke(card_rect, CornerRadius::same(4), border, StrokeKind::Middle);
+
+                        // Miniature rendered page thumbnail inside navigator card
+                        let thumb_box = Rect::from_min_max(
+                            Pos2::new(card_rect.min.x + 8.0, card_rect.min.y + 5.0),
+                            Pos2::new(card_rect.max.x - 8.0, card_rect.max.y - 20.0),
+                        );
+                        if let Some(tex) = self.page_thumb_textures.get(&pi) {
+                            let sz = tex.size_vec2().max(Vec2::splat(1.0));
+                            let sc = (thumb_box.width() / sz.x).min(thumb_box.height() / sz.y);
+                            let r = Rect::from_center_size(thumb_box.center(), sz * sc);
+                            p.image(
+                                tex.id(),
+                                r,
+                                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                                Color32::WHITE,
+                            );
+                            p.rect_stroke(
+                                r,
+                                CornerRadius::ZERO,
+                                Stroke::new(1.0_f32, t.field_border),
+                                StrokeKind::Middle,
+                            );
+                        } else {
+                            p.rect_filled(thumb_box, CornerRadius::ZERO, Color32::WHITE);
+                        }
+
+                        let assigned_cnt = self
+                            .session
+                            .doc
+                            .page_slots(pi)
+                            .iter()
+                            .filter(|s| s.is_some())
+                            .count();
+                        let total_slots = self.session.doc.page_slots(pi).len().max(1);
+                        p.text(
+                            Pos2::new(card_rect.center().x, card_rect.max.y - 9.0),
+                            egui::Align2::CENTER_CENTER,
+                            format!("Bogen {} ({assigned_cnt}/{total_slots})", pi + 1),
+                            FontId::proportional(10.5),
+                            if is_active { t.accent } else { t.text },
+                        );
+
+                        if card_resp.clicked() {
+                            pending_cmd = Some(EngineCommand::SelectPage { page_index: pi });
+                        }
+                        if card_resp.drag_started() || card_resp.dragged() {
+                            egui::DragAndDrop::set_payload(ui.ctx(), DragPayload::ReorderPage(pi));
+                        }
+
+                        // Accept Drag & Drop onto page thumbnail (PoolImage or ReorderPage)
+                        if let Some(payload) = egui::DragAndDrop::payload::<DragPayload>(ui.ctx()) {
+                            let hovered = ui.ctx().input(|i| {
+                                i.pointer
+                                    .hover_pos()
+                                    .is_some_and(|pos| card_rect.contains(pos))
+                            });
+                            if hovered {
+                                match *payload {
+                                    DragPayload::PoolImage(img_id) => {
+                                        ui.painter().rect_stroke(
+                                            card_rect,
+                                            CornerRadius::same(4),
+                                            Stroke::new(2.0_f32, t.accent),
+                                            StrokeKind::Middle,
+                                        );
+                                        if ui.ctx().input(|i| i.pointer.any_released()) {
+                                            let _ = egui::DragAndDrop::take_payload::<DragPayload>(
+                                                ui.ctx(),
+                                            );
+                                            let target_slot = self
+                                                .session
+                                                .doc
+                                                .page_slots(pi)
+                                                .iter()
+                                                .position(Option::is_none)
+                                                .unwrap_or(0);
+                                            pending_cmd =
+                                                Some(EngineCommand::AssignImageToPageSlot {
+                                                    page_index: pi,
+                                                    slot_index: target_slot,
+                                                    image_id: Some(img_id),
+                                                });
+                                        }
+                                    }
+                                    DragPayload::ReorderPage(from_idx) if from_idx != pi => {
+                                        ui.painter().rect_stroke(
+                                            card_rect,
+                                            CornerRadius::same(4),
+                                            Stroke::new(2.0_f32, Color32::from_rgb(80, 210, 130)),
+                                            StrokeKind::Middle,
+                                        );
+                                        if ui.ctx().input(|i| i.pointer.any_released()) {
+                                            let _ = egui::DragAndDrop::take_payload::<DragPayload>(
+                                                ui.ctx(),
+                                            );
+                                            pending_cmd = Some(EngineCommand::MovePage {
+                                                from_index: from_idx,
+                                                to_index: pi,
+                                            });
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+
+                        self.attach_page_context_menu(&card_resp, pi, total_pages);
                     }
 
-                    // 4 Corner handles
-                    for (ci, corner_pos) in [
-                        img_r.left_top(),
-                        img_r.right_top(),
-                        img_r.left_bottom(),
-                        img_r.right_bottom(),
-                    ]
-                    .into_iter()
-                    .enumerate()
+                    // "+ Neuer Bogen" tile at the right end of the strip
+                    let add_size = Vec2::new(98.0, 86.0);
+                    let (add_rect, add_resp) = ui.allocate_exact_size(add_size, Sense::click());
+                    let p = ui.painter();
+                    p.rect_filled(add_rect, CornerRadius::same(4), t.field.gamma_multiply(0.6));
+                    draw_dashed_rect(
+                        p,
+                        add_rect.shrink(3.0),
+                        Stroke::new(1.2_f32, t.field_border),
+                        6.0,
+                        4.0,
+                    );
+                    p.text(
+                        add_rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "+ Neuer\nBogen",
+                        FontId::proportional(11.5),
+                        t.text_dim,
+                    );
+                    if add_resp
+                        .on_hover_text("Leeren Bogen anlegen (oder Bild aus dem Pool hierher ziehen)")
+                        .clicked()
                     {
-                        let h_rect = Rect::from_center_size(corner_pos, Vec2::splat(9.0));
-                        painter.rect_filled(
-                            h_rect,
-                            CornerRadius::ZERO,
-                            Color32::from_rgb(0, 130, 240),
-                        );
-                        painter.rect_stroke(
-                            h_rect,
-                            CornerRadius::ZERO,
-                            Stroke::new(1.0_f32, Color32::WHITE),
-                            StrokeKind::Middle,
-                        );
-                        let h_resp = ui.interact(
-                            h_rect,
-                            egui::Id::new(("corner_handle", ci)),
-                            Sense::drag(),
-                        );
-                        if h_resp.dragged() {
-                            let delta_mm = f64::from(h_resp.drag_delta().x / scale);
-                            if let LayoutMode::Standard(std_spec) = &self.session.doc.layout {
-                                let mut m = std_spec.margins_mm;
-                                let adjust = if ci == 0 || ci == 2 {
-                                    delta_mm
-                                } else {
-                                    -delta_mm
-                                };
-                                let new_m = (m.left_mm + adjust).clamp(0.0, 80.0);
-                                m.left_mm = new_m;
-                                m.right_mm = new_m;
-                                m.top_mm = new_m;
-                                m.bottom_mm = new_m;
-                                self.exec(EngineCommand::SetStandardMargins(m));
+                        pending_cmd = Some(EngineCommand::AddPage {
+                            initial_image_id: None,
+                        });
+                    }
+                    if let Some(payload) = egui::DragAndDrop::payload::<DragPayload>(ui.ctx()) {
+                        if let DragPayload::PoolImage(img_id) = *payload {
+                            let hovered = ui.ctx().input(|i| {
+                                i.pointer
+                                    .hover_pos()
+                                    .is_some_and(|pos| add_rect.contains(pos))
+                            });
+                            if hovered {
+                                ui.painter().rect_stroke(
+                                    add_rect,
+                                    CornerRadius::same(4),
+                                    Stroke::new(2.0_f32, t.accent),
+                                    StrokeKind::Middle,
+                                );
+                                if ui.ctx().input(|i| i.pointer.any_released()) {
+                                    let _ =
+                                        egui::DragAndDrop::take_payload::<DragPayload>(ui.ctx());
+                                    pending_cmd = Some(EngineCommand::AddPage {
+                                        initial_image_id: Some(img_id),
+                                    });
+                                }
                             }
                         }
                     }
-                }
-
-                // Draw Test-Strip overlay rectangle if enabled
-                if self.session.doc.test_strip.enabled {
-                    let [nx, ny, nw, nh] = self.session.doc.test_strip.norm_rect;
-                    let ts_rect = Rect::from_min_size(
-                        Pos2::new(
-                            sheet_rect.min.x + (nx as f32) * sheet_rect.width(),
-                            sheet_rect.min.y + (ny as f32) * sheet_rect.height(),
-                        ),
-                        Vec2::new(
-                            (nw as f32) * sheet_rect.width(),
-                            (nh as f32) * sheet_rect.height(),
-                        ),
-                    );
-                    painter.rect_stroke(
-                        ts_rect,
-                        CornerRadius::ZERO,
-                        Stroke::new(2.0_f32, Color32::from_rgb(50, 230, 110)),
-                        StrokeKind::Middle,
-                    );
-                    painter.text(
-                        ts_rect.left_top() + Vec2::new(4.0, 2.0),
-                        egui::Align2::LEFT_TOP,
-                        "1:1 PROBESTREIFEN",
-                        FontId::proportional(11.0),
-                        Color32::from_rgb(50, 230, 110),
-                    );
-                }
+                });
             });
+
+        if let Some(cmd) = pending_cmd {
+            self.exec(cmd);
+        }
+    }
+
+    fn attach_page_context_menu(
+        &mut self,
+        resp: &egui::Response,
+        page_index: usize,
+        total_pages: usize,
+    ) {
+        resp.context_menu(|ui| {
+            ui.label(RichText::new(format!("Bogen {}", page_index + 1)).strong());
+            ui.separator();
+            if ui
+                .add_enabled(page_index > 0, egui::Button::new("◀ Nach links verschieben"))
+                .clicked()
+            {
+                self.exec(EngineCommand::MovePage {
+                    from_index: page_index,
+                    to_index: page_index - 1,
+                });
+                ui.close_menu();
+            }
+            if ui
+                .add_enabled(
+                    page_index + 1 < total_pages,
+                    egui::Button::new("▶ Nach rechts verschieben"),
+                )
+                .clicked()
+            {
+                self.exec(EngineCommand::MovePage {
+                    from_index: page_index,
+                    to_index: page_index + 1,
+                });
+                ui.close_menu();
+            }
+            ui.separator();
+            if ui.button("⧉ Bogen duplizieren").clicked() {
+                self.exec(EngineCommand::DuplicatePage { page_index });
+                ui.close_menu();
+            }
+            if ui.button("🧹 Alle Bildstellen leeren").clicked() {
+                self.exec(EngineCommand::ClearPageSlots { page_index });
+                ui.close_menu();
+            }
+            if ui
+                .button("🗑 Bogen entfernen (Bilder bleiben im Pool)")
+                .clicked()
+            {
+                self.exec(EngineCommand::RemovePage { page_index });
+                ui.close_menu();
+            }
+        });
     }
 
     fn draw_sheet_rulers(
@@ -990,10 +2031,121 @@ impl LumaPrintApp {
                     .stroke(Stroke::new(1.0_f32, t.separator)),
             )
             .show(ctx, |ui| {
+                // Sticky Bottom Print & Export Footer inside the Right Dock
+                egui::TopBottomPanel::bottom("right_dock_sticky_print_footer")
+                    .resizable(false)
+                    .frame(
+                        egui::Frame::new()
+                            .fill(t.dock)
+                            .inner_margin(egui::Margin::symmetric(4, 8))
+                            .stroke(Stroke::new(1.0_f32, t.separator)),
+                    )
+                    .show_inside(ui, |ui| {
+                        let page_cnt = self.session.doc.page_count();
+                        let cur_scope = self.session.doc.print_scope;
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("Umfang:").color(t.text_dim));
+                            egui::ComboBox::from_id_salt("print_scope_combo")
+                                .selected_text(match cur_scope {
+                                    PrintScope::AllPages => format!("Alle Bögen ({page_cnt})"),
+                                    PrintScope::CurrentPage => format!(
+                                        "Aktueller Bogen ({})",
+                                        self.session.doc.active_page_index + 1
+                                    ),
+                                })
+                                .width(165.0)
+                                .show_ui(ui, |ui| {
+                                    if ui
+                                        .selectable_label(
+                                            cur_scope == PrintScope::AllPages,
+                                            format!("Alle Bögen ({page_cnt})"),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.exec(EngineCommand::SetPrintScope(
+                                            PrintScope::AllPages,
+                                        ));
+                                    }
+                                    if ui
+                                        .selectable_label(
+                                            cur_scope == PrintScope::CurrentPage,
+                                            format!(
+                                                "Nur aktueller Bogen ({})",
+                                                self.session.doc.active_page_index + 1
+                                            ),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.exec(EngineCommand::SetPrintScope(
+                                            PrintScope::CurrentPage,
+                                        ));
+                                    }
+                                });
+
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    let mut copies = self.session.doc.printer.copies;
+                                    if ui
+                                        .add(
+                                            egui::DragValue::new(&mut copies)
+                                                .range(1..=99)
+                                                .prefix("Kopien: "),
+                                        )
+                                        .changed()
+                                    {
+                                        self.exec(EngineCommand::SetCopies(copies));
+                                    }
+                                },
+                            );
+                        });
+
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            if ui
+                                .button("💾 Export (.tif / .png)")
+                                .on_hover_text("16-Bit Druckbogen in Datei exportieren")
+                                .clicked()
+                            {
+                                let path = self.export_path_input.clone();
+                                match self.session.export_print_file(&path, 360) {
+                                    Ok(()) => {
+                                        self.session.status_message = format!(
+                                            "Druckbogen erfolgreich nach '{path}' exportiert."
+                                        );
+                                    }
+                                    Err(e) => {
+                                        self.session.status_message = format!("Export-Fehler: {e}");
+                                    }
+                                }
+                            }
+
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    let print_btn = egui::Button::new(
+                                        RichText::new("    🖨 Drucken    ")
+                                            .size(15.0)
+                                            .strong()
+                                            .color(Color32::WHITE),
+                                    )
+                                    .fill(Color32::from_rgb(0, 120, 215));
+                                    if ui.add(print_btn).clicked() {
+                                        if let Err(e) = self.session.send_print_job_to_printer(360)
+                                        {
+                                            self.session.status_message =
+                                                format!("Druckfehler: {e}");
+                                        }
+                                    }
+                                },
+                            );
+                        });
+                    });
+
+                // Scrollable Settings Sections above the Sticky Footer
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        // Section 0: Voreinstellungen (Presets, EPL manual p. 17, 36–37)
                         self.draw_dock_section(
                             ui,
                             "★ Voreinstellungen (Presets)",
@@ -1003,17 +2155,19 @@ impl LumaPrintApp {
                             },
                         );
 
-                        // Section 1: Druckereinstellungen (EPL manual p. 23–24)
                         self.draw_dock_section(ui, "1. Druckereinstellungen", true, |app, ui| {
                             app.draw_printer_settings_section(ui);
                         });
 
-                        // Section 2: Layout-Einstellungen (EPL manual p. 25–28)
-                        self.draw_dock_section(ui, "2. Layout-Einstellungen", true, |app, ui| {
+                        let layout_title = format!(
+                            "2. Bogen-Layout (Bogen {}/{})",
+                            self.session.doc.active_page_index + 1,
+                            self.session.doc.page_count()
+                        );
+                        self.draw_dock_section(ui, &layout_title, true, |app, ui| {
                             app.draw_layout_settings_section(ui);
                         });
 
-                        // Section 3: Farbeinstellungen & Advanced B&W (EPL manual p. 29–31)
                         self.draw_dock_section(
                             ui,
                             "3. Farbeinstellungen & ABW",
@@ -1023,7 +2177,6 @@ impl LumaPrintApp {
                             },
                         );
 
-                        // Section 4: Generic IPP Printer & Ink Status
                         self.draw_dock_section(
                             ui,
                             "4. Druckerstatus & Tintenstände (IPP)",
@@ -1448,6 +2601,20 @@ impl LumaPrintApp {
                     });
                 ui.end_row();
             });
+
+        if self.session.doc.page_count() > 1 {
+            ui.add_space(4.0);
+            if ui
+                .button(format!(
+                    "🔁 Layout dieses Bogens auf alle {} Bögen anwenden",
+                    self.session.doc.page_count()
+                ))
+                .on_hover_text("Übernimmt das Layout des aktuellen Bogens für alle anderen Bögen im Druckauftrag")
+                .clicked()
+            {
+                self.exec(EngineCommand::ApplyLayoutToAllPages);
+            }
+        }
 
         ui.add_space(6.0);
         let layout_clone = self.session.doc.layout.clone();
@@ -2311,12 +3478,84 @@ impl LumaPrintApp {
                 self.show_template_builder_modal = open;
             }
         }
+
+        // 3. Ordner-Import Sicherheitsabfrage (> 50 Bilder)
+        if let Some(paths) = self.pending_folder_import.clone() {
+            let mut close_modal = false;
+            let mut confirm_import = false;
+            egui::Window::new("📁 Großen Ordner in Bilder-Pool importieren?")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.label(
+                        RichText::new(format!(
+                            "Der ausgewählte Ordner enthält {} Bilder.\nBist du sicher, dass alle {} Bilder in den Bilder-Pool geladen werden sollen?",
+                            paths.len(),
+                            paths.len()
+                        ))
+                        .strong(),
+                    );
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button(
+                                RichText::new(format!("✓ Ja, {} Bilder importieren", paths.len()))
+                                    .strong(),
+                            )
+                            .clicked()
+                        {
+                            confirm_import = true;
+                            close_modal = true;
+                        }
+                        if ui.button("Abbrechen").clicked() {
+                            close_modal = true;
+                        }
+                    });
+                });
+            if confirm_import {
+                self.exec(EngineCommand::ImportImageFiles { paths });
+            }
+            if close_modal {
+                self.pending_folder_import = None;
+            }
+        }
     }
 }
 
 impl eframe::App for LumaPrintApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         self.render_ui(ctx);
+    }
+}
+
+fn draw_dashed_rect(
+    painter: &egui::Painter,
+    rect: Rect,
+    stroke: Stroke,
+    dash_len: f32,
+    gap_len: f32,
+) {
+    let corners = [
+        (rect.left_top(), rect.right_top()),
+        (rect.right_top(), rect.right_bottom()),
+        (rect.right_bottom(), rect.left_bottom()),
+        (rect.left_bottom(), rect.left_top()),
+    ];
+    let step = (dash_len + gap_len).max(2.0);
+    for (start, end) in corners {
+        let vec = end - start;
+        let total = vec.length();
+        if total <= 0.5 {
+            continue;
+        }
+        let dir = vec / total;
+        let mut dist = 0.0_f32;
+        while dist < total {
+            let d_end = (dist + dash_len).min(total);
+            painter.line_segment([start + dir * dist, start + dir * d_end], stroke);
+            dist += step;
+        }
     }
 }
 
@@ -2392,5 +3631,27 @@ mod tests {
                 "left_filmstrip_panel width drifted across frames: {widths:?}"
             );
         }
+    }
+
+    #[test]
+    fn headless_all_pages_overview_and_multi_page_navigator_render_cleanly() {
+        let ctx = Context::default();
+        let mut app = LumaPrintApp::new();
+        app.exec(EngineCommand::AutoDistributePoolImages {
+            only_unassigned: true,
+        });
+        assert_eq!(app.session.doc.page_count(), 2);
+        app.exec(EngineCommand::SetCanvasViewMode(
+            CanvasViewMode::AllPagesOverview,
+        ));
+        app.pending_folder_import = Some((1..=60).map(|i| format!("img_{i}.tif")).collect());
+
+        for _ in 0..3 {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                app.render_ui(ctx);
+            });
+        }
+        assert_eq!(app.page_thumb_textures.len(), 2);
+        assert_eq!(app.cached_all_solved.len(), 2);
     }
 }
