@@ -5640,102 +5640,184 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         } else {
             // --- STAGE 2: Interactive Free Slot Editor (Mouse Move / Resize + Magnet Snapping) ---
             let ptr_pos = canvas_resp.interact_pointer_pos();
-            let ptr_mm = ptr_pos.map(|pos| {
+            let hover_pos = ui.ctx().input(|i| i.pointer.hover_pos());
+            let press_origin = ui
+                .ctx()
+                .input(|i| i.pointer.press_origin())
+                .or(ptr_pos);
+            let pos_to_mm = |pos: Pos2| -> (f64, f64) {
                 (
                     f64::from((pos.x - sheet_rect.min.x) / scale),
                     f64::from((pos.y - sheet_rect.min.y) / scale),
                 )
-            });
+            };
 
-            // Start drag or selection on pointer press/click
-            if (canvas_resp.drag_started() || canvas_resp.clicked())
-                && let Some(pos) = ptr_pos
-            {
-                let mut hit_drag: Option<FreeSlotDragState> = None;
-
-                // First check resize handles of currently selected slot
-                if let Some(sel_idx) = self.template_studio.selected_free_slot
-                    && let Some(&r_mm) = self.template_studio.free_slots_mm.get(sel_idx)
-                {
-                    let r_scr = mm_rect_to_screen(r_mm, sheet_rect.min, scale);
-                    let handle_hit = 7.5_f32;
-                    let handles = [
-                        (r_scr.left_top(), FreeSlotDragKind::ResizeNW),
-                        (r_scr.right_top(), FreeSlotDragKind::ResizeNE),
-                        (r_scr.left_bottom(), FreeSlotDragKind::ResizeSW),
-                        (r_scr.right_bottom(), FreeSlotDragKind::ResizeSE),
-                        (
-                            Pos2::new(r_scr.center().x, r_scr.min.y),
-                            FreeSlotDragKind::ResizeN,
-                        ),
-                        (
-                            Pos2::new(r_scr.center().x, r_scr.max.y),
-                            FreeSlotDragKind::ResizeS,
-                        ),
-                        (
-                            Pos2::new(r_scr.min.x, r_scr.center().y),
-                            FreeSlotDragKind::ResizeW,
-                        ),
-                        (
-                            Pos2::new(r_scr.max.x, r_scr.center().y),
-                            FreeSlotDragKind::ResizeE,
-                        ),
-                    ];
-                    for (h_pos, kind) in handles {
-                        if pos.distance(h_pos) <= handle_hit
-                            && let Some(pmm) = ptr_mm
-                        {
-                            hit_drag = Some(FreeSlotDragState {
-                                slot_index: sel_idx,
-                                kind,
-                                start_pointer_mm: pmm,
-                                initial_rect_mm: r_mm,
-                            });
-                            break;
-                        }
+            // Determine resize handle or edge hit for a slot screen rect
+            let hit_test_resize = |r_scr: Rect, pos: Pos2| -> Option<FreeSlotDragKind> {
+                let handle_hit = 14.0_f32;
+                let handles = [
+                    (r_scr.left_top(), FreeSlotDragKind::ResizeNW),
+                    (r_scr.right_top(), FreeSlotDragKind::ResizeNE),
+                    (r_scr.left_bottom(), FreeSlotDragKind::ResizeSW),
+                    (r_scr.right_bottom(), FreeSlotDragKind::ResizeSE),
+                    (
+                        Pos2::new(r_scr.center().x, r_scr.min.y),
+                        FreeSlotDragKind::ResizeN,
+                    ),
+                    (
+                        Pos2::new(r_scr.center().x, r_scr.max.y),
+                        FreeSlotDragKind::ResizeS,
+                    ),
+                    (
+                        Pos2::new(r_scr.min.x, r_scr.center().y),
+                        FreeSlotDragKind::ResizeW,
+                    ),
+                    (
+                        Pos2::new(r_scr.max.x, r_scr.center().y),
+                        FreeSlotDragKind::ResizeE,
+                    ),
+                ];
+                let mut best: Option<(f32, FreeSlotDragKind)> = None;
+                for (h_pos, kind) in handles {
+                    let d = pos.distance(h_pos);
+                    if d <= handle_hit && best.is_none_or(|(best_d, _)| d < best_d) {
+                        best = Some((d, kind));
                     }
                 }
+                if let Some((_, kind)) = best {
+                    return Some(kind);
+                }
 
-                // Otherwise check slot interiors (topmost last)
-                if hit_drag.is_none() {
-                    let mut hit_slot: Option<usize> = None;
-                    for (idx, &r_mm) in self
-                        .template_studio
-                        .free_slots_mm
-                        .iter()
-                        .enumerate()
-                        .rev()
+                // Also allow grabbing anywhere along the 4 border edges (±7 px band)
+                let edge_hit = 7.0_f32;
+                let expanded = r_scr.expand(edge_hit);
+                if expanded.contains(pos) {
+                    let near_left = (pos.x - r_scr.min.x).abs() <= edge_hit;
+                    let near_right = (pos.x - r_scr.max.x).abs() <= edge_hit;
+                    let near_top = (pos.y - r_scr.min.y).abs() <= edge_hit;
+                    let near_bottom = (pos.y - r_scr.max.y).abs() <= edge_hit;
+                    match (near_left, near_right, near_top, near_bottom) {
+                        (true, _, true, _) => return Some(FreeSlotDragKind::ResizeNW),
+                        (_, true, true, _) => return Some(FreeSlotDragKind::ResizeNE),
+                        (true, _, _, true) => return Some(FreeSlotDragKind::ResizeSW),
+                        (_, true, _, true) => return Some(FreeSlotDragKind::ResizeSE),
+                        (true, _, _, _) => return Some(FreeSlotDragKind::ResizeW),
+                        (_, true, _, _) => return Some(FreeSlotDragKind::ResizeE),
+                        (_, _, true, _) => return Some(FreeSlotDragKind::ResizeN),
+                        (_, _, _, true) => return Some(FreeSlotDragKind::ResizeS),
+                        _ => {}
+                    }
+                }
+                None
+            };
+
+            let resolve_slot_hit =
+                |pos: Pos2,
+                 selected_slot: Option<usize>,
+                 slots_mm: &[RectMm]|
+                 -> Option<(usize, FreeSlotDragKind, RectMm)> {
+                    // 1. Check resize handles/edges of currently selected slot first
+                    if let Some(sel_idx) = selected_slot
+                        && let Some(&r_mm) = slots_mm.get(sel_idx)
                     {
                         let r_scr = mm_rect_to_screen(r_mm, sheet_rect.min, scale);
-                        if r_scr.contains(pos) {
-                            hit_slot = Some(idx);
-                            if let Some(pmm) = ptr_mm {
-                                hit_drag = Some(FreeSlotDragState {
-                                    slot_index: idx,
-                                    kind: FreeSlotDragKind::Move,
-                                    start_pointer_mm: pmm,
-                                    initial_rect_mm: r_mm,
-                                });
-                            }
-                            break;
+                        if let Some(kind) = hit_test_resize(r_scr, pos) {
+                            return Some((sel_idx, kind, r_mm));
                         }
                     }
-                    self.template_studio.selected_free_slot = hit_slot;
-                }
+                    // 2. Check resize handles/edges of any slot (topmost first)
+                    for (idx, &r_mm) in slots_mm.iter().enumerate().rev() {
+                        let r_scr = mm_rect_to_screen(r_mm, sheet_rect.min, scale);
+                        if let Some(kind) = hit_test_resize(r_scr, pos) {
+                            return Some((idx, kind, r_mm));
+                        }
+                    }
+                    // 3. Check slot interior for Move (topmost first)
+                    for (idx, &r_mm) in slots_mm.iter().enumerate().rev() {
+                        let r_scr = mm_rect_to_screen(r_mm, sheet_rect.min, scale);
+                        if r_scr.contains(pos) {
+                            return Some((idx, FreeSlotDragKind::Move, r_mm));
+                        }
+                    }
+                    None
+                };
 
-                if canvas_resp.drag_started() {
-                    self.template_studio.active_free_drag = hit_drag;
+            // Start drag or selection using press_origin so dragging away from a handle never misses it!
+            if (canvas_resp.drag_started() || canvas_resp.clicked())
+                && let Some(origin_pos) = press_origin
+            {
+                let start_mm = pos_to_mm(origin_pos);
+                if let Some((hit_idx, kind, r_mm)) = resolve_slot_hit(
+                    origin_pos,
+                    self.template_studio.selected_free_slot,
+                    &self.template_studio.free_slots_mm,
+                ) {
+                    self.template_studio.selected_free_slot = Some(hit_idx);
+                    if canvas_resp.drag_started() {
+                        self.template_studio.active_free_drag = Some(FreeSlotDragState {
+                            slot_index: hit_idx,
+                            kind,
+                            start_pointer_mm: start_mm,
+                            initial_rect_mm: r_mm,
+                        });
+                    }
+                } else {
+                    self.template_studio.selected_free_slot = None;
+                    if canvas_resp.drag_started() {
+                        self.template_studio.active_free_drag = None;
+                    }
                 }
+            }
+
+            // Update cursor icon for clear visual feedback on hover / active drag
+            let active_or_hover_kind = if let Some(drag) = self.template_studio.active_free_drag {
+                Some(drag.kind)
+            } else if let Some(hpos) = hover_pos
+                && canvas_rect.contains(hpos)
+            {
+                resolve_slot_hit(
+                    hpos,
+                    self.template_studio.selected_free_slot,
+                    &self.template_studio.free_slots_mm,
+                )
+                .map(|(_, kind, _)| kind)
+            } else {
+                None
+            };
+            if let Some(kind) = active_or_hover_kind {
+                let icon = match kind {
+                    FreeSlotDragKind::Move => {
+                        if self.template_studio.active_free_drag.is_some() {
+                            egui::CursorIcon::Grabbing
+                        } else {
+                            egui::CursorIcon::Grab
+                        }
+                    }
+                    FreeSlotDragKind::ResizeN | FreeSlotDragKind::ResizeS => {
+                        egui::CursorIcon::ResizeVertical
+                    }
+                    FreeSlotDragKind::ResizeE | FreeSlotDragKind::ResizeW => {
+                        egui::CursorIcon::ResizeHorizontal
+                    }
+                    FreeSlotDragKind::ResizeNW | FreeSlotDragKind::ResizeSE => {
+                        egui::CursorIcon::ResizeNwSe
+                    }
+                    FreeSlotDragKind::ResizeNE | FreeSlotDragKind::ResizeSW => {
+                        egui::CursorIcon::ResizeNeSw
+                    }
+                };
+                ui.ctx().set_cursor_icon(icon);
             }
 
             // Update active slot drag (Move or Resize with optional Magnet Snapping)
             self.template_studio.snap_guide_x_mm = None;
             self.template_studio.snap_guide_y_mm = None;
             if canvas_resp.dragged()
-                && let (Some(drag), Some((cur_x_mm, cur_y_mm))) =
-                    (self.template_studio.active_free_drag, ptr_mm)
+                && let (Some(drag), Some(cur_pos)) =
+                    (self.template_studio.active_free_drag, ptr_pos)
                 && drag.slot_index < self.template_studio.free_slots_mm.len()
             {
+                let (cur_x_mm, cur_y_mm) = pos_to_mm(cur_pos);
                 let dx = cur_x_mm - drag.start_pointer_mm.0;
                 let dy = cur_y_mm - drag.start_pointer_mm.1;
                 let init = drag.initial_rect_mm;
@@ -5829,12 +5911,18 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
                     }
                     FreeSlotDragKind::ResizeW => {
-                        let new_x = (init.x_mm + dx).clamp(0.0, init.right_mm() - 12.0);
+                        let mut new_x = (init.x_mm + dx).clamp(0.0, init.right_mm() - 12.0);
+                        if self.template_studio.snap_enabled {
+                            new_x = new_x.round();
+                        }
                         next.width_mm = init.right_mm() - new_x;
                         next.x_mm = new_x;
                     }
                     FreeSlotDragKind::ResizeN => {
-                        let new_y = (init.y_mm + dy).clamp(0.0, init.bottom_mm() - 12.0);
+                        let mut new_y = (init.y_mm + dy).clamp(0.0, init.bottom_mm() - 12.0);
+                        if self.template_studio.snap_enabled {
+                            new_y = new_y.round();
+                        }
                         next.height_mm = init.bottom_mm() - new_y;
                         next.y_mm = new_y;
                     }
@@ -5849,26 +5937,38 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
                     }
                     FreeSlotDragKind::ResizeNW => {
-                        let new_x = (init.x_mm + dx).clamp(0.0, init.right_mm() - 12.0);
-                        let new_y = (init.y_mm + dy).clamp(0.0, init.bottom_mm() - 12.0);
+                        let mut new_x = (init.x_mm + dx).clamp(0.0, init.right_mm() - 12.0);
+                        let mut new_y = (init.y_mm + dy).clamp(0.0, init.bottom_mm() - 12.0);
+                        if self.template_studio.snap_enabled {
+                            new_x = new_x.round();
+                            new_y = new_y.round();
+                        }
                         next.width_mm = init.right_mm() - new_x;
                         next.height_mm = init.bottom_mm() - new_y;
                         next.x_mm = new_x;
                         next.y_mm = new_y;
                     }
                     FreeSlotDragKind::ResizeNE => {
-                        let new_y = (init.y_mm + dy).clamp(0.0, init.bottom_mm() - 12.0);
+                        let mut new_y = (init.y_mm + dy).clamp(0.0, init.bottom_mm() - 12.0);
                         next.width_mm =
                             (init.width_mm + dx).clamp(12.0, paper_size_mm.width_mm - init.x_mm);
+                        if self.template_studio.snap_enabled {
+                            new_y = new_y.round();
+                            next.width_mm = next.width_mm.round();
+                        }
                         next.height_mm = init.bottom_mm() - new_y;
                         next.y_mm = new_y;
                     }
                     FreeSlotDragKind::ResizeSW => {
-                        let new_x = (init.x_mm + dx).clamp(0.0, init.right_mm() - 12.0);
-                        next.width_mm = init.right_mm() - new_x;
-                        next.x_mm = new_x;
+                        let mut new_x = (init.x_mm + dx).clamp(0.0, init.right_mm() - 12.0);
                         next.height_mm = (init.height_mm + dy)
                             .clamp(12.0, paper_size_mm.height_mm - init.y_mm);
+                        if self.template_studio.snap_enabled {
+                            new_x = new_x.round();
+                            next.height_mm = next.height_mm.round();
+                        }
+                        next.width_mm = init.right_mm() - new_x;
+                        next.x_mm = new_x;
                     }
                 }
 
@@ -5894,7 +5994,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 );
             }
 
-            // Draw all Free Slots + resize handles on the selected slot
+            // Draw all Free Slots + prominent resize handles on the selected slot
             for (idx, &slot_mm) in self.template_studio.free_slots_mm.iter().enumerate() {
                 let slot_scr = mm_rect_to_screen(slot_mm, sheet_rect.min, scale);
                 let is_sel = self.template_studio.selected_free_slot == Some(idx);
@@ -5968,12 +6068,22 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         Pos2::new(slot_scr.max.x, slot_scr.center().y),
                     ];
                     for hp in handle_pts {
-                        let hr = Rect::from_center_size(hp, Vec2::splat(7.0));
-                        p.rect_filled(hr, CornerRadius::same(1), Color32::WHITE);
+                        let is_hovered =
+                            hover_pos.is_some_and(|h| h.distance(hp) <= 14.0);
+                        let sz = if is_hovered { 11.0 } else { 9.0 };
+                        let hr = Rect::from_center_size(hp, Vec2::splat(sz));
+                        p.rect_filled(
+                            hr,
+                            CornerRadius::same(2),
+                            if is_hovered { t.accent } else { Color32::WHITE },
+                        );
                         p.rect_stroke(
                             hr,
-                            CornerRadius::same(1),
-                            Stroke::new(1.5_f32, t.accent),
+                            CornerRadius::same(2),
+                            Stroke::new(
+                                1.8_f32,
+                                if is_hovered { Color32::WHITE } else { t.accent },
+                            ),
                             StrokeKind::Middle,
                         );
                     }
