@@ -19,7 +19,7 @@ use egui::{
 use lumaprint_cms::{RenderingIntent, ViewingLight};
 use lumaprint_color::{AbwHighlightShift, AbwMidtone, AbwTonePreset, ImageBuffer16, Rgb8};
 use lumaprint_doc::{
-    CanvasBackdropTone, CenteringMode, ColorManagementMode, CustomMediaSpec,
+    CanvasBackdropTone, CenteringMode, ColorManagementMode,
     FilmstripPosition, GalleryWrapEffect, GalleryWrapSpec, LayoutMode, OutputSharpening,
     PaperSource, PrintQuality, SizingCriterion, StandardLayoutSpec, TemplateLayoutSpec,
     MEDIA_TYPES, find_media_type,
@@ -48,13 +48,11 @@ pub struct LumaPrintApp {
     dirty_preview: bool,
     pub zoom: f32,
     pub show_crop_modal: bool,
-    pub show_custom_media_modal: bool,
     pub show_template_builder_modal: bool,
     pub new_preset_name: String,
     pub new_template_name: String,
     pub new_template_rows: usize,
     pub new_template_cols: usize,
-    pub custom_media_draft: CustomMediaSpec,
     pub open_file_path_input: String,
     pub export_path_input: String,
 }
@@ -83,13 +81,11 @@ impl LumaPrintApp {
             dirty_preview: true,
             zoom: 1.0,
             show_crop_modal: false,
-            show_custom_media_modal: false,
             show_template_builder_modal: false,
             new_preset_name: String::from("Meine Baryta Voreinstellung"),
             new_template_name: String::from("Kontaktbogen 3x2"),
             new_template_rows: 3,
             new_template_cols: 2,
-            custom_media_draft: CustomMediaSpec::default(),
             open_file_path_input: String::new(),
             export_path_input: String::from("/tmp/lumaprint_sheet.tif"),
         }
@@ -1311,15 +1307,19 @@ impl LumaPrintApp {
                         }
                     });
                 ui.end_row();
+                if let Some(ref cm) = active_custom {
+                    ui.label(RichText::new("Custom-Media:").color(t.text_dim));
+                    let info = format!(
+                        "Basis: {} · Slot: {} · Duty: {:+}% · Dry: {:.0}s",
+                        cm.base_media_key,
+                        cm.user_media_id,
+                        cm.ink_duty_percent,
+                        cm.drying_time_sec
+                    );
+                    ui.label(RichText::new(info).small().color(t.text_faint));
+                    ui.end_row();
+                }
             });
-
-        ui.add_space(6.0);
-        if ui
-            .button("+ Benutzerdefinierte Medien bearbeiten... (EPL S. 41)")
-            .clicked()
-        {
-            self.show_custom_media_modal = true;
-        }
 
         ui.add_space(6.0);
         // Detailed Settings (Detaillierte Einstellungen, EPL manual p. 24)
@@ -2309,106 +2309,6 @@ impl LumaPrintApp {
                 });
             if self.show_template_builder_modal {
                 self.show_template_builder_modal = open;
-            }
-        }
-
-        // 3. Benutzerdefinierte Medien bearbeiten (EPL manual p. 41–42 & custom_media.json / ESC q setl)
-        if self.show_custom_media_modal {
-            let mut open = self.show_custom_media_modal;
-            egui::Window::new("Benutzerdefinierte Medien bearbeiten (EPL S. 41 / ESC q setl)")
-                .open(&mut open)
-                .resizable(false)
-                .show(ctx, |ui| {
-                    egui::Grid::new("grid_custom_media_modal")
-                        .num_columns(2)
-                        .spacing([12.0, 8.0])
-                        .show(ui, |ui| {
-                            ui.label("Name:");
-                            ui.text_edit_singleline(&mut self.custom_media_draft.name);
-                            ui.end_row();
-
-                            ui.label("Basis-Medium (PK/MK):");
-                            egui::ComboBox::from_id_salt("custom_base_media_combo")
-                                .selected_text(&self.custom_media_draft.base_media_key)
-                                .width(220.0)
-                                .show_ui(ui, |ui| {
-                                    for m in MEDIA_TYPES {
-                                        let lbl = format!(
-                                            "{} ({})",
-                                            m.name,
-                                            if m.uses_matte_black { "MK" } else { "PK" }
-                                        );
-                                        if ui
-                                            .selectable_label(
-                                                m.key == self.custom_media_draft.base_media_key,
-                                                lbl,
-                                            )
-                                            .clicked()
-                                        {
-                                            self.custom_media_draft.base_media_key =
-                                                m.key.to_string();
-                                        }
-                                    }
-                                });
-                            ui.end_row();
-
-                            ui.label("NVRAM-Slot (UserMediaID):");
-                            ui.add(
-                                egui::DragValue::new(&mut self.custom_media_draft.user_media_id)
-                                    .range(0..=1930)
-                                    .suffix(" (0=On-the-fly, 1901..1930=Slot 1..30)"),
-                            );
-                            ui.end_row();
-
-                            ui.label("ICC-Profil-Pfad (.icc):");
-                            let mut icc_str = self
-                                .custom_media_draft
-                                .icc_profile_path
-                                .clone()
-                                .unwrap_or_default();
-                            if ui.text_edit_singleline(&mut icc_str).changed() {
-                                self.custom_media_draft.icc_profile_path =
-                                    if icc_str.trim().is_empty() {
-                                        None
-                                    } else {
-                                        Some(icc_str.trim().to_string())
-                                    };
-                            }
-                            ui.end_row();
-                        });
-
-                    ui.add_space(6.0);
-                    ui.add(
-                        egui::Slider::new(&mut self.custom_media_draft.thickness_mm, 0.08..=1.50)
-                            .text("Papierdicke (mm)"),
-                    );
-                    ui.add(
-                        egui::Slider::new(
-                            &mut self.custom_media_draft.drying_time_sec,
-                            0.0..=10.0,
-                        )
-                        .text("Trocknungszeit pro Pass (s)"),
-                    );
-                    ui.add(
-                        egui::Slider::new(
-                            &mut self.custom_media_draft.ink_duty_percent,
-                            -50..=50,
-                        )
-                        .text("Tintenauftrag / PrintDuty (%)"),
-                    );
-                    ui.checkbox(
-                        &mut self.custom_media_draft.bottom_edge_priority,
-                        "Priorisiert Druckqualität Unterkante (ESC m seti)",
-                    );
-                    ui.add_space(6.0);
-                    if ui.button("OK – Custom-Medium registrieren & aktivieren").clicked() {
-                        let draft = self.custom_media_draft.clone();
-                        self.exec(EngineCommand::AddCustomMedia(draft));
-                        self.show_custom_media_modal = false;
-                    }
-                });
-            if self.show_custom_media_modal {
-                self.show_custom_media_modal = open;
             }
         }
     }

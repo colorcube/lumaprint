@@ -358,25 +358,27 @@ impl Session {
             if let Some(ref icc) = entry.icc_profile {
                 self.ensure_icc_loaded(icc);
             }
-            let exists = self.doc.user_backup.custom_media.iter().any(|cm| {
+            let spec = CustomMediaSpec {
+                key: entry.key.clone(),
+                name: entry.name.clone(),
+                base_media_key: base_key,
+                user_media_id: entry.user_media_id,
+                icc_profile_path: entry.icc_profile,
+                thickness_mm: 0.45,
+                platen_gap: PlatenGap::Wide,
+                drying_time_sec: f64::from(entry.drying_time),
+                ink_duty_percent: entry.print_duty,
+                paper_feed_offset_percent: 0.0,
+                bottom_edge_priority: entry.bottom_edge_priority,
+                rubbing_reduction: entry.rubbing_reduction,
+            };
+            if let Some(existing) = self.doc.user_backup.custom_media.iter_mut().find(|cm| {
                 (!cm.key.is_empty() && cm.key.eq_ignore_ascii_case(&entry.key))
                     || cm.name.eq_ignore_ascii_case(&entry.name)
-            });
-            if !exists {
-                self.doc.user_backup.custom_media.push(CustomMediaSpec {
-                    key: entry.key,
-                    name: entry.name,
-                    base_media_key: base_key,
-                    user_media_id: entry.user_media_id,
-                    icc_profile_path: entry.icc_profile,
-                    thickness_mm: 0.45,
-                    platen_gap: PlatenGap::Wide,
-                    drying_time_sec: f64::from(entry.drying_time),
-                    ink_duty_percent: entry.print_duty,
-                    paper_feed_offset_percent: 0.0,
-                    bottom_edge_priority: entry.bottom_edge_priority,
-                    rubbing_reduction: entry.rubbing_reduction,
-                });
+            }) {
+                *existing = spec;
+            } else {
+                self.doc.user_backup.custom_media.push(spec);
             }
         }
     }
