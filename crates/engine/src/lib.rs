@@ -22,8 +22,9 @@ use lumaprint_cups::{
 use lumaprint_doc::{
     CanvasViewMode, CenteringMode, ColorManagementMode, CropSpec, CustomMediaSpec,
     DetailedPrinterSettings, DocError, FrameLineSpec, GalleryWrapSpec, LayoutMode,
-    OutputSharpening, PaperSource, PlatenGap, PrintJobDocument, PrintPreset, PrintQuality,
-    PrintScope, PrintSheetPage, SourceImageEntry, find_media_type,
+    LayoutTemplate, OutputSharpening, PaperSource, PlatenGap, PrintJobDocument, PrintPreset,
+    PrintQuality, PrintScope, PrintSheetPage, SourceImageEntry, TemplateLayoutSpec,
+    find_media_type,
 };
 use lumaprint_geom::{MarginsMm, Orientation, RectMm, SizeMm};
 use lumaprint_ipp::{IppError, PrinterStatus, query_printer_status_ipp};
@@ -254,6 +255,7 @@ pub enum EngineCommand {
         rows: usize,
         cols: usize,
     },
+    SaveCustomTemplate(LayoutTemplate),
     AssignImageToSlot {
         slot_index: usize,
         image_id: Option<u64>,
@@ -993,14 +995,82 @@ impl Session {
                 let id = format!(
                     "Custom_{}_{}x{}",
                     name.trim(),
-                    rows.clamp(1, 5),
-                    cols.clamp(1, 5)
+                    rows.clamp(1, 10),
+                    cols.clamp(1, 10)
                 );
                 let tpl = build_grid_template(&id, name.trim(), rows, cols);
                 self.doc.user_backup.custom_templates.push(tpl);
                 if let LayoutMode::Template(t) = &mut self.doc.layout {
                     t.template_id = id;
                 }
+            }
+            EngineCommand::SaveCustomTemplate(mut tpl) => {
+                if tpl.name.trim().is_empty() {
+                    return Err(EngineError::InvalidParam(
+                        "Vorlagenname darf nicht leer sein.".into(),
+                    ));
+                }
+                if tpl.normalized_slots.is_empty() && tpl.fixed_slots_mm.is_empty() {
+                    return Err(EngineError::InvalidParam(
+                        "Vorlage muss mindestens eine Bildstelle enthalten.".into(),
+                    ));
+                }
+                if tpl.id.trim().is_empty() {
+                    let safe_name: String = tpl
+                        .name
+                        .chars()
+                        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+                        .collect();
+                    tpl.id = format!(
+                        "Studio_{safe_name}_{}",
+                        self.doc.user_backup.custom_templates.len() + 1
+                    );
+                }
+                let slot_count = if !tpl.fixed_slots_mm.is_empty() {
+                    tpl.fixed_slots_mm.len()
+                } else {
+                    tpl.normalized_slots.len()
+                };
+                let tpl_id = tpl.id.clone();
+                let tpl_name = tpl.name.clone();
+                let tpl_cut = tpl.cut_marks;
+                let tpl_cap = tpl.caption_mode;
+
+                if let Some(existing) = self
+                    .doc
+                    .user_backup
+                    .custom_templates
+                    .iter_mut()
+                    .find(|t| t.id == tpl_id)
+                {
+                    *existing = tpl;
+                } else {
+                    self.doc.user_backup.custom_templates.push(tpl);
+                }
+
+                match &mut self.doc.layout {
+                    LayoutMode::Template(t) => {
+                        t.template_id = tpl_id;
+                        t.cut_marks = tpl_cut;
+                        t.caption_mode = tpl_cap;
+                    }
+                    _ => {
+                        self.doc.layout = LayoutMode::Template(TemplateLayoutSpec {
+                            template_id: tpl_id,
+                            cut_marks: tpl_cut,
+                            caption_mode: tpl_cap,
+                            ..Default::default()
+                        });
+                    }
+                }
+                if self.doc.slot_assignments.len() < slot_count {
+                    self.doc.slot_assignments.resize(slot_count, None);
+                }
+                self.doc.sync_active_page_to_list();
+                self.status_message = format!(
+                    "Vorlage '{}' ({} Bildstellen) im Vorlagen-Studio gespeichert und aktiviert.",
+                    tpl_name, slot_count
+                );
             }
             EngineCommand::AssignImageToSlot {
                 slot_index,

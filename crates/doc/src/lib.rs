@@ -660,6 +660,34 @@ impl GalleryWrapSpec {
     }
 }
 
+/// Caption printed below each slot in Template mode (`Bildunterschrift`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum SlotCaptionMode {
+    #[default]
+    None,
+    Filename,
+    NumberAndFilename,
+    DimensionsAndPpi,
+}
+
+impl SlotCaptionMode {
+    pub const ALL: [Self; 4] = [
+        Self::None,
+        Self::Filename,
+        Self::NumberAndFilename,
+        Self::DimensionsAndPpi,
+    ];
+
+    pub fn label_de(self) -> &'static str {
+        match self {
+            Self::None => "Keine",
+            Self::Filename => "Dateiname",
+            Self::NumberAndFilename => "Slot-Nr. + Dateiname (#01 …)",
+            Self::DimensionsAndPpi => "Bildmaße (mm) & Auflösung (ppi)",
+        }
+    }
+}
+
 /// Template multi-image layout settings (`Vorlage`, EPL manual p. 28, 32–35).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TemplateLayoutSpec {
@@ -671,6 +699,10 @@ pub struct TemplateLayoutSpec {
     /// `Bilder ganz anzeigen` (`true` = Fit entire image inside slot, `false` = Fill slot).
     pub show_full_images: bool,
     pub frame_line: FrameLineSpec,
+    #[serde(default)]
+    pub cut_marks: bool,
+    #[serde(default)]
+    pub caption_mode: SlotCaptionMode,
 }
 
 impl Default for TemplateLayoutSpec {
@@ -683,6 +715,8 @@ impl Default for TemplateLayoutSpec {
             background_color: Rgb8::WHITE,
             show_full_images: true,
             frame_line: FrameLineSpec::default(),
+            cut_marks: false,
+            caption_mode: SlotCaptionMode::None,
         }
     }
 }
@@ -1010,6 +1044,13 @@ pub struct LayoutTemplate {
     pub name: String,
     /// Slot rectangles normalized (`0.0..=1.0`) relative to the printable area.
     pub normalized_slots: Vec<[f64; 4]>,
+    /// Optional physical millimeter slots (`x_mm`, `y_mm`, `width_mm`, `height_mm` relative to top-left of paper).
+    #[serde(default)]
+    pub fixed_slots_mm: Vec<RectMm>,
+    #[serde(default)]
+    pub cut_marks: bool,
+    #[serde(default)]
+    pub caption_mode: SlotCaptionMode,
 }
 
 /// Complete user settings backup (`Benutzereinstellungen sichern`, EPL manual p. 46–47).

@@ -82,64 +82,89 @@ pub fn render_page_at_16bit(
 
     // Draw each solved image slot
     for slot in &solved.slots {
-        let Some(img_id) = slot.assigned_image_id else {
-            continue;
-        };
-        let Some((src_buf, src_space)) = image_buffers.get(&img_id) else {
-            continue;
-        };
-        let src_entry = doc.images.iter().find(|e| e.id == img_id);
-        let crop = src_entry.map(|e| e.crop).unwrap_or_default();
+        if let Some(img_id) = slot.assigned_image_id
+            && let Some((src_buf, src_space)) = image_buffers.get(&img_id)
+        {
+            let src_entry = doc.images.iter().find(|e| e.id == img_id);
+            let crop = src_entry.map(|e| e.crop).unwrap_or_default();
 
-        // Compute target slot pixel dimensions at `target_dpi` first so we resample directly to the
-        // target slot resolution (with area-averaging when downscaling and Catmull-Rom bicubic when upscaling)
-        // before running the 16-bit color/ICC/softproof pipeline.
-        if let Some(gw) = &solved.gallery_wrap {
-            let fw = mm_to_dots(gw.front_canvas_rect_mm.width_mm, target_dpi).max(1) as u32;
-            let fh = mm_to_dots(gw.front_canvas_rect_mm.height_mm, target_dpi).max(1) as u32;
-            let mut proc_buf =
-                resample_slot_16bit(src_buf, crop, slot.rotated_90, slot.uv_rect, fw, fh)?;
-            apply_color_pipeline(
-                doc,
-                &mut proc_buf,
-                *src_space,
-                icc_profile,
-                for_screen_preview,
-            );
-            blit_gallery_wrap(
-                &mut page_buf,
-                &proc_buf,
-                gw.front_canvas_rect_mm,
-                gw.total_wrap_rect_mm,
-                gw.effect,
-                target_dpi,
-            );
-        } else {
-            let dx0 = mm_to_dots(slot.image_draw_rect_mm.x_mm, target_dpi);
-            let dy0 = mm_to_dots(slot.image_draw_rect_mm.y_mm, target_dpi);
-            let dw = mm_to_dots(slot.image_draw_rect_mm.width_mm, target_dpi).max(1) as u32;
-            let dh = mm_to_dots(slot.image_draw_rect_mm.height_mm, target_dpi).max(1) as u32;
-            let mut proc_buf =
-                resample_slot_16bit(src_buf, crop, slot.rotated_90, slot.uv_rect, dw, dh)?;
-            apply_color_pipeline(
-                doc,
-                &mut proc_buf,
-                *src_space,
-                icc_profile,
-                for_screen_preview,
-            );
-            blit_exact(&mut page_buf, &proc_buf, dx0, dy0);
+            // Compute target slot pixel dimensions at `target_dpi` first so we resample directly to the
+            // target slot resolution (with area-averaging when downscaling and Catmull-Rom bicubic when upscaling)
+            // before running the 16-bit color/ICC/softproof pipeline.
+            if let Some(gw) = &solved.gallery_wrap {
+                let fw = mm_to_dots(gw.front_canvas_rect_mm.width_mm, target_dpi).max(1) as u32;
+                let fh = mm_to_dots(gw.front_canvas_rect_mm.height_mm, target_dpi).max(1) as u32;
+                let mut proc_buf =
+                    resample_slot_16bit(src_buf, crop, slot.rotated_90, slot.uv_rect, fw, fh)?;
+                apply_color_pipeline(
+                    doc,
+                    &mut proc_buf,
+                    *src_space,
+                    icc_profile,
+                    for_screen_preview,
+                );
+                blit_gallery_wrap(
+                    &mut page_buf,
+                    &proc_buf,
+                    gw.front_canvas_rect_mm,
+                    gw.total_wrap_rect_mm,
+                    gw.effect,
+                    target_dpi,
+                );
+            } else {
+                let dx0 = mm_to_dots(slot.image_draw_rect_mm.x_mm, target_dpi);
+                let dy0 = mm_to_dots(slot.image_draw_rect_mm.y_mm, target_dpi);
+                let dw = mm_to_dots(slot.image_draw_rect_mm.width_mm, target_dpi).max(1) as u32;
+                let dh = mm_to_dots(slot.image_draw_rect_mm.height_mm, target_dpi).max(1) as u32;
+                let mut proc_buf =
+                    resample_slot_16bit(src_buf, crop, slot.rotated_90, slot.uv_rect, dw, dh)?;
+                apply_color_pipeline(
+                    doc,
+                    &mut proc_buf,
+                    *src_space,
+                    icc_profile,
+                    for_screen_preview,
+                );
+                blit_exact(&mut page_buf, &proc_buf, dx0, dy0);
+            }
+
+            // Draw frame line if enabled
+            if slot.frame_line.enabled && slot.frame_line.thickness_mm > 0.0 {
+                draw_rect_stroke(
+                    &mut page_buf,
+                    slot.image_draw_rect_mm,
+                    slot.frame_line.thickness_mm,
+                    slot.frame_line.color.to_rgb16(),
+                    target_dpi,
+                );
+            }
         }
 
-        // Draw frame line if enabled
-        if slot.frame_line.enabled && slot.frame_line.thickness_mm > 0.0 {
-            draw_rect_stroke(
-                &mut page_buf,
-                slot.image_draw_rect_mm,
-                slot.frame_line.thickness_mm,
-                slot.frame_line.color.to_rgb16(),
-                target_dpi,
-            );
+        // Draw per-slot corner cut marks and caption text for print/export output
+        if !for_screen_preview {
+            let mark_rect = if slot.assigned_image_id.is_some() {
+                slot.image_draw_rect_mm
+            } else {
+                slot.slot_rect_mm
+            };
+            if slot.cut_marks {
+                draw_slot_cut_marks_mm(
+                    &mut page_buf,
+                    mark_rect,
+                    Rgb16::new(14000, 14000, 14000),
+                    target_dpi,
+                );
+            }
+            if let Some(caption) = &slot.caption_text {
+                draw_slot_caption_mm(
+                    &mut page_buf,
+                    slot.slot_rect_mm,
+                    slot.image_draw_rect_mm,
+                    caption,
+                    Rgb16::new(12000, 12000, 12000),
+                    target_dpi,
+                );
+            }
         }
     }
 
@@ -612,6 +637,136 @@ fn draw_line_mm(
         if x >= 0 && y >= 0 {
             dst.set_pixel(x as u32, y as u32, color);
         }
+    }
+}
+
+/// Draws fine L-shaped corner trim marks (`3.0 mm` length, `0.8 mm` gap outside corners) around `rect_mm`.
+fn draw_slot_cut_marks_mm(dst: &mut ImageBuffer16, rect_mm: RectMm, color: Rgb16, dpi: u32) {
+    let gap = 0.8;
+    let len = 3.0;
+    let x0 = rect_mm.x_mm;
+    let y0 = rect_mm.y_mm;
+    let x1 = rect_mm.right_mm();
+    let y1 = rect_mm.bottom_mm();
+
+    let marks = [
+        // Top-left
+        (x0 - gap - len, y0, x0 - gap, y0),
+        (x0, y0 - gap - len, x0, y0 - gap),
+        // Top-right
+        (x1 + gap, y0, x1 + gap + len, y0),
+        (x1, y0 - gap - len, x1, y0 - gap),
+        // Bottom-left
+        (x0 - gap - len, y1, x0 - gap, y1),
+        (x0, y1 + gap, x0, y1 + gap + len),
+        // Bottom-right
+        (x1 + gap, y1, x1 + gap + len, y1),
+        (x1, y1 + gap, x1, y1 + gap + len),
+    ];
+    for (ax, ay, bx, by) in marks {
+        draw_line_mm(dst, ax, ay, bx, by, color, dpi);
+    }
+}
+
+/// Renders a crisp 5×7 bitmap caption centered horizontally beneath `image_draw_rect_mm`.
+fn draw_slot_caption_mm(
+    dst: &mut ImageBuffer16,
+    slot_rect_mm: RectMm,
+    image_draw_rect_mm: RectMm,
+    text: &str,
+    color: Rgb16,
+    dpi: u32,
+) {
+    if text.is_empty() {
+        return;
+    }
+    let scale_px = (mm_to_dots(0.32, dpi)).max(1);
+    let char_w_px = 6 * scale_px;
+    let char_h_px = 7 * scale_px;
+    let max_chars = ((mm_to_dots(slot_rect_mm.width_mm, dpi) / char_w_px.max(1)).max(4)) as usize;
+    let chars: Vec<char> = text.chars().take(max_chars).collect();
+    let total_w_px = (chars.len() as i32) * char_w_px;
+    let center_x_px = mm_to_dots(slot_rect_mm.x_mm + slot_rect_mm.width_mm * 0.5, dpi);
+    let start_x_px = center_x_px - total_w_px / 2;
+    let base_y_mm = (image_draw_rect_mm.bottom_mm() + 0.9)
+        .min(slot_rect_mm.bottom_mm() - 2.6)
+        .max(slot_rect_mm.y_mm + 1.0);
+    let start_y_px = mm_to_dots(base_y_mm, dpi);
+
+    for (idx, ch) in chars.into_iter().enumerate() {
+        let rows = glyph_5x7(ch);
+        let gx0 = start_x_px + (idx as i32) * char_w_px;
+        for (ry, row_bits) in rows.into_iter().enumerate() {
+            for rx in 0..5 {
+                if (row_bits >> (4 - rx)) & 1 == 1 {
+                    for sy in 0..scale_px {
+                        for sx in 0..scale_px {
+                            let px = gx0 + rx * scale_px + sx;
+                            let py = start_y_px + (ry as i32) * scale_px + sy;
+                            if px >= 0
+                                && py >= 0
+                                && (py - start_y_px) <= char_h_px
+                                && (px as u32) < dst.width
+                                && (py as u32) < dst.height
+                            {
+                                dst.set_pixel(px as u32, py as u32, color);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn glyph_5x7(ch: char) -> [u8; 7] {
+    match ch.to_ascii_uppercase() {
+        'A' => [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+        'B' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110],
+        'C' => [0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110],
+        'D' => [0b11100, 0b10010, 0b10001, 0b10001, 0b10001, 0b10010, 0b11100],
+        'E' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111],
+        'F' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000],
+        'G' => [0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01110],
+        'H' => [0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
+        'I' => [0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
+        'J' => [0b00111, 0b00010, 0b00010, 0b00010, 0b10010, 0b10010, 0b01100],
+        'K' => [0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001],
+        'L' => [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
+        'M' => [0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001],
+        'N' => [0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001],
+        'O' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+        'P' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000],
+        'Q' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101],
+        'R' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001],
+        'S' => [0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110],
+        'T' => [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100],
+        'U' => [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
+        'V' => [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100],
+        'W' => [0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001],
+        'X' => [0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001],
+        'Y' => [0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100],
+        'Z' => [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111],
+        '0' => [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110],
+        '1' => [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
+        '2' => [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111],
+        '3' => [0b11110, 0b00001, 0b00001, 0b01110, 0b00001, 0b00001, 0b11110],
+        '4' => [0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010],
+        '5' => [0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110],
+        '6' => [0b00110, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110],
+        '7' => [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000],
+        '8' => [0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110],
+        '9' => [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100],
+        '.' => [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b01100],
+        ',' => [0b00000, 0b00000, 0b00000, 0b00000, 0b00100, 0b00100, 0b01000],
+        '-' => [0b00000, 0b00000, 0b00000, 0b11111, 0b00000, 0b00000, 0b00000],
+        '_' => [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b11111],
+        '#' => [0b01010, 0b01010, 0b11111, 0b01010, 0b11111, 0b01010, 0b01010],
+        '(' => [0b00010, 0b00100, 0b01000, 0b01000, 0b01000, 0b00100, 0b00010],
+        ')' => [0b01000, 0b00100, 0b00010, 0b00010, 0b00010, 0b00100, 0b01000],
+        '/' => [0b00001, 0b00010, 0b00010, 0b00100, 0b01000, 0b01000, 0b10000],
+        ':' => [0b00000, 0b00100, 0b00100, 0b00000, 0b00100, 0b00100, 0b00000],
+        _ => [0b00000; 7],
     }
 }
 

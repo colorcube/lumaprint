@@ -20,13 +20,15 @@ use lumaprint_cms::{RenderingIntent, ViewingLight};
 use lumaprint_color::{AbwHighlightShift, AbwMidtone, AbwTonePreset, ImageBuffer16, Rgb8};
 use lumaprint_doc::{
     CanvasBackdropTone, CanvasViewMode, CenteringMode, ColorManagementMode, FilmstripPosition,
-    GalleryWrapEffect, GalleryWrapSpec, LayoutMode, MEDIA_TYPES, OutputSharpening, PaperSource,
-    PrintQuality, PrintScope, SizingCriterion, StandardLayoutSpec, TemplateLayoutSpec,
-    find_media_type,
+    GalleryWrapEffect, GalleryWrapSpec, LayoutMode, LayoutTemplate, MEDIA_TYPES, OutputSharpening,
+    PaperSource, PrintQuality, PrintScope, SizingCriterion, SlotCaptionMode, StandardLayoutSpec,
+    TemplateLayoutSpec, find_media_type,
 };
 use lumaprint_engine::{EngineCommand, Session, scan_folder_for_images};
-use lumaprint_geom::{BorderlessExpandLevel, DisplayUnit, Orientation, PAPER_SIZES};
-use lumaprint_layout::{SolvedPageLayout, builtin_templates};
+use lumaprint_geom::{
+    BorderlessExpandLevel, DisplayUnit, MarginsMm, Orientation, PAPER_SIZES, RectMm, SizeMm,
+};
+use lumaprint_layout::{SolvedPageLayout, builtin_templates, resolve_paper_and_printable_area};
 use std::collections::HashMap;
 use std::path::Path;
 pub use theme::{
@@ -54,6 +56,304 @@ enum NativeDialogResult {
     ExportPrintFile(std::path::PathBuf),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FreeSlotDragKind {
+    Move,
+    ResizeN,
+    ResizeS,
+    ResizeW,
+    ResizeE,
+    ResizeNW,
+    ResizeNE,
+    ResizeSW,
+    ResizeSE,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct FreeSlotDragState {
+    pub slot_index: usize,
+    pub kind: FreeSlotDragKind,
+    pub start_pointer_mm: (f64, f64),
+    pub initial_rect_mm: RectMm,
+}
+
+/// Interactive 2-stage **Vorlagen-Studio** state:
+/// - **Stage 1 (`is_free_mode == false`):** Parametric Grid & Bento Wizard (`1..=10 × 1..=10`, margins, gaps, interactive cell merge/unmerge, empty cells, presets).
+/// - **Stage 2 (`is_free_mode == true`):** One-way transition to Free Slot Editor (mouse move/resize with magnet snapping, manual `mm` inspector, standard photo size stamps).
+#[derive(Debug, Clone)]
+pub struct TemplateStudioState {
+    pub editing_id: Option<String>,
+    pub name: String,
+    pub orientation: Orientation,
+    pub is_free_mode: bool,
+    // Stage 1: Grid & Bento Wizard
+    pub rows: usize,
+    pub cols: usize,
+    pub uniform_margins: bool,
+    pub margins_mm: MarginsMm,
+    pub gap_h_mm: f64,
+    pub gap_v_mm: f64,
+    /// Inclusive merged cell spans `[r0, c0, r1, c1]`.
+    pub merged_regions: Vec<[usize; 4]>,
+    /// Disabled (whitespace) cells `(r, c)`.
+    pub disabled_cells: Vec<(usize, usize)>,
+    /// Currently selected cell range `[r0, c0, r1, c1]` in Stage 1.
+    pub selected_cells: Option<[usize; 4]>,
+    pub drag_start_cell: Option<(usize, usize)>,
+    // Stage 2: Free Slot Editor
+    pub free_slots_mm: Vec<RectMm>,
+    pub selected_free_slot: Option<usize>,
+    pub snap_enabled: bool,
+    pub active_free_drag: Option<FreeSlotDragState>,
+    pub snap_guide_x_mm: Option<f64>,
+    pub snap_guide_y_mm: Option<f64>,
+    // Global Template Options
+    pub cut_marks: bool,
+    pub caption_mode: SlotCaptionMode,
+}
+
+impl Default for TemplateStudioState {
+    fn default() -> Self {
+        Self {
+            editing_id: None,
+            name: String::from("Bento-Vorlage 2×2"),
+            orientation: Orientation::Portrait,
+            is_free_mode: false,
+            rows: 2,
+            cols: 2,
+            uniform_margins: true,
+            margins_mm: MarginsMm::uniform(10.0),
+            gap_h_mm: 5.0,
+            gap_v_mm: 5.0,
+            merged_regions: Vec::new(),
+            disabled_cells: Vec::new(),
+            selected_cells: Some([0, 0, 0, 0]),
+            drag_start_cell: None,
+            free_slots_mm: Vec::new(),
+            selected_free_slot: None,
+            snap_enabled: true,
+            active_free_drag: None,
+            snap_guide_x_mm: None,
+            snap_guide_y_mm: None,
+            cut_marks: false,
+            caption_mode: SlotCaptionMode::None,
+        }
+    }
+}
+
+impl TemplateStudioState {
+    /// Clamps merged regions and disabled cells when `rows` or `cols` decreases.
+    pub fn sanitize_grid_bounds(&mut self) {
+        let max_r = self.rows.saturating_sub(1);
+        let max_c = self.cols.saturating_sub(1);
+        self.merged_regions.retain_mut(|[r0, c0, r1, c1]| {
+            if *r0 > max_r || *c0 > max_c {
+                return false;
+            }
+            *r1 = (*r1).min(max_r);
+            *c1 = (*c1).min(max_c);
+            *r1 > *r0 || *c1 > *c0
+        });
+        self.disabled_cells
+            .retain(|&(r, c)| r <= max_r && c <= max_c);
+        if let Some([r0, c0, r1, c1]) = &mut self.selected_cells {
+            *r0 = (*r0).min(max_r);
+            *c0 = (*c0).min(max_c);
+            *r1 = (*r1).min(max_r).max(*r0);
+            *c1 = (*c1).min(max_c).max(*c0);
+        }
+    }
+
+    /// Computes the individual cell rectangle `(row, col)` in `mm` on `paper_size_mm`.
+    pub fn grid_cell_rect_mm(&self, paper_size_mm: SizeMm, row: usize, col: usize) -> RectMm {
+        let rows = self.rows.clamp(1, 10);
+        let cols = self.cols.clamp(1, 10);
+        let x0 = self.margins_mm.left_mm;
+        let y0 = self.margins_mm.top_mm;
+        let avail_w =
+            (paper_size_mm.width_mm - self.margins_mm.left_mm - self.margins_mm.right_mm).max(20.0);
+        let avail_h =
+            (paper_size_mm.height_mm - self.margins_mm.top_mm - self.margins_mm.bottom_mm).max(20.0);
+        let total_gap_w = self.gap_h_mm * ((cols.saturating_sub(1)) as f64);
+        let total_gap_h = self.gap_v_mm * ((rows.saturating_sub(1)) as f64);
+        let cell_w = ((avail_w - total_gap_w) / (cols as f64)).max(4.0);
+        let cell_h = ((avail_h - total_gap_h) / (rows as f64)).max(4.0);
+        RectMm::new(
+            x0 + (col as f64) * (cell_w + self.gap_h_mm),
+            y0 + (row as f64) * (cell_h + self.gap_v_mm),
+            cell_w,
+            cell_h,
+        )
+    }
+
+    /// Computes the spanned rectangle `[r0, c0, r1, c1]` in `mm` on `paper_size_mm`.
+    pub fn grid_span_rect_mm(
+        &self,
+        paper_size_mm: SizeMm,
+        [r0, c0, r1, c1]: [usize; 4],
+    ) -> RectMm {
+        let tl = self.grid_cell_rect_mm(paper_size_mm, r0, c0);
+        let br = self.grid_cell_rect_mm(paper_size_mm, r1, c1);
+        RectMm::new(
+            tl.x_mm,
+            tl.y_mm,
+            (br.right_mm() - tl.x_mm).max(4.0),
+            (br.bottom_mm() - tl.y_mm).max(4.0),
+        )
+    }
+
+    /// Computes all active Stage 1 Bento slots in reading order (`top-to-bottom, left-to-right`) as `(span, RectMm)`.
+    pub fn compute_bento_slots_mm(&self, paper_size_mm: SizeMm) -> Vec<([usize; 4], RectMm)> {
+        let rows = self.rows.clamp(1, 10);
+        let cols = self.cols.clamp(1, 10);
+        let mut visited = vec![vec![false; cols]; rows];
+        let mut out = Vec::new();
+
+        for r in 0..rows {
+            for c in 0..cols {
+                if visited[r][c] {
+                    continue;
+                }
+                if let Some(&[r0, c0, r1, c1]) = self
+                    .merged_regions
+                    .iter()
+                    .find(|&&[r0, c0, r1, c1]| r >= r0 && r <= r1 && c >= c0 && c <= c1)
+                {
+                    for row_vis in &mut visited[r0..=r1.min(rows - 1)] {
+                        for cell_vis in &mut row_vis[c0..=c1.min(cols - 1)] {
+                            *cell_vis = true;
+                        }
+                    }
+                    let is_disabled = self.disabled_cells.contains(&(r0, c0));
+                    if !is_disabled {
+                        let span = [r0, c0, r1.min(rows - 1), c1.min(cols - 1)];
+                        out.push((span, self.grid_span_rect_mm(paper_size_mm, span)));
+                    }
+                } else {
+                    visited[r][c] = true;
+                    if !self.disabled_cells.contains(&(r, c)) {
+                        let span = [r, c, r, c];
+                        out.push((span, self.grid_cell_rect_mm(paper_size_mm, r, c)));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Merges the currently selected cell range `[r0, c0, r1, c1]` into a single Bento slot.
+    pub fn merge_selected_cells(&mut self) {
+        let Some([r0, c0, r1, c1]) = self.selected_cells else {
+            return;
+        };
+        if r0 == r1 && c0 == c1 {
+            return;
+        }
+        // Remove any existing merged region that overlaps `[r0, c0, r1, c1]`
+        self.merged_regions.retain(|&[mr0, mc0, mr1, mc1]| {
+            mr1 < r0 || mr0 > r1 || mc1 < c0 || mc0 > c1
+        });
+        // Clear disabled flags inside the merged span
+        self.disabled_cells
+            .retain(|&(dr, dc)| dr < r0 || dr > r1 || dc < c0 || dc > c1);
+        self.merged_regions.push([r0, c0, r1, c1]);
+    }
+
+    /// Splits any merged region overlapping `selected_cells` back into individual grid cells.
+    pub fn unmerge_selected_cells(&mut self) {
+        let Some([r0, c0, r1, c1]) = self.selected_cells else {
+            return;
+        };
+        self.merged_regions.retain(|&[mr0, mc0, mr1, mc1]| {
+            mr1 < r0 || mr0 > r1 || mc1 < c0 || mc0 > c1
+        });
+    }
+
+    /// Toggles whether the selected cell(s) are empty whitespace or active image slots.
+    pub fn toggle_selected_cells_disabled(&mut self) {
+        let Some([r0, c0, r1, c1]) = self.selected_cells else {
+            return;
+        };
+        let mut any_disabled = false;
+        for r in r0..=r1 {
+            for c in c0..=c1 {
+                if self.disabled_cells.contains(&(r, c)) {
+                    any_disabled = true;
+                }
+            }
+        }
+        if any_disabled {
+            self.disabled_cells
+                .retain(|&(dr, dc)| dr < r0 || dr > r1 || dc < c0 || dc > c1);
+        } else {
+            for r in r0..=r1 {
+                for c in c0..=c1 {
+                    if !self.disabled_cells.contains(&(r, c)) {
+                        self.disabled_cells.push((r, c));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Converts Stage 1 Bento slots into Stage 2 Free Millimeter Slots (one-way switch!).
+    pub fn enter_free_mode(&mut self, paper_size_mm: SizeMm) {
+        if self.is_free_mode {
+            return;
+        }
+        let bento_slots: Vec<RectMm> = self
+            .compute_bento_slots_mm(paper_size_mm)
+            .into_iter()
+            .map(|(_, rect)| rect)
+            .collect();
+        self.free_slots_mm = if bento_slots.is_empty() {
+            vec![RectMm::new(20.0, 20.0, 100.0, 150.0)]
+        } else {
+            bento_slots
+        };
+        self.selected_free_slot = Some(0);
+        self.is_free_mode = true;
+    }
+
+    /// Builds the `LayoutTemplate` to save into the session.
+    pub fn build_layout_template(
+        &self,
+        paper_size_mm: SizeMm,
+        printable_rect_mm: RectMm,
+    ) -> LayoutTemplate {
+        let rects_mm: Vec<RectMm> = if self.is_free_mode {
+            self.free_slots_mm.clone()
+        } else {
+            self.compute_bento_slots_mm(paper_size_mm)
+                .into_iter()
+                .map(|(_, r)| r)
+                .collect()
+        };
+
+        let pw = printable_rect_mm.width_mm.max(1.0);
+        let ph = printable_rect_mm.height_mm.max(1.0);
+        let normalized_slots: Vec<[f64; 4]> = rects_mm
+            .iter()
+            .map(|r| {
+                let nx = ((r.x_mm - printable_rect_mm.x_mm) / pw).clamp(0.0, 0.98);
+                let ny = ((r.y_mm - printable_rect_mm.y_mm) / ph).clamp(0.0, 0.98);
+                let nw = (r.width_mm / pw).clamp(0.02, 1.0 - nx);
+                let nh = (r.height_mm / ph).clamp(0.02, 1.0 - ny);
+                [nx, ny, nw, nh]
+            })
+            .collect();
+
+        LayoutTemplate {
+            id: self.editing_id.clone().unwrap_or_default(),
+            name: self.name.trim().to_string(),
+            normalized_slots,
+            fixed_slots_mm: rects_mm,
+            cut_marks: self.cut_marks,
+            caption_mode: self.caption_mode,
+        }
+    }
+}
+
 /// Main LumaPrint GUI Application state.
 pub struct LumaPrintApp {
     pub session: Session,
@@ -76,6 +376,7 @@ pub struct LumaPrintApp {
     pub new_template_name: String,
     pub new_template_rows: usize,
     pub new_template_cols: usize,
+    pub template_studio: TemplateStudioState,
     pub pending_folder_import: Option<Vec<String>>,
     pub export_path_input: String,
     active_drag: Option<DragPayload>,
@@ -124,6 +425,7 @@ impl LumaPrintApp {
             new_template_name: String::from("Kontaktbogen 2x2"),
             new_template_rows: 2,
             new_template_cols: usize::from(2u8),
+            template_studio: TemplateStudioState::default(),
             pending_folder_import: None,
             export_path_input: String::from("/tmp/lumaprint_sheet.tif"),
             active_drag: None,
@@ -2127,6 +2429,34 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 );
             }
 
+            // Draw crisp corner cut marks around the slot / image rectangle when enabled
+            if slot.cut_marks {
+                let mark_r = if slot.assigned_image_id.is_some() {
+                    img_r
+                } else {
+                    slot_r
+                };
+                draw_screen_cut_marks(
+                    ui.painter(),
+                    mark_r,
+                    scale,
+                    Stroke::new(1.1_f32, Color32::from_rgb(55, 60, 68)),
+                );
+            }
+
+            // Draw slot caption text beneath the image rectangle when enabled
+            if let Some(caption) = &slot.caption_text {
+                let cap_y = (img_r.max.y + 1.5 * scale).min(slot_r.max.y - 4.0);
+                let font_px = (2.5 * scale).clamp(8.5, 13.0);
+                ui.painter().text(
+                    Pos2::new(slot_r.center().x, cap_y),
+                    egui::Align2::CENTER_TOP,
+                    caption,
+                    FontId::proportional(font_px),
+                    Color32::from_rgb(50, 54, 62),
+                );
+            }
+
             if let Some(img_id) = slot.assigned_image_id {
                 // Only draw a subtle thin selection line (without corner handles) when explicitly selected
                 if is_active_slot && self.slot_selected {
@@ -3607,6 +3937,24 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             LayoutMode::Template(mut tpl_spec) => {
                 let mut changed = false;
                 let all_tpls = builtin_templates();
+                let current_tpl_label = self
+                    .session
+                    .doc
+                    .user_backup
+                    .custom_templates
+                    .iter()
+                    .chain(all_tpls.iter())
+                    .find(|tpl| tpl.id == tpl_spec.template_id)
+                    .map(|tpl| {
+                        let count = if !tpl.fixed_slots_mm.is_empty() {
+                            tpl.fixed_slots_mm.len()
+                        } else {
+                            tpl.normalized_slots.len()
+                        };
+                        format!("{} ({} Slots)", tpl.name, count)
+                    })
+                    .unwrap_or_else(|| tpl_spec.template_id.clone());
+
                 egui::Grid::new("grid_layout_template")
                     .num_columns(2)
                     .spacing([14.0, 10.0])
@@ -3614,7 +3962,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     .show(ui, |ui| {
                         ui.label(RichText::new("Vorlage:").color(t.text_dim));
                         egui::ComboBox::from_id_salt("tpl_selector")
-                            .selected_text(&tpl_spec.template_id)
+                            .selected_text(current_tpl_label)
                             .width(245.0)
                             .show_ui(ui, |ui| {
                                 for tpl in self
@@ -3625,18 +3973,48 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                     .iter()
                                     .chain(all_tpls.iter())
                                 {
+                                    let count = if !tpl.fixed_slots_mm.is_empty() {
+                                        tpl.fixed_slots_mm.len()
+                                    } else {
+                                        tpl.normalized_slots.len()
+                                    };
+                                    let lbl = format!("{} ({} Slots)", tpl.name, count);
                                     if ui
                                         .selectable_value(
                                             &mut tpl_spec.template_id,
                                             tpl.id.clone(),
-                                            &tpl.name,
+                                            lbl,
                                         )
                                         .changed()
                                     {
+                                        tpl_spec.cut_marks = tpl.cut_marks;
+                                        tpl_spec.caption_mode = tpl.caption_mode;
                                         changed = true;
                                     }
                                 }
                             });
+                        ui.end_row();
+
+                        ui.label(RichText::new("Ausrichtung:").color(t.text_dim));
+                        ui.horizontal(|ui| {
+                            if ui
+                                .selectable_value(
+                                    &mut tpl_spec.orientation,
+                                    Orientation::Portrait,
+                                    "Hochformat",
+                                )
+                                .changed()
+                                || ui
+                                    .selectable_value(
+                                        &mut tpl_spec.orientation,
+                                        Orientation::Landscape,
+                                        "Querformat",
+                                    )
+                                    .changed()
+                            {
+                                changed = true;
+                            }
+                        });
                         ui.end_row();
 
                         ui.label(RichText::new("Einpassung:").color(t.text_dim));
@@ -3647,14 +4025,70 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             changed = true;
                         }
                         ui.end_row();
+
+                        ui.label(RichText::new("Schnittmarken:").color(t.text_dim));
+                        if ui
+                            .checkbox(&mut tpl_spec.cut_marks, "✂ Eck-Schnittmarken an Slots")
+                            .changed()
+                        {
+                            changed = true;
+                        }
+                        ui.end_row();
+
+                        ui.label(RichText::new("Bildunterschrift:").color(t.text_dim));
+                        egui::ComboBox::from_id_salt("tpl_caption_mode_combo")
+                            .selected_text(tpl_spec.caption_mode.label_de())
+                            .width(245.0)
+                            .show_ui(ui, |ui| {
+                                for cm in SlotCaptionMode::ALL {
+                                    if ui
+                                        .selectable_value(
+                                            &mut tpl_spec.caption_mode,
+                                            cm,
+                                            cm.label_de(),
+                                        )
+                                        .changed()
+                                    {
+                                        changed = true;
+                                    }
+                                }
+                            });
+                        ui.end_row();
                     });
-                ui.add_space(6.0);
-                if ui
-                    .button("+ Vorlagen-Generator (1..5 × 1..5 Raster, EPL S. 32)")
-                    .clicked()
-                {
-                    self.show_template_builder_modal = true;
-                }
+
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .button(RichText::new("📐 Vorlagen-Studio (Neu…)").strong())
+                        .on_hover_text(
+                            "Öffnet das 2-stufige Vorlagen-Studio (1. Raster & Bento-Wizard -> 2. Freier Slot-Editor mit Millimeter-Eingabe)",
+                        )
+                        .clicked()
+                    {
+                        self.template_studio = TemplateStudioState {
+                            orientation: tpl_spec.orientation,
+                            cut_marks: tpl_spec.cut_marks,
+                            caption_mode: tpl_spec.caption_mode,
+                            name: format!(
+                                "Studio-Vorlage #{}",
+                                self.session.doc.user_backup.custom_templates.len() + 1
+                            ),
+                            ..TemplateStudioState::default()
+                        };
+                        self.show_template_builder_modal = true;
+                    }
+
+                    if ui
+                        .button("✎ Aktuelle im freien Editor anpassen…")
+                        .on_hover_text(
+                            "Lädt die aktuell gewählte Vorlage direkt in den freien Millimeter-Slot-Editor des Vorlagen-Studios",
+                        )
+                        .clicked()
+                    {
+                        self.open_current_template_in_free_studio(&tpl_spec);
+                    }
+                });
+
                 if changed {
                     self.exec(EngineCommand::SetLayoutMode(LayoutMode::Template(tpl_spec)));
                 }
@@ -4111,30 +4545,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             self.show_crop_modal = open;
         }
 
-        // 2. Vorlagen-Editor (1..5 x 1..5 Grid Builder, EPL manual p. 32–35)
+        // 2. 2-Stufiges Vorlagen-Studio (Stufe 1: Raster & Bento-Wizard -> Stufe 2: Freier Slot-Editor)
         if self.show_template_builder_modal {
-            let mut open = self.show_template_builder_modal;
-            egui::Window::new("Vorlage hinzufügen (1..5 Zeilen × 1..5 Spalten, EPL S. 33)")
-                .open(&mut open)
-                .resizable(false)
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Name:");
-                        ui.text_edit_singleline(&mut self.new_template_name);
-                    });
-                    ui.add(egui::Slider::new(&mut self.new_template_rows, 1..=5).text("Zeilen"));
-                    ui.add(egui::Slider::new(&mut self.new_template_cols, 1..=5).text("Spalten"));
-                    if ui.button("OK – Vorlage speichern").clicked() {
-                        let name = self.new_template_name.clone();
-                        let rows = self.new_template_rows;
-                        let cols = self.new_template_cols;
-                        self.exec(EngineCommand::CreateGridTemplate { name, rows, cols });
-                        self.show_template_builder_modal = false;
-                    }
-                });
-            if self.show_template_builder_modal {
-                self.show_template_builder_modal = open;
-            }
+            self.draw_template_studio_modal(ctx);
         }
 
         // 3. Ordner-Import Sicherheitsabfrage (> 50 Bilder)
@@ -4223,6 +4636,1240 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     });
                 });
             self.show_about_modal = open;
+        }
+    }
+
+    fn studio_paper_and_printable_mm(&self, orientation: Orientation) -> (SizeMm, RectMm) {
+        let mut warnings = Vec::new();
+        resolve_paper_and_printable_area(
+            &self.session.doc,
+            orientation,
+            BorderlessExpandLevel::None,
+            &mut warnings,
+        )
+    }
+
+    fn open_current_template_in_free_studio(&mut self, tpl_spec: &TemplateLayoutSpec) {
+        let all_tpls = builtin_templates();
+        let found = self
+            .session
+            .doc
+            .user_backup
+            .custom_templates
+            .iter()
+            .chain(all_tpls.iter())
+            .find(|t| t.id == tpl_spec.template_id)
+            .cloned();
+
+        let (_paper_size_mm, printable_rect_mm) =
+            self.studio_paper_and_printable_mm(tpl_spec.orientation);
+
+        let (editing_id, name, slots_mm, cut_marks, caption_mode) = if let Some(tpl) = found {
+            let is_custom = self
+                .session
+                .doc
+                .user_backup
+                .custom_templates
+                .iter()
+                .any(|c| c.id == tpl.id);
+            let rects: Vec<RectMm> = if !tpl.fixed_slots_mm.is_empty() {
+                tpl.fixed_slots_mm.clone()
+            } else {
+                tpl.normalized_slots
+                    .iter()
+                    .map(|&[nx, ny, nw, nh]| {
+                        RectMm::new(
+                            printable_rect_mm.x_mm + nx * printable_rect_mm.width_mm,
+                            printable_rect_mm.y_mm + ny * printable_rect_mm.height_mm,
+                            nw * printable_rect_mm.width_mm,
+                            nh * printable_rect_mm.height_mm,
+                        )
+                    })
+                    .collect()
+            };
+            (
+                if is_custom { Some(tpl.id) } else { None },
+                if is_custom {
+                    tpl.name
+                } else {
+                    format!("{} (Frei)", tpl.name)
+                },
+                rects,
+                tpl_spec.cut_marks || tpl.cut_marks,
+                if tpl_spec.caption_mode != SlotCaptionMode::None {
+                    tpl_spec.caption_mode
+                } else {
+                    tpl.caption_mode
+                },
+            )
+        } else {
+            (
+                None,
+                String::from("Freie Vorlage"),
+                vec![RectMm::new(20.0, 20.0, 100.0, 150.0)],
+                tpl_spec.cut_marks,
+                tpl_spec.caption_mode,
+            )
+        };
+
+        self.template_studio = TemplateStudioState {
+            editing_id,
+            name,
+            orientation: tpl_spec.orientation,
+            is_free_mode: true,
+            free_slots_mm: slots_mm,
+            selected_free_slot: Some(0),
+            cut_marks,
+            caption_mode,
+            ..TemplateStudioState::default()
+        };
+        self.show_template_builder_modal = true;
+    }
+
+    fn draw_template_studio_modal(&mut self, ctx: &Context) {
+        let t = self.tokens;
+        let mut open = self.show_template_builder_modal;
+        let mut save_and_close = false;
+        let mut cancel_close = false;
+
+        let (paper_size_mm, printable_rect_mm) =
+            self.studio_paper_and_printable_mm(self.template_studio.orientation);
+
+        egui::Window::new("📐 Vorlagen-Studio – Bento-Wizard & Freier Slot-Editor")
+            .open(&mut open)
+            .resizable(true)
+            .collapsible(false)
+            .default_size(Vec2::new(1020.0, 700.0))
+            .min_size(Vec2::new(820.0, 540.0))
+            .show(ctx, |ui| {
+                // Top Header Bar: Template Name, Orientation, and Stage Indicator
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Vorlagenname:").color(t.text_dim));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.template_studio.name)
+                            .desired_width(210.0),
+                    );
+                    ui.separator();
+                    ui.label(RichText::new("Ausrichtung:").color(t.text_dim));
+                    let prev_ori = self.template_studio.orientation;
+                    ui.selectable_value(
+                        &mut self.template_studio.orientation,
+                        Orientation::Portrait,
+                        "Hochformat",
+                    );
+                    ui.selectable_value(
+                        &mut self.template_studio.orientation,
+                        Orientation::Landscape,
+                        "Querformat",
+                    );
+                    if self.template_studio.orientation != prev_ori
+                        && self.template_studio.is_free_mode
+                    {
+                        for r in &mut self.template_studio.free_slots_mm {
+                            std::mem::swap(&mut r.x_mm, &mut r.y_mm);
+                            std::mem::swap(&mut r.width_mm, &mut r.height_mm);
+                        }
+                    }
+
+                    ui.separator();
+                    let stage_badge = if !self.template_studio.is_free_mode {
+                        RichText::new("Stufe 1: Raster- & Bento-Wizard")
+                            .color(t.accent)
+                            .strong()
+                    } else {
+                        RichText::new("Stufe 2: Freier Slot-Editor (Manuelle Maße, kein Zurück)")
+                            .color(Color32::from_rgb(245, 175, 60))
+                            .strong()
+                    };
+                    ui.label(stage_badge);
+                });
+                ui.separator();
+
+                // Main Split Area: Left Controls (370 px) + Right Interactive Sheet Preview (remaining width)
+                let avail = ui.available_size();
+                let body_h = (avail.y - 44.0).max(400.0);
+
+                ui.allocate_ui(Vec2::new(avail.x, body_h), |ui| {
+                    ui.horizontal(|ui| {
+                        // Left Inspector / Wizard Column
+                        ui.allocate_ui(Vec2::new(375.0, body_h), |ui| {
+                            egui::ScrollArea::vertical()
+                                .id_salt("studio_left_scroll")
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    if !self.template_studio.is_free_mode {
+                                        self.draw_studio_stage1_controls(ui, paper_size_mm);
+                                    } else {
+                                        self.draw_studio_stage2_controls(ui, paper_size_mm);
+                                    }
+
+                                    ui.add_space(10.0);
+                                    ui.separator();
+                                    ui.add_space(4.0);
+                                    ui.label(
+                                        RichText::new("✂ Schnittmarken & Bildunterschrift")
+                                            .strong()
+                                            .color(t.accent),
+                                    );
+                                    ui.add_space(4.0);
+                                    ui.checkbox(
+                                        &mut self.template_studio.cut_marks,
+                                        "✂ Eck-Schnittmarken um jede Bildstelle drucken",
+                                    );
+                                    ui.add_space(4.0);
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            RichText::new("Bildunterschrift:").color(t.text_dim),
+                                        );
+                                        egui::ComboBox::from_id_salt("studio_caption_combo")
+                                            .selected_text(
+                                                self.template_studio.caption_mode.label_de(),
+                                            )
+                                            .width(220.0)
+                                            .show_ui(ui, |ui| {
+                                                for cm in SlotCaptionMode::ALL {
+                                                    ui.selectable_value(
+                                                        &mut self.template_studio.caption_mode,
+                                                        cm,
+                                                        cm.label_de(),
+                                                    );
+                                                }
+                                            });
+                                    });
+                                });
+                        });
+
+                        ui.separator();
+
+                        // Right Large Interactive Sheet Preview
+                        let right_w = ui.available_width().max(320.0);
+                        ui.allocate_ui(Vec2::new(right_w, body_h), |ui| {
+                            self.draw_template_studio_preview(
+                                ui,
+                                paper_size_mm,
+                                printable_rect_mm,
+                            );
+                        });
+                    });
+                });
+
+                ui.separator();
+                // Bottom Action Bar
+                ui.horizontal(|ui| {
+                    let slot_count = if self.template_studio.is_free_mode {
+                        self.template_studio.free_slots_mm.len()
+                    } else {
+                        self.template_studio
+                            .compute_bento_slots_mm(paper_size_mm)
+                            .len()
+                    };
+                    ui.label(
+                        RichText::new(format!(
+                            "Papierformat: {} ({:.1} × {:.1} mm) · {} aktive Bildstellen",
+                            self.session.doc.printer.paper_size_key,
+                            paper_size_mm.width_mm,
+                            paper_size_mm.height_mm,
+                            slot_count
+                        ))
+                        .small()
+                        .color(t.text_dim),
+                    );
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let can_save =
+                            !self.template_studio.name.trim().is_empty() && slot_count > 0;
+                        if ui
+                            .add_enabled(
+                                can_save,
+                                egui::Button::new(
+                                    RichText::new("✓ Vorlage speichern & auf Bogen anwenden")
+                                        .strong(),
+                                ),
+                            )
+                            .clicked()
+                        {
+                            save_and_close = true;
+                        }
+                        if ui.button("Abbrechen").clicked() {
+                            cancel_close = true;
+                        }
+                    });
+                });
+            });
+
+        if save_and_close {
+            let studio_ori = self.template_studio.orientation;
+            let (paper_size_mm, printable_rect_mm) =
+                self.studio_paper_and_printable_mm(studio_ori);
+            let tpl = self
+                .template_studio
+                .build_layout_template(paper_size_mm, printable_rect_mm);
+            self.exec(EngineCommand::SaveCustomTemplate(tpl));
+            self.exec(EngineCommand::SetOrientation(studio_ori));
+            self.show_template_builder_modal = false;
+        } else if cancel_close {
+            self.show_template_builder_modal = false;
+        } else if self.show_template_builder_modal {
+            self.show_template_builder_modal = open;
+        }
+    }
+
+    fn draw_studio_stage1_controls(&mut self, ui: &mut Ui, paper_size_mm: SizeMm) {
+        let t = self.tokens;
+        ui.label(
+            RichText::new("1. Basis-Raster & Abstände (mm)")
+                .strong()
+                .color(t.accent),
+        );
+        ui.add_space(4.0);
+
+        let mut grid_changed = false;
+        egui::Grid::new("studio_stage1_grid")
+            .num_columns(2)
+            .spacing([12.0, 8.0])
+            .min_col_width(115.0)
+            .show(ui, |ui| {
+                ui.label(RichText::new("Zeilen × Spalten:").color(t.text_dim));
+                ui.horizontal(|ui| {
+                    grid_changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut self.template_studio.rows)
+                                .range(1..=10)
+                                .prefix("Z: "),
+                        )
+                        .changed();
+                    ui.label("×");
+                    grid_changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut self.template_studio.cols)
+                                .range(1..=10)
+                                .prefix("S: "),
+                        )
+                        .changed();
+                });
+                ui.end_row();
+
+                ui.label(RichText::new("Außenränder:").color(t.text_dim));
+                ui.checkbox(
+                    &mut self.template_studio.uniform_margins,
+                    "🔗 Alle 4 Seiten koppeln",
+                );
+                ui.end_row();
+
+                if self.template_studio.uniform_margins {
+                    ui.label(RichText::new("Rand rundum:").color(t.text_dim));
+                    let mut m = self.template_studio.margins_mm.top_mm;
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut m)
+                                .range(0.0..=80.0)
+                                .speed(0.5)
+                                .suffix(" mm"),
+                        )
+                        .changed()
+                    {
+                        self.template_studio.margins_mm = MarginsMm::uniform(m);
+                    }
+                    ui.end_row();
+                } else {
+                    ui.label(RichText::new("Oben / Unten:").color(t.text_dim));
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut self.template_studio.margins_mm.top_mm)
+                                .range(0.0..=80.0)
+                                .speed(0.5)
+                                .suffix(" mm"),
+                        );
+                        ui.label("×");
+                        ui.add(
+                            egui::DragValue::new(&mut self.template_studio.margins_mm.bottom_mm)
+                                .range(0.0..=80.0)
+                                .speed(0.5)
+                                .suffix(" mm"),
+                        );
+                    });
+                    ui.end_row();
+
+                    ui.label(RichText::new("Links / Rechts:").color(t.text_dim));
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut self.template_studio.margins_mm.left_mm)
+                                .range(0.0..=80.0)
+                                .speed(0.5)
+                                .suffix(" mm"),
+                        );
+                        ui.label("×");
+                        ui.add(
+                            egui::DragValue::new(&mut self.template_studio.margins_mm.right_mm)
+                                .range(0.0..=80.0)
+                                .speed(0.5)
+                                .suffix(" mm"),
+                        );
+                    });
+                    ui.end_row();
+                }
+
+                ui.label(RichText::new("Steg H / V:").color(t.text_dim));
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut self.template_studio.gap_h_mm)
+                            .range(0.0..=50.0)
+                            .speed(0.5)
+                            .prefix("H: ")
+                            .suffix(" mm"),
+                    );
+                    ui.add(
+                        egui::DragValue::new(&mut self.template_studio.gap_v_mm)
+                            .range(0.0..=50.0)
+                            .speed(0.5)
+                            .prefix("V: ")
+                            .suffix(" mm"),
+                    );
+                });
+                ui.end_row();
+            });
+
+        if grid_changed {
+            self.template_studio.sanitize_grid_bounds();
+        }
+
+        ui.add_space(10.0);
+        ui.separator();
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new("2. Bento-Zellen verbinden / freilassen")
+                .strong()
+                .color(t.accent),
+        );
+        ui.label(
+            RichText::new(
+                "Tipp: In der großen Bogen-Vorschau rechts Zellen anklicken oder mit gedrückter Maustaste über mehrere Zellen ziehen.",
+            )
+            .small()
+            .color(t.text_faint),
+        );
+        ui.add_space(4.0);
+
+        let can_merge = self
+            .template_studio
+            .selected_cells
+            .is_some_and(|[r0, c0, r1, c1]| r1 > r0 || c1 > c0);
+        let has_selection = self.template_studio.selected_cells.is_some();
+
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(
+                    can_merge,
+                    egui::Button::new("⊞ Ausgewählte Zellen verbinden (Merge)"),
+                )
+                .on_hover_text("Verbindet den markierten Zellbereich zu einem großen Bild-Slot")
+                .clicked()
+            {
+                self.template_studio.merge_selected_cells();
+            }
+            if ui
+                .add_enabled(has_selection, egui::Button::new("⊟ Trennen (Unmerge)"))
+                .on_hover_text("Teilt verbundene Zellen wieder in Einzelzellen auf")
+                .clicked()
+            {
+                self.template_studio.unmerge_selected_cells();
+            }
+            if ui
+                .add_enabled(
+                    has_selection,
+                    egui::Button::new("⬜ Zelle(n) leer / aktiv schalten"),
+                )
+                .on_hover_text("Schaltet die markierte(n) Zelle(n) als Weißraum frei oder wieder aktiv")
+                .clicked()
+            {
+                self.template_studio.toggle_selected_cells_disabled();
+            }
+        });
+
+        ui.add_space(6.0);
+        ui.label(RichText::new("Bento-Schnellvorlagen:").small().color(t.text_dim));
+        ui.horizontal_wrapped(|ui| {
+            if ui.small_button("Standard-Raster").clicked() {
+                self.template_studio.merged_regions.clear();
+                self.template_studio.disabled_cells.clear();
+            }
+            if ui.small_button("1 Groß oben + 3 Unten").clicked() {
+                self.template_studio.rows = 3;
+                self.template_studio.cols = 3;
+                self.template_studio.merged_regions = vec![[0, 0, 1, 2]];
+                self.template_studio.disabled_cells.clear();
+                self.template_studio.selected_cells = Some([0, 0, 1, 2]);
+            }
+            if ui.small_button("1 Groß links + 2 Rechts").clicked() {
+                self.template_studio.rows = 2;
+                self.template_studio.cols = 3;
+                self.template_studio.merged_regions = vec![[0, 0, 1, 1]];
+                self.template_studio.disabled_cells.clear();
+                self.template_studio.selected_cells = Some([0, 0, 1, 1]);
+            }
+            if ui.small_button("Panorama oben + 2 Unten").clicked() {
+                self.template_studio.rows = 2;
+                self.template_studio.cols = 2;
+                self.template_studio.merged_regions = vec![[0, 0, 0, 1]];
+                self.template_studio.disabled_cells.clear();
+                self.template_studio.selected_cells = Some([0, 0, 0, 1]);
+            }
+        });
+
+        ui.add_space(12.0);
+        ui.separator();
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new("3. Wechsel in den freien Modus (Einbahnstraße)")
+                .strong()
+                .color(Color32::from_rgb(245, 175, 60)),
+        );
+        ui.label(
+            RichText::new(
+                "Für freie Platzierung per Maus, individuelle Millimeter-Maße oder Standard-Fotoformate (10×15, 13×18 …). Ein Zurück zum Raster-Wizard ist danach nicht mehr möglich.",
+            )
+            .small()
+            .color(t.text_faint),
+        );
+        ui.add_space(4.0);
+        if ui
+            .button(
+                RichText::new("🔓 Jetzt in freien Slot-Editor wechseln (kein Zurück)")
+                    .strong()
+                    .color(Color32::from_rgb(255, 195, 85)),
+            )
+            .clicked()
+        {
+            self.template_studio.enter_free_mode(paper_size_mm);
+        }
+    }
+
+    fn draw_studio_stage2_controls(&mut self, ui: &mut Ui, paper_size_mm: SizeMm) {
+        let t = self.tokens;
+        ui.label(
+            RichText::new("Freier Slot-Editor (Millimeter-Maße & Maus)")
+                .strong()
+                .color(Color32::from_rgb(245, 175, 60)),
+        );
+        ui.add_space(4.0);
+
+        ui.checkbox(
+            &mut self.template_studio.snap_enabled,
+            "🧲 Magnetisches Einrasten (Ränder, Bogenmitte & Nachbar-Slots)",
+        );
+
+        ui.add_space(6.0);
+        ui.label(RichText::new("Slot hinzufügen (Festmaß-Stempel):").color(t.text_dim));
+        ui.horizontal_wrapped(|ui| {
+            let stamps: &[(&str, f64, f64)] = &[
+                ("+ Freier Slot", 80.0, 80.0),
+                ("+ 9×13 cm", 89.0, 127.0),
+                ("+ 10×15 cm", 102.0, 152.0),
+                ("+ 13×18 cm", 127.0, 178.0),
+                ("+ 15×20 cm", 152.0, 203.0),
+                ("+ 20×30 cm", 203.0, 305.0),
+            ];
+            for &(lbl, w, h) in stamps {
+                if ui.small_button(lbl).clicked() {
+                    let offset = (self.template_studio.free_slots_mm.len() as f64 * 6.0) % 40.0;
+                    let w_clamped = w.min(paper_size_mm.width_mm - 10.0).max(15.0);
+                    let h_clamped = h.min(paper_size_mm.height_mm - 10.0).max(15.0);
+                    let x = ((paper_size_mm.width_mm - w_clamped) * 0.5 + offset)
+                        .clamp(0.0, (paper_size_mm.width_mm - w_clamped).max(0.0));
+                    let y = ((paper_size_mm.height_mm - h_clamped) * 0.5 + offset)
+                        .clamp(0.0, (paper_size_mm.height_mm - h_clamped).max(0.0));
+                    self.template_studio
+                        .free_slots_mm
+                        .push(RectMm::new(x, y, w_clamped, h_clamped));
+                    self.template_studio.selected_free_slot =
+                        Some(self.template_studio.free_slots_mm.len() - 1);
+                }
+            }
+        });
+
+        ui.add_space(8.0);
+        ui.separator();
+        ui.add_space(4.0);
+
+        // Selected Slot Millimeter Inspector
+        if let Some(sel_idx) = self.template_studio.selected_free_slot
+            && sel_idx < self.template_studio.free_slots_mm.len()
+        {
+            ui.label(
+                RichText::new(format!("Ausgewählte Bildstelle #{}", sel_idx + 1))
+                    .strong()
+                    .color(t.accent),
+            );
+            ui.add_space(4.0);
+
+            let mut slot = self.template_studio.free_slots_mm[sel_idx];
+            let max_w = paper_size_mm.width_mm.max(20.0);
+            let max_h = paper_size_mm.height_mm.max(20.0);
+
+            egui::Grid::new("studio_stage2_inspector")
+                .num_columns(2)
+                .spacing([12.0, 8.0])
+                .min_col_width(115.0)
+                .show(ui, |ui| {
+                    ui.label(RichText::new("Position X / Y:").color(t.text_dim));
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut slot.x_mm)
+                                .range(0.0..=(max_w - 10.0))
+                                .speed(0.5)
+                                .prefix("X: ")
+                                .suffix(" mm"),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut slot.y_mm)
+                                .range(0.0..=(max_h - 10.0))
+                                .speed(0.5)
+                                .prefix("Y: ")
+                                .suffix(" mm"),
+                        );
+                    });
+                    ui.end_row();
+
+                    ui.label(RichText::new("Breite / Höhe:").color(t.text_dim));
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut slot.width_mm)
+                                .range(10.0..=max_w)
+                                .speed(0.5)
+                                .prefix("B: ")
+                                .suffix(" mm"),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut slot.height_mm)
+                                .range(10.0..=max_h)
+                                .speed(0.5)
+                                .prefix("H: ")
+                                .suffix(" mm"),
+                        );
+                    });
+                    ui.end_row();
+                });
+
+            self.template_studio.free_slots_mm[sel_idx] = slot;
+
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .small_button("🔄 B ↔ H tauschen")
+                    .on_hover_text("Tauscht Breite und Höhe dieser Bildstelle (Hoch-/Querformat)")
+                    .clicked()
+                {
+                    let s = &mut self.template_studio.free_slots_mm[sel_idx];
+                    std::mem::swap(&mut s.width_mm, &mut s.height_mm);
+                }
+                if ui
+                    .small_button("↔ Horizontal zentrieren")
+                    .clicked()
+                {
+                    let s = &mut self.template_studio.free_slots_mm[sel_idx];
+                    s.x_mm = ((paper_size_mm.width_mm - s.width_mm) * 0.5).max(0.0);
+                }
+                if ui
+                    .small_button("↕ Vertikal zentrieren")
+                    .clicked()
+                {
+                    let s = &mut self.template_studio.free_slots_mm[sel_idx];
+                    s.y_mm = ((paper_size_mm.height_mm - s.height_mm) * 0.5).max(0.0);
+                }
+                if ui.small_button("⧉ Duplizieren").clicked() {
+                    let s = self.template_studio.free_slots_mm[sel_idx];
+                    let dup = RectMm::new(
+                        (s.x_mm + 8.0).min(paper_size_mm.width_mm - s.width_mm),
+                        (s.y_mm + 8.0).min(paper_size_mm.height_mm - s.height_mm),
+                        s.width_mm,
+                        s.height_mm,
+                    );
+                    self.template_studio.free_slots_mm.push(dup);
+                    self.template_studio.selected_free_slot =
+                        Some(self.template_studio.free_slots_mm.len() - 1);
+                }
+                if ui
+                    .add_enabled(
+                        self.template_studio.free_slots_mm.len() > 1,
+                        egui::Button::new("🗑 Löschen").small(),
+                    )
+                    .clicked()
+                {
+                    self.template_studio.free_slots_mm.remove(sel_idx);
+                    self.template_studio.selected_free_slot =
+                        if self.template_studio.free_slots_mm.is_empty() {
+                            None
+                        } else {
+                            Some(sel_idx.saturating_sub(1))
+                        };
+                }
+            });
+        } else {
+            ui.label(
+                RichText::new("Klicke rechts auf dem Bogen eine Bildstelle an, um ihre exakten Millimeter-Maße zu bearbeiten.")
+                    .small()
+                    .color(t.text_faint),
+            );
+        }
+    }
+
+    fn draw_template_studio_preview(
+        &mut self,
+        ui: &mut Ui,
+        paper_size_mm: SizeMm,
+        printable_rect_mm: RectMm,
+    ) {
+        let t = self.tokens;
+        let avail = ui.available_size();
+        let (canvas_rect, canvas_resp) = ui.allocate_exact_size(avail, Sense::click_and_drag());
+        let p = ui.painter_at(canvas_rect);
+
+        // Dark studio backdrop
+        p.rect_filled(
+            canvas_rect,
+            CornerRadius::same(6),
+            Color32::from_rgb(30, 33, 38),
+        );
+
+        let pad = 34.0_f32;
+        let pw = (paper_size_mm.width_mm as f32).max(10.0);
+        let ph = (paper_size_mm.height_mm as f32).max(10.0);
+        let scale = ((canvas_rect.width() - 2.0 * pad) / pw)
+            .min((canvas_rect.height() - 2.0 * pad) / ph)
+            .max(0.2);
+
+        let sheet_size = Vec2::new(pw * scale, ph * scale);
+        let sheet_rect = Rect::from_center_size(canvas_rect.center() + Vec2::new(6.0, 6.0), sheet_size);
+
+        // Drop shadow + White paper sheet
+        p.rect_filled(
+            sheet_rect.translate(Vec2::new(4.0, 5.0)),
+            CornerRadius::ZERO,
+            Color32::from_black_alpha(110),
+        );
+        p.rect_filled(sheet_rect, CornerRadius::ZERO, Color32::from_rgb(248, 248, 246));
+        p.rect_stroke(
+            sheet_rect,
+            CornerRadius::ZERO,
+            Stroke::new(1.0_f32, Color32::from_rgb(130, 135, 145)),
+            StrokeKind::Middle,
+        );
+
+        // Millimeter rulers along top & left of the paper sheet
+        self.draw_sheet_rulers(&p, sheet_rect, pw, ph, scale);
+
+        // Printable area dashed border
+        let pr_screen = mm_rect_to_screen(printable_rect_mm, sheet_rect.min, scale);
+        draw_dashed_rect(
+            &p,
+            pr_screen,
+            Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(120, 150, 190, 120)),
+            5.0,
+            4.0,
+        );
+
+        let sample_caption = |idx: usize, r_mm: RectMm, mode: SlotCaptionMode| -> Option<String> {
+            match mode {
+                SlotCaptionMode::None => None,
+                SlotCaptionMode::Filename => Some(format!("Foto_{:02}.tif", idx + 1)),
+                SlotCaptionMode::NumberAndFilename => {
+                    Some(format!("#{:02}  Foto_{:02}.tif", idx + 1, idx + 1))
+                }
+                SlotCaptionMode::DimensionsAndPpi => {
+                    Some(format!("{:.1}×{:.1} mm (360 ppi)", r_mm.width_mm, r_mm.height_mm))
+                }
+            }
+        };
+
+        if !self.template_studio.is_free_mode {
+            // --- STAGE 1: Interactive Grid & Bento Preview ---
+            let rows = self.template_studio.rows.clamp(1, 10);
+            let cols = self.template_studio.cols.clamp(1, 10);
+
+            // Faint underlying grid cells + hit-testing for cell selection / drag selection
+            let ptr_pos = canvas_resp.interact_pointer_pos();
+            let mut hovered_cell: Option<(usize, usize)> = None;
+
+            for r in 0..rows {
+                for c in 0..cols {
+                    let cell_mm = self.template_studio.grid_cell_rect_mm(paper_size_mm, r, c);
+                    let cell_scr = mm_rect_to_screen(cell_mm, sheet_rect.min, scale);
+                    let is_disabled = self.template_studio.disabled_cells.contains(&(r, c));
+                    draw_dashed_rect(
+                        &p,
+                        cell_scr,
+                        Stroke::new(
+                            1.0_f32,
+                            if is_disabled {
+                                Color32::from_rgb(205, 175, 175)
+                            } else {
+                                Color32::from_rgb(205, 210, 218)
+                            },
+                        ),
+                        4.0,
+                        4.0,
+                    );
+                    if let Some(pos) = ptr_pos
+                        && cell_scr.contains(pos)
+                    {
+                        hovered_cell = Some((r, c));
+                    }
+                }
+            }
+
+            // Handle mouse click / drag across grid cells to select a rectangular range `[r0, c0, r1, c1]`
+            let shift_held = ui.ctx().input(|i| i.modifiers.shift);
+            if canvas_resp.drag_started()
+                && let Some(cell) = hovered_cell
+            {
+                self.template_studio.drag_start_cell = Some(cell);
+                self.template_studio.selected_cells = Some([cell.0, cell.1, cell.0, cell.1]);
+            } else if canvas_resp.dragged()
+                && let (Some(start), Some(cur)) = (self.template_studio.drag_start_cell, hovered_cell)
+            {
+                let r0 = start.0.min(cur.0);
+                let c0 = start.1.min(cur.1);
+                let r1 = start.0.max(cur.0);
+                let c1 = start.1.max(cur.1);
+                self.template_studio.selected_cells = Some([r0, c0, r1, c1]);
+            } else if canvas_resp.clicked()
+                && let Some(cell) = hovered_cell
+            {
+                if shift_held
+                    && let Some([sr0, sc0, _, _]) = self.template_studio.selected_cells
+                {
+                    let r0 = sr0.min(cell.0);
+                    let c0 = sc0.min(cell.1);
+                    let r1 = sr0.max(cell.0);
+                    let c1 = sc0.max(cell.1);
+                    self.template_studio.selected_cells = Some([r0, c0, r1, c1]);
+                } else {
+                    // If clicking inside a merged region, select the whole merged region
+                    if let Some(&span) = self.template_studio.merged_regions.iter().find(
+                        |&&[r0, c0, r1, c1]| {
+                            cell.0 >= r0 && cell.0 <= r1 && cell.1 >= c0 && cell.1 <= c1
+                        },
+                    ) {
+                        self.template_studio.selected_cells = Some(span);
+                    } else {
+                        self.template_studio.selected_cells =
+                            Some([cell.0, cell.1, cell.0, cell.1]);
+                    }
+                }
+            }
+            if canvas_resp.drag_stopped() {
+                self.template_studio.drag_start_cell = None;
+            }
+
+            // Draw active Bento slots
+            let bento_slots = self.template_studio.compute_bento_slots_mm(paper_size_mm);
+            for (idx, (span, slot_mm)) in bento_slots.iter().enumerate() {
+                let slot_scr = mm_rect_to_screen(*slot_mm, sheet_rect.min, scale);
+                let is_merged = span[2] > span[0] || span[3] > span[1];
+                let fill_col = if is_merged {
+                    Color32::from_rgba_unmultiplied(0, 130, 215, 42)
+                } else {
+                    Color32::from_rgba_unmultiplied(60, 130, 200, 26)
+                };
+                p.rect_filled(slot_scr, CornerRadius::same(2), fill_col);
+                p.rect_stroke(
+                    slot_scr,
+                    CornerRadius::same(2),
+                    Stroke::new(1.4_f32, Color32::from_rgb(45, 115, 190)),
+                    StrokeKind::Middle,
+                );
+
+                if self.template_studio.cut_marks {
+                    draw_screen_cut_marks(
+                        &p,
+                        slot_scr,
+                        scale,
+                        Stroke::new(1.1_f32, Color32::from_rgb(55, 60, 68)),
+                    );
+                }
+
+                let label = format!(
+                    "#{} ({:.0} × {:.0} mm)",
+                    idx + 1,
+                    slot_mm.width_mm,
+                    slot_mm.height_mm
+                );
+                p.text(
+                    slot_scr.center(),
+                    egui::Align2::CENTER_CENTER,
+                    label,
+                    FontId::proportional(11.5),
+                    Color32::from_rgb(25, 65, 115),
+                );
+
+                if let Some(cap) =
+                    sample_caption(idx, *slot_mm, self.template_studio.caption_mode)
+                {
+                    p.text(
+                        Pos2::new(slot_scr.center().x, slot_scr.max.y - 12.0),
+                        egui::Align2::CENTER_TOP,
+                        cap,
+                        FontId::proportional(9.5),
+                        Color32::from_rgb(55, 60, 70),
+                    );
+                }
+            }
+
+            // Highlight currently selected cell range `[r0, c0, r1, c1]`
+            if let Some(sel_span) = self.template_studio.selected_cells {
+                let sel_mm = self
+                    .template_studio
+                    .grid_span_rect_mm(paper_size_mm, sel_span);
+                let sel_scr = mm_rect_to_screen(sel_mm, sheet_rect.min, scale);
+                p.rect_stroke(
+                    sel_scr,
+                    CornerRadius::same(2),
+                    Stroke::new(2.4_f32, t.accent),
+                    StrokeKind::Middle,
+                );
+            }
+        } else {
+            // --- STAGE 2: Interactive Free Slot Editor (Mouse Move / Resize + Magnet Snapping) ---
+            let ptr_pos = canvas_resp.interact_pointer_pos();
+            let ptr_mm = ptr_pos.map(|pos| {
+                (
+                    f64::from((pos.x - sheet_rect.min.x) / scale),
+                    f64::from((pos.y - sheet_rect.min.y) / scale),
+                )
+            });
+
+            // Start drag or selection on pointer press/click
+            if (canvas_resp.drag_started() || canvas_resp.clicked())
+                && let Some(pos) = ptr_pos
+            {
+                let mut hit_drag: Option<FreeSlotDragState> = None;
+
+                // First check resize handles of currently selected slot
+                if let Some(sel_idx) = self.template_studio.selected_free_slot
+                    && let Some(&r_mm) = self.template_studio.free_slots_mm.get(sel_idx)
+                {
+                    let r_scr = mm_rect_to_screen(r_mm, sheet_rect.min, scale);
+                    let handle_hit = 7.5_f32;
+                    let handles = [
+                        (r_scr.left_top(), FreeSlotDragKind::ResizeNW),
+                        (r_scr.right_top(), FreeSlotDragKind::ResizeNE),
+                        (r_scr.left_bottom(), FreeSlotDragKind::ResizeSW),
+                        (r_scr.right_bottom(), FreeSlotDragKind::ResizeSE),
+                        (
+                            Pos2::new(r_scr.center().x, r_scr.min.y),
+                            FreeSlotDragKind::ResizeN,
+                        ),
+                        (
+                            Pos2::new(r_scr.center().x, r_scr.max.y),
+                            FreeSlotDragKind::ResizeS,
+                        ),
+                        (
+                            Pos2::new(r_scr.min.x, r_scr.center().y),
+                            FreeSlotDragKind::ResizeW,
+                        ),
+                        (
+                            Pos2::new(r_scr.max.x, r_scr.center().y),
+                            FreeSlotDragKind::ResizeE,
+                        ),
+                    ];
+                    for (h_pos, kind) in handles {
+                        if pos.distance(h_pos) <= handle_hit
+                            && let Some(pmm) = ptr_mm
+                        {
+                            hit_drag = Some(FreeSlotDragState {
+                                slot_index: sel_idx,
+                                kind,
+                                start_pointer_mm: pmm,
+                                initial_rect_mm: r_mm,
+                            });
+                            break;
+                        }
+                    }
+                }
+
+                // Otherwise check slot interiors (topmost last)
+                if hit_drag.is_none() {
+                    let mut hit_slot: Option<usize> = None;
+                    for (idx, &r_mm) in self
+                        .template_studio
+                        .free_slots_mm
+                        .iter()
+                        .enumerate()
+                        .rev()
+                    {
+                        let r_scr = mm_rect_to_screen(r_mm, sheet_rect.min, scale);
+                        if r_scr.contains(pos) {
+                            hit_slot = Some(idx);
+                            if let Some(pmm) = ptr_mm {
+                                hit_drag = Some(FreeSlotDragState {
+                                    slot_index: idx,
+                                    kind: FreeSlotDragKind::Move,
+                                    start_pointer_mm: pmm,
+                                    initial_rect_mm: r_mm,
+                                });
+                            }
+                            break;
+                        }
+                    }
+                    self.template_studio.selected_free_slot = hit_slot;
+                }
+
+                if canvas_resp.drag_started() {
+                    self.template_studio.active_free_drag = hit_drag;
+                }
+            }
+
+            // Update active slot drag (Move or Resize with optional Magnet Snapping)
+            self.template_studio.snap_guide_x_mm = None;
+            self.template_studio.snap_guide_y_mm = None;
+            if canvas_resp.dragged()
+                && let (Some(drag), Some((cur_x_mm, cur_y_mm))) =
+                    (self.template_studio.active_free_drag, ptr_mm)
+                && drag.slot_index < self.template_studio.free_slots_mm.len()
+            {
+                let dx = cur_x_mm - drag.start_pointer_mm.0;
+                let dy = cur_y_mm - drag.start_pointer_mm.1;
+                let init = drag.initial_rect_mm;
+                let mut next = init;
+
+                match drag.kind {
+                    FreeSlotDragKind::Move => {
+                        next.x_mm = (init.x_mm + dx)
+                            .clamp(0.0, (paper_size_mm.width_mm - init.width_mm).max(0.0));
+                        next.y_mm = (init.y_mm + dy)
+                            .clamp(0.0, (paper_size_mm.height_mm - init.height_mm).max(0.0));
+
+                        if self.template_studio.snap_enabled {
+                            next.x_mm = next.x_mm.round();
+                            next.y_mm = next.y_mm.round();
+                            let snap_tol = 2.5_f64;
+
+                            // Snap X (left, center, right) to paper center, margins, or neighbor slots
+                            let mut x_targets = vec![
+                                printable_rect_mm.x_mm,
+                                printable_rect_mm.right_mm(),
+                                paper_size_mm.width_mm * 0.5,
+                            ];
+                            let mut y_targets = vec![
+                                printable_rect_mm.y_mm,
+                                printable_rect_mm.bottom_mm(),
+                                paper_size_mm.height_mm * 0.5,
+                            ];
+                            for (i, other) in
+                                self.template_studio.free_slots_mm.iter().enumerate()
+                            {
+                                if i != drag.slot_index {
+                                    x_targets.push(other.x_mm);
+                                    x_targets.push(other.right_mm());
+                                    x_targets.push(other.x_mm + other.width_mm * 0.5);
+                                    y_targets.push(other.y_mm);
+                                    y_targets.push(other.bottom_mm());
+                                    y_targets.push(other.y_mm + other.height_mm * 0.5);
+                                }
+                            }
+
+                            for tx in x_targets {
+                                if (next.x_mm - tx).abs() <= snap_tol {
+                                    next.x_mm = tx;
+                                    self.template_studio.snap_guide_x_mm = Some(tx);
+                                    break;
+                                } else if (next.right_mm() - tx).abs() <= snap_tol {
+                                    next.x_mm = tx - next.width_mm;
+                                    self.template_studio.snap_guide_x_mm = Some(tx);
+                                    break;
+                                } else if ((next.x_mm + next.width_mm * 0.5) - tx).abs()
+                                    <= snap_tol
+                                {
+                                    next.x_mm = tx - next.width_mm * 0.5;
+                                    self.template_studio.snap_guide_x_mm = Some(tx);
+                                    break;
+                                }
+                            }
+
+                            for ty in y_targets {
+                                if (next.y_mm - ty).abs() <= snap_tol {
+                                    next.y_mm = ty;
+                                    self.template_studio.snap_guide_y_mm = Some(ty);
+                                    break;
+                                } else if (next.bottom_mm() - ty).abs() <= snap_tol {
+                                    next.y_mm = ty - next.height_mm;
+                                    self.template_studio.snap_guide_y_mm = Some(ty);
+                                    break;
+                                } else if ((next.y_mm + next.height_mm * 0.5) - ty).abs()
+                                    <= snap_tol
+                                {
+                                    next.y_mm = ty - next.height_mm * 0.5;
+                                    self.template_studio.snap_guide_y_mm = Some(ty);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    FreeSlotDragKind::ResizeE => {
+                        next.width_mm =
+                            (init.width_mm + dx).clamp(12.0, paper_size_mm.width_mm - init.x_mm);
+                        if self.template_studio.snap_enabled {
+                            next.width_mm = next.width_mm.round();
+                        }
+                    }
+                    FreeSlotDragKind::ResizeS => {
+                        next.height_mm = (init.height_mm + dy)
+                            .clamp(12.0, paper_size_mm.height_mm - init.y_mm);
+                        if self.template_studio.snap_enabled {
+                            next.height_mm = next.height_mm.round();
+                        }
+                    }
+                    FreeSlotDragKind::ResizeW => {
+                        let new_x = (init.x_mm + dx).clamp(0.0, init.right_mm() - 12.0);
+                        next.width_mm = init.right_mm() - new_x;
+                        next.x_mm = new_x;
+                    }
+                    FreeSlotDragKind::ResizeN => {
+                        let new_y = (init.y_mm + dy).clamp(0.0, init.bottom_mm() - 12.0);
+                        next.height_mm = init.bottom_mm() - new_y;
+                        next.y_mm = new_y;
+                    }
+                    FreeSlotDragKind::ResizeSE => {
+                        next.width_mm =
+                            (init.width_mm + dx).clamp(12.0, paper_size_mm.width_mm - init.x_mm);
+                        next.height_mm = (init.height_mm + dy)
+                            .clamp(12.0, paper_size_mm.height_mm - init.y_mm);
+                        if self.template_studio.snap_enabled {
+                            next.width_mm = next.width_mm.round();
+                            next.height_mm = next.height_mm.round();
+                        }
+                    }
+                    FreeSlotDragKind::ResizeNW => {
+                        let new_x = (init.x_mm + dx).clamp(0.0, init.right_mm() - 12.0);
+                        let new_y = (init.y_mm + dy).clamp(0.0, init.bottom_mm() - 12.0);
+                        next.width_mm = init.right_mm() - new_x;
+                        next.height_mm = init.bottom_mm() - new_y;
+                        next.x_mm = new_x;
+                        next.y_mm = new_y;
+                    }
+                    FreeSlotDragKind::ResizeNE => {
+                        let new_y = (init.y_mm + dy).clamp(0.0, init.bottom_mm() - 12.0);
+                        next.width_mm =
+                            (init.width_mm + dx).clamp(12.0, paper_size_mm.width_mm - init.x_mm);
+                        next.height_mm = init.bottom_mm() - new_y;
+                        next.y_mm = new_y;
+                    }
+                    FreeSlotDragKind::ResizeSW => {
+                        let new_x = (init.x_mm + dx).clamp(0.0, init.right_mm() - 12.0);
+                        next.width_mm = init.right_mm() - new_x;
+                        next.x_mm = new_x;
+                        next.height_mm = (init.height_mm + dy)
+                            .clamp(12.0, paper_size_mm.height_mm - init.y_mm);
+                    }
+                }
+
+                self.template_studio.free_slots_mm[drag.slot_index] = next;
+            }
+            if canvas_resp.drag_stopped() {
+                self.template_studio.active_free_drag = None;
+            }
+
+            // Draw magnet snap alignment lines if active
+            if let Some(gx_mm) = self.template_studio.snap_guide_x_mm {
+                let x = sheet_rect.min.x + (gx_mm as f32) * scale;
+                p.line_segment(
+                    [Pos2::new(x, sheet_rect.min.y), Pos2::new(x, sheet_rect.max.y)],
+                    Stroke::new(1.2_f32, Color32::from_rgb(0, 195, 255)),
+                );
+            }
+            if let Some(gy_mm) = self.template_studio.snap_guide_y_mm {
+                let y = sheet_rect.min.y + (gy_mm as f32) * scale;
+                p.line_segment(
+                    [Pos2::new(sheet_rect.min.x, y), Pos2::new(sheet_rect.max.x, y)],
+                    Stroke::new(1.2_f32, Color32::from_rgb(0, 195, 255)),
+                );
+            }
+
+            // Draw all Free Slots + resize handles on the selected slot
+            for (idx, &slot_mm) in self.template_studio.free_slots_mm.iter().enumerate() {
+                let slot_scr = mm_rect_to_screen(slot_mm, sheet_rect.min, scale);
+                let is_sel = self.template_studio.selected_free_slot == Some(idx);
+
+                let fill_col = if is_sel {
+                    Color32::from_rgba_unmultiplied(0, 135, 230, 48)
+                } else {
+                    Color32::from_rgba_unmultiplied(70, 130, 190, 26)
+                };
+                p.rect_filled(slot_scr, CornerRadius::same(2), fill_col);
+                p.rect_stroke(
+                    slot_scr,
+                    CornerRadius::same(2),
+                    Stroke::new(
+                        if is_sel { 2.0_f32 } else { 1.3_f32 },
+                        if is_sel {
+                            t.accent
+                        } else {
+                            Color32::from_rgb(55, 115, 180)
+                        },
+                    ),
+                    StrokeKind::Middle,
+                );
+
+                if self.template_studio.cut_marks {
+                    draw_screen_cut_marks(
+                        &p,
+                        slot_scr,
+                        scale,
+                        Stroke::new(1.1_f32, Color32::from_rgb(55, 60, 68)),
+                    );
+                }
+
+                let label = format!(
+                    "#{} ({:.1} × {:.1} mm)\nX={:.1}, Y={:.1}",
+                    idx + 1,
+                    slot_mm.width_mm,
+                    slot_mm.height_mm,
+                    slot_mm.x_mm,
+                    slot_mm.y_mm
+                );
+                p.text(
+                    slot_scr.center(),
+                    egui::Align2::CENTER_CENTER,
+                    label,
+                    FontId::proportional(11.0),
+                    Color32::from_rgb(20, 60, 110),
+                );
+
+                if let Some(cap) =
+                    sample_caption(idx, slot_mm, self.template_studio.caption_mode)
+                {
+                    p.text(
+                        Pos2::new(slot_scr.center().x, slot_scr.max.y - 12.0),
+                        egui::Align2::CENTER_TOP,
+                        cap,
+                        FontId::proportional(9.5),
+                        Color32::from_rgb(55, 60, 70),
+                    );
+                }
+
+                if is_sel {
+                    let handle_pts = [
+                        slot_scr.left_top(),
+                        slot_scr.right_top(),
+                        slot_scr.left_bottom(),
+                        slot_scr.right_bottom(),
+                        Pos2::new(slot_scr.center().x, slot_scr.min.y),
+                        Pos2::new(slot_scr.center().x, slot_scr.max.y),
+                        Pos2::new(slot_scr.min.x, slot_scr.center().y),
+                        Pos2::new(slot_scr.max.x, slot_scr.center().y),
+                    ];
+                    for hp in handle_pts {
+                        let hr = Rect::from_center_size(hp, Vec2::splat(7.0));
+                        p.rect_filled(hr, CornerRadius::same(1), Color32::WHITE);
+                        p.rect_stroke(
+                            hr,
+                            CornerRadius::same(1),
+                            Stroke::new(1.5_f32, t.accent),
+                            StrokeKind::Middle,
+                        );
+                    }
+                }
+            }
         }
     }
 }
@@ -4832,6 +6479,34 @@ fn mm_rect_to_screen(r: lumaprint_geom::RectMm, sheet_origin: Pos2, scale: f32) 
     )
 }
 
+/// Draws fine L-shaped corner cut marks outside the 4 corners of `rect` on screen.
+fn draw_screen_cut_marks(painter: &egui::Painter, rect: Rect, scale: f32, stroke: Stroke) {
+    let gap = (0.8 * scale).clamp(2.0, 6.0);
+    let len = (3.0 * scale).clamp(5.0, 14.0);
+    let x0 = rect.min.x;
+    let y0 = rect.min.y;
+    let x1 = rect.max.x;
+    let y1 = rect.max.y;
+
+    let segments = [
+        // Top-left
+        (Pos2::new(x0 - gap - len, y0), Pos2::new(x0 - gap, y0)),
+        (Pos2::new(x0, y0 - gap - len), Pos2::new(x0, y0 - gap)),
+        // Top-right
+        (Pos2::new(x1 + gap, y0), Pos2::new(x1 + gap + len, y0)),
+        (Pos2::new(x1, y0 - gap - len), Pos2::new(x1, y0 - gap)),
+        // Bottom-left
+        (Pos2::new(x0 - gap - len, y1), Pos2::new(x0 - gap, y1)),
+        (Pos2::new(x0, y1 + gap), Pos2::new(x0, y1 + gap + len)),
+        // Bottom-right
+        (Pos2::new(x1 + gap, y1), Pos2::new(x1 + gap + len, y1)),
+        (Pos2::new(x1, y1 + gap), Pos2::new(x1, y1 + gap + len)),
+    ];
+    for (a, b) in segments {
+        painter.line_segment([a, b], stroke);
+    }
+}
+
 fn build_thumbnail_color_image(buf: &ImageBuffer16, max_w: u32, max_h: u32) -> ColorImage {
     let src_w = buf.width.max(1);
     let src_h = buf.height.max(1);
@@ -5242,4 +6917,62 @@ mod tests {
             "Clicking on the occupied image should re-select the slot"
         );
     }
+
+    #[test]
+    fn two_stage_template_studio_bento_and_free_mode_with_cut_marks_and_captions() {
+        let ctx = Context::default();
+        let mut app = LumaPrintApp::new();
+        app.show_template_builder_modal = true;
+        app.template_studio.name = String::from("Bento 1+3 Frei");
+        app.template_studio.rows = 3;
+        app.template_studio.cols = 3;
+        app.template_studio.selected_cells = Some([0, 0, 1, 2]);
+        app.template_studio.merge_selected_cells();
+        app.template_studio.cut_marks = true;
+        app.template_studio.caption_mode = SlotCaptionMode::NumberAndFilename;
+
+        let (paper_mm, printable_mm) =
+            app.studio_paper_and_printable_mm(app.template_studio.orientation);
+        // 3x3 grid with top 2x3 merged -> 1 large hero slot + 3 bottom slots = 4 slots total
+        assert_eq!(
+            app.template_studio.compute_bento_slots_mm(paper_mm).len(),
+            4
+        );
+
+        // Render Stage 1 modal frame
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            app.render_ui(ctx);
+        });
+
+        // Switch one-way into Stage 2 Free Mode and adjust slot 0 manually to 100x150 mm
+        app.template_studio.enter_free_mode(paper_mm);
+        assert!(app.template_studio.is_free_mode);
+        assert_eq!(app.template_studio.free_slots_mm.len(), 4);
+        app.template_studio.free_slots_mm[0] = RectMm::new(15.0, 15.0, 100.0, 150.0);
+
+        // Render Stage 2 modal frame
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            app.render_ui(ctx);
+        });
+
+        // Save custom template and verify solver + 16-bit renderer
+        let tpl = app
+            .template_studio
+            .build_layout_template(paper_mm, printable_mm);
+        app.exec(EngineCommand::SaveCustomTemplate(tpl));
+        assert!(matches!(app.session.doc.layout, LayoutMode::Template(_)));
+
+        let solved = lumaprint_layout::solve_page_layout(&app.session.doc);
+        assert_eq!(solved.slots.len(), 4);
+        assert!(solved.slots[0].cut_marks);
+        assert!(
+            solved.slots[0]
+                .caption_text
+                .as_deref()
+                .is_some_and(|c| c.starts_with("#01"))
+        );
+        assert!((solved.slots[0].slot_rect_mm.width_mm - 100.0).abs() < 0.01);
+        assert!((solved.slots[0].slot_rect_mm.height_mm - 150.0).abs() < 0.01);
+    }
 }
+

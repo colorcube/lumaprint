@@ -16,7 +16,7 @@
 
 use lumaprint_doc::{
     CenteringMode, FrameLineSpec, GalleryWrapEffect, LayoutMode, LayoutTemplate,
-    PaperSource, PrintJobDocument, SizingCriterion, SourceImageEntry,
+    PaperSource, PrintJobDocument, SizingCriterion, SlotCaptionMode, SourceImageEntry,
 };
 use lumaprint_geom::{
     BorderlessExpandLevel, MarginsMm, Orientation, RectMm, SizeMm, find_paper_size,
@@ -37,6 +37,10 @@ pub struct SolvedImageSlot {
     pub effective_ppi: Option<f64>,
     pub frame_line: FrameLineSpec,
     pub rotated_90: bool,
+    #[serde(default)]
+    pub cut_marks: bool,
+    #[serde(default)]
+    pub caption_text: Option<String>,
 }
 
 /// Solved Gallery Wrap fold & cut guide geometry (`Gallerie Wrap`, EPL manual p. 26–27).
@@ -73,6 +77,9 @@ pub fn builtin_templates() -> Vec<LayoutTemplate> {
             id: "EPL_ThemeLayout1".into(),
             name: "EPL Theme 1 – Klassisches Einzelbild".into(),
             normalized_slots: vec![[0.08, 0.06, 0.84, 0.88]],
+            fixed_slots_mm: Vec::new(),
+            cut_marks: false,
+            caption_mode: SlotCaptionMode::None,
         },
         LayoutTemplate {
             id: "EPL_ThemeLayout4".into(),
@@ -83,6 +90,9 @@ pub fn builtin_templates() -> Vec<LayoutTemplate> {
                 [0.385, 0.750, 0.230, 0.228],
                 [0.635, 0.750, 0.230, 0.228],
             ],
+            fixed_slots_mm: Vec::new(),
+            cut_marks: false,
+            caption_mode: SlotCaptionMode::None,
         },
         LayoutTemplate {
             id: "EPL_ThemeLayout5".into(),
@@ -94,6 +104,9 @@ pub fn builtin_templates() -> Vec<LayoutTemplate> {
                 [0.060, 0.735, 0.433, 0.204],
                 [0.507, 0.735, 0.433, 0.204],
             ],
+            fixed_slots_mm: Vec::new(),
+            cut_marks: false,
+            caption_mode: SlotCaptionMode::None,
         },
     ];
     list.push(build_grid_template(
@@ -158,6 +171,9 @@ pub fn build_grid_template(id: &str, name: &str, rows: usize, cols: usize) -> La
         id: id.to_string(),
         name: name.to_string(),
         normalized_slots: slots,
+        fixed_slots_mm: Vec::new(),
+        cut_marks: false,
+        caption_mode: SlotCaptionMode::None,
     }
 }
 
@@ -230,7 +246,13 @@ pub fn slots_capacity_for_layout(doc: &PrintJobDocument, layout: &LayoutMode) ->
                 .iter()
                 .chain(all_templates.iter())
                 .find(|t| t.id == tpl_spec.template_id)
-                .map(|t| t.normalized_slots.len().max(1))
+                .map(|t| {
+                    if !t.fixed_slots_mm.is_empty() {
+                        t.fixed_slots_mm.len().max(1)
+                    } else {
+                        t.normalized_slots.len().max(1)
+                    }
+                })
                 .unwrap_or(4)
         }
         LayoutMode::FreeComposer(_) => 25,
@@ -320,6 +342,8 @@ pub fn solve_page_layout_at(doc: &PrintJobDocument, page_index: usize) -> Solved
                     effective_ppi,
                     frame_line: std_spec.frame_line,
                     rotated_90: false,
+                    cut_marks: false,
+                    caption_text: None,
                 }],
                 gallery_wrap: None,
                 warnings,
@@ -374,6 +398,8 @@ pub fn solve_page_layout_at(doc: &PrintJobDocument, page_index: usize) -> Solved
                     effective_ppi,
                     frame_line: FrameLineSpec::default(),
                     rotated_90: false,
+                    cut_marks: false,
+                    caption_text: None,
                 }],
                 gallery_wrap: None,
                 warnings,
@@ -470,6 +496,8 @@ pub fn solve_page_layout_at(doc: &PrintJobDocument, page_index: usize) -> Solved
                     effective_ppi,
                     frame_line: FrameLineSpec::default(),
                     rotated_90: false,
+                    cut_marks: false,
+                    caption_text: None,
                 }],
                 gallery_wrap: Some(SolvedGalleryWrapGuides {
                     front_canvas_rect_mm,
@@ -503,21 +531,52 @@ pub fn solve_page_layout_at(doc: &PrintJobDocument, page_index: usize) -> Solved
                     build_grid_template("Fallback_2x2", "2x2 Raster", 2, 2)
                 });
 
-            let mut slots = Vec::with_capacity(tpl.normalized_slots.len());
-            for (idx, &[nx, ny, nw, nh]) in tpl.normalized_slots.iter().enumerate() {
-                let slot_rect_mm = RectMm::new(
-                    printable_rect_mm.x_mm + nx * printable_rect_mm.width_mm,
-                    printable_rect_mm.y_mm + ny * printable_rect_mm.height_mm,
-                    nw * printable_rect_mm.width_mm,
-                    nh * printable_rect_mm.height_mm,
-                );
+            let cut_marks = tpl_spec.cut_marks || tpl.cut_marks;
+            let caption_mode = if tpl_spec.caption_mode != SlotCaptionMode::None {
+                tpl_spec.caption_mode
+            } else {
+                tpl.caption_mode
+            };
+
+            let raw_slot_rects: Vec<RectMm> = if !tpl.fixed_slots_mm.is_empty() {
+                tpl.fixed_slots_mm.clone()
+            } else {
+                tpl.normalized_slots
+                    .iter()
+                    .map(|&[nx, ny, nw, nh]| {
+                        RectMm::new(
+                            printable_rect_mm.x_mm + nx * printable_rect_mm.width_mm,
+                            printable_rect_mm.y_mm + ny * printable_rect_mm.height_mm,
+                            nw * printable_rect_mm.width_mm,
+                            nh * printable_rect_mm.height_mm,
+                        )
+                    })
+                    .collect()
+            };
+
+            let mut slots = Vec::with_capacity(raw_slot_rects.len());
+            for (idx, slot_rect_mm) in raw_slot_rects.into_iter().enumerate() {
                 let assigned_id = page_slots.get(idx).copied().flatten();
                 let assigned_img =
                     assigned_id.and_then(|id| doc.images.iter().find(|i| i.id == id));
 
+                // Reserve 4.5 mm below the image for caption text when active and slot is tall enough
+                let caption_reserve_mm =
+                    if caption_mode != SlotCaptionMode::None && slot_rect_mm.height_mm > 16.0 {
+                        4.5
+                    } else {
+                        0.0
+                    };
+                let image_area_rect_mm = RectMm::new(
+                    slot_rect_mm.x_mm,
+                    slot_rect_mm.y_mm,
+                    slot_rect_mm.width_mm,
+                    (slot_rect_mm.height_mm - caption_reserve_mm).max(4.0),
+                );
+
                 let (image_draw_rect_mm, uv_rect, effective_ppi) = if let Some(img) = assigned_img {
                     let (dr, uv, ppi) = solve_slot_draw_and_uv(
-                        slot_rect_mm,
+                        image_area_rect_mm,
                         img,
                         !tpl_spec.show_full_images,
                         true,
@@ -526,7 +585,30 @@ pub fn solve_page_layout_at(doc: &PrintJobDocument, page_index: usize) -> Solved
                     );
                     (dr, uv, Some(ppi))
                 } else {
-                    (slot_rect_mm, [0.0, 0.0, 1.0, 1.0], None)
+                    (image_area_rect_mm, [0.0, 0.0, 1.0, 1.0], None)
+                };
+
+                let caption_text = match caption_mode {
+                    SlotCaptionMode::None => None,
+                    SlotCaptionMode::Filename => Some(
+                        assigned_img
+                            .map(|img| img.display_name.clone())
+                            .unwrap_or_else(|| format!("Slot #{}", idx + 1)),
+                    ),
+                    SlotCaptionMode::NumberAndFilename => Some(match assigned_img {
+                        Some(img) => format!("#{:02}  {}", idx + 1, img.display_name),
+                        None => format!("#{:02}  (leer)", idx + 1),
+                    }),
+                    SlotCaptionMode::DimensionsAndPpi => Some(match (assigned_img, effective_ppi) {
+                        (Some(_), Some(ppi)) => format!(
+                            "{:.1}x{:.1} mm ({:.0} ppi)",
+                            image_draw_rect_mm.width_mm, image_draw_rect_mm.height_mm, ppi
+                        ),
+                        _ => format!(
+                            "{:.1}x{:.1} mm",
+                            image_area_rect_mm.width_mm, image_area_rect_mm.height_mm
+                        ),
+                    }),
                 };
 
                 slots.push(SolvedImageSlot {
@@ -538,6 +620,8 @@ pub fn solve_page_layout_at(doc: &PrintJobDocument, page_index: usize) -> Solved
                     effective_ppi,
                     frame_line: tpl_spec.frame_line,
                     rotated_90: false,
+                    cut_marks,
+                    caption_text,
                 });
             }
 
@@ -582,6 +666,8 @@ pub fn solve_page_layout_at(doc: &PrintJobDocument, page_index: usize) -> Solved
                     effective_ppi: None,
                     frame_line: comp_spec.frame_line,
                     rotated_90: false,
+                    cut_marks: false,
+                    caption_text: None,
                 });
             }
             SolvedPageLayout {
@@ -657,6 +743,8 @@ pub fn solve_auto_nested_slots(
             effective_ppi: Some(ppi),
             frame_line,
             rotated_90,
+            cut_marks: false,
+            caption_text: None,
         });
 
         cur_x += w + gap;
