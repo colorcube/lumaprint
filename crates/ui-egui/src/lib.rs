@@ -87,6 +87,7 @@ pub struct LumaPrintApp {
     last_nav_add_rect: Option<Rect>,
     pending_os_dropped_paths: Option<(Vec<std::path::PathBuf>, u8)>,
     dialog_rx: Option<std::sync::mpsc::Receiver<NativeDialogResult>>,
+    last_rendered_preview_dpi: u32,
 }
 
 impl Default for LumaPrintApp {
@@ -132,6 +133,7 @@ impl LumaPrintApp {
             last_nav_add_rect: None,
             pending_os_dropped_paths: None,
             dialog_rx: None,
+            last_rendered_preview_dpi: 0,
         }
     }
 
@@ -560,33 +562,59 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
     }
 
     fn refresh_preview_if_needed(&mut self, ctx: &Context) {
-        if !self.dirty_preview && self.page_texture.is_some() {
+        let solved_geom = self.session.solve_layout();
+        let long_mm = solved_geom
+            .paper_size_mm
+            .width_mm
+            .max(solved_geom.paper_size_mm.height_mm)
+            .max(25.4);
+        let max_tex_side = (ctx.input(|i| i.max_texture_side).saturating_sub(32)).clamp(1024, 4096)
+            as f64;
+        let target_long_px = (1800.0 * f64::from(self.zoom.max(1.0)))
+            .clamp(1600.0, 2800.0)
+            .min(max_tex_side);
+        let preview_dpi = ((target_long_px * 25.4 / long_mm).floor() as u32).clamp(72, 600);
+
+        let zoom_needs_higher_dpi = self.page_texture.is_some()
+            && preview_dpi > self.last_rendered_preview_dpi.saturating_add(16);
+
+        if !self.dirty_preview && self.page_texture.is_some() && !zoom_needs_higher_dpi {
             return;
         }
-        // Render active page at interactive screen DPI (36 dpi) with live Softproof / ABW / ICC
-        if let Ok((buf16, solved)) = self.session.render_page(36, true) {
+
+        // Render active page at high screen resolution (~1800..2500 px long edge) with live Softproof / ABW / ICC
+        if let Ok((buf16, solved)) = self.session.render_page(preview_dpi, true) {
             let rgb8 = buf16.to_rgb8_vec();
             let img = ColorImage::from_rgb([buf16.width as usize, buf16.height as usize], &rgb8);
             self.page_texture =
                 Some(ctx.load_texture("page_preview", img, TextureOptions::LINEAR));
             self.cached_solved = Some(solved);
+            self.last_rendered_preview_dpi = preview_dpi;
         }
 
-        // Render miniature thumbnails & solved layouts for all sheets (for Page Navigator & Overview)
-        self.page_thumb_textures.clear();
-        self.cached_all_solved.clear();
-        let total_pages = self.session.doc.page_count();
-        for pi in 0..total_pages {
-            if let Ok((buf16, solved)) = self.session.render_page_at(pi, 18, true) {
-                let rgb8 = buf16.to_rgb8_vec();
-                let img =
-                    ColorImage::from_rgb([buf16.width as usize, buf16.height as usize], &rgb8);
-                let tex = ctx.load_texture(format!("page_thumb_{pi}"), img, TextureOptions::LINEAR);
-                self.page_thumb_textures.insert(pi, tex);
-                self.cached_all_solved.push(solved);
+        if self.dirty_preview {
+            // Render thumbnails & solved layouts for all sheets (for Page Navigator & Overview)
+            self.page_thumb_textures.clear();
+            self.cached_all_solved.clear();
+            let thumb_target_px = match self.session.doc.canvas_view_mode {
+                CanvasViewMode::AllPagesOverview => 720.0,
+                CanvasViewMode::SinglePage => 360.0,
+            };
+            let thumb_dpi = ((thumb_target_px * 25.4 / long_mm).round() as u32).clamp(48, 300);
+            let total_pages = self.session.doc.page_count();
+            for pi in 0..total_pages {
+                if let Ok((buf16, solved)) = self.session.render_page_at(pi, thumb_dpi, true) {
+                    let rgb8 = buf16.to_rgb8_vec();
+                    let img =
+                        ColorImage::from_rgb([buf16.width as usize, buf16.height as usize], &rgb8);
+                    let tex =
+                        ctx.load_texture(format!("page_thumb_{pi}"), img, TextureOptions::LINEAR);
+                    self.page_thumb_textures.insert(pi, tex);
+                    self.cached_all_solved.push(solved);
+                }
             }
+            self.dirty_preview = false;
         }
-        self.dirty_preview = false;
     }
 
     fn rotate_image_by(&mut self, image_id: u64, delta_deg: i32) {
@@ -1337,17 +1365,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         });
 
         ui.add_space(2.0);
-        ui.horizontal(|ui| {
-            ui.checkbox(
-                &mut self.session.doc.pool_filter_unassigned_only,
-                "Nur unplatzierte zeigen",
-            );
-            ui.label(
-                RichText::new("· Drag&Drop auf Bogen")
-                    .small()
-                    .color(t.text_faint),
-            );
-        });
+        ui.checkbox(
+            &mut self.session.doc.pool_filter_unassigned_only,
+            "Nur unplatzierte zeigen",
+        );
 
         ui.add_space(4.0);
         ui.separator();
@@ -4624,18 +4645,40 @@ fn build_thumbnail_color_image(buf: &ImageBuffer16, max_w: u32, max_h: u32) -> C
 
     let mut rgb8 = Vec::with_capacity((dst_w as usize) * (dst_h as usize) * 3);
     for dy in 0..dst_h {
-        let sy = ((u64::from(dy) * u64::from(src_h)) / u64::from(dst_h))
-            .min(u64::from(src_h.saturating_sub(1))) as u32;
+        let sy0 = ((u64::from(dy) * u64::from(src_h)) / u64::from(dst_h)) as u32;
+        let sy1 = (((u64::from(dy + 1) * u64::from(src_h)) / u64::from(dst_h)) as u32)
+            .max(sy0 + 1)
+            .min(src_h);
+        let step_y = ((sy1 - sy0) / 3).max(1);
         for dx in 0..dst_w {
-            let sx = ((u64::from(dx) * u64::from(src_w)) / u64::from(dst_w))
-                .min(u64::from(src_w.saturating_sub(1))) as u32;
-            let px = buf
-                .get_pixel(sx, sy)
-                .map(|p| p.to_rgb8())
-                .unwrap_or(Rgb8 { r: 0, g: 0, b: 0 });
-            rgb8.push(px.r);
-            rgb8.push(px.g);
-            rgb8.push(px.b);
+            let sx0 = ((u64::from(dx) * u64::from(src_w)) / u64::from(dst_w)) as u32;
+            let sx1 = (((u64::from(dx + 1) * u64::from(src_w)) / u64::from(dst_w)) as u32)
+                .max(sx0 + 1)
+                .min(src_w);
+            let step_x = ((sx1 - sx0) / 3).max(1);
+
+            let mut r_acc = 0u64;
+            let mut g_acc = 0u64;
+            let mut b_acc = 0u64;
+            let mut count = 0u64;
+            let mut sy = sy0;
+            while sy < sy1 {
+                let mut sx = sx0;
+                while sx < sx1 {
+                    if let Some(p) = buf.get_pixel(sx, sy) {
+                        r_acc += u64::from(p.r);
+                        g_acc += u64::from(p.g);
+                        b_acc += u64::from(p.b);
+                        count += 1;
+                    }
+                    sx += step_x;
+                }
+                sy += step_y;
+            }
+            let div = count.max(1);
+            rgb8.push((((r_acc / div) + 128) / 257) as u8);
+            rgb8.push((((g_acc / div) + 128) / 257) as u8);
+            rgb8.push((((b_acc / div) + 128) / 257) as u8);
         }
     }
     ColorImage::from_rgb([dst_w as usize, dst_h as usize], &rgb8)

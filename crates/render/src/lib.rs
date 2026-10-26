@@ -91,19 +91,21 @@ pub fn render_page_at_16bit(
         let src_entry = doc.images.iter().find(|e| e.id == img_id);
         let crop = src_entry.map(|e| e.crop).unwrap_or_default();
 
-        // Prepare a working copy of the image with non-destructive crop, rotation, flip, zoom/pan, and color/ABW/ICC applied
-        let mut proc_buf =
-            extract_cropped_and_rotated(src_buf, crop, slot.rotated_90, slot.uv_rect)?;
-        apply_color_pipeline(
-            doc,
-            &mut proc_buf,
-            *src_space,
-            icc_profile,
-            for_screen_preview,
-        );
-
-        // If Gallery Wrap is active, synthesize the wrap borders around `image_draw_rect_mm`
+        // Compute target slot pixel dimensions at `target_dpi` first so we resample directly to the
+        // target slot resolution (with area-averaging when downscaling and Catmull-Rom bicubic when upscaling)
+        // before running the 16-bit color/ICC/softproof pipeline.
         if let Some(gw) = &solved.gallery_wrap {
+            let fw = mm_to_dots(gw.front_canvas_rect_mm.width_mm, target_dpi).max(1) as u32;
+            let fh = mm_to_dots(gw.front_canvas_rect_mm.height_mm, target_dpi).max(1) as u32;
+            let mut proc_buf =
+                resample_slot_16bit(src_buf, crop, slot.rotated_90, slot.uv_rect, fw, fh)?;
+            apply_color_pipeline(
+                doc,
+                &mut proc_buf,
+                *src_space,
+                icc_profile,
+                for_screen_preview,
+            );
             blit_gallery_wrap(
                 &mut page_buf,
                 &proc_buf,
@@ -113,7 +115,20 @@ pub fn render_page_at_16bit(
                 target_dpi,
             );
         } else {
-            blit_scaled_bilinear(&mut page_buf, &proc_buf, slot.image_draw_rect_mm, target_dpi);
+            let dx0 = mm_to_dots(slot.image_draw_rect_mm.x_mm, target_dpi);
+            let dy0 = mm_to_dots(slot.image_draw_rect_mm.y_mm, target_dpi);
+            let dw = mm_to_dots(slot.image_draw_rect_mm.width_mm, target_dpi).max(1) as u32;
+            let dh = mm_to_dots(slot.image_draw_rect_mm.height_mm, target_dpi).max(1) as u32;
+            let mut proc_buf =
+                resample_slot_16bit(src_buf, crop, slot.rotated_90, slot.uv_rect, dw, dh)?;
+            apply_color_pipeline(
+                doc,
+                &mut proc_buf,
+                *src_space,
+                icc_profile,
+                for_screen_preview,
+            );
+            blit_exact(&mut page_buf, &proc_buf, dx0, dy0);
         }
 
         // Draw frame line if enabled
@@ -206,72 +221,128 @@ fn apply_color_pipeline(
     }
 }
 
-fn extract_cropped_and_rotated(
+/// Resamples `src` directly into a `(dst_w, dst_h)` buffer with non-destructive crop, rotation,
+/// horizontal/vertical flip, and slot zoom/pan (`uv_rect`), using multi-tap area averaging when
+/// downscaling and Catmull-Rom bicubic interpolation when upscaling.
+fn resample_slot_16bit(
     src: &ImageBuffer16,
     crop: lumaprint_doc::CropSpec,
     extra_rot90: bool,
     uv_rect: [f64; 4],
+    dst_w: u32,
+    dst_h: u32,
 ) -> Result<ImageBuffer16, ColorError> {
-    let x0 = ((crop.norm_x.clamp(0.0, 0.95) * f64::from(src.width)).round() as u32)
-        .min(src.width.saturating_sub(1));
-    let y0 = ((crop.norm_y.clamp(0.0, 0.95) * f64::from(src.height)).round() as u32)
-        .min(src.height.saturating_sub(1));
-    let cw = ((crop.norm_w.clamp(0.05, 1.0) * f64::from(src.width)).round() as u32)
-        .clamp(1, src.width - x0);
-    let ch = ((crop.norm_h.clamp(0.05, 1.0) * f64::from(src.height)).round() as u32)
-        .clamp(1, src.height - y0);
+    let dst_w = dst_w.max(1);
+    let dst_h = dst_h.max(1);
+    let mut dst = ImageBuffer16::new_solid(dst_w, dst_h, Rgb16::WHITE)?;
 
-    let cropped = extract_subrect(src, x0, y0, cw, ch)?;
+    let nx0 = (crop.norm_x.clamp(0.0, 0.95)) as f32;
+    let ny0 = (crop.norm_y.clamp(0.0, 0.95)) as f32;
+    let nw = (crop.norm_w.clamp(0.05, 1.0) as f32)
+        .min(1.0 - nx0)
+        .max(1e-4);
+    let nh = (crop.norm_h.clamp(0.05, 1.0) as f32)
+        .min(1.0 - ny0)
+        .max(1e-4);
+
+    let u0 = (uv_rect[0].clamp(0.0, 0.95)) as f32;
+    let v0 = (uv_rect[1].clamp(0.0, 0.95)) as f32;
+    let uw = (uv_rect[2].clamp(0.05, 1.0) as f32)
+        .min(1.0 - u0)
+        .max(1e-4);
+    let vh = (uv_rect[3].clamp(0.05, 1.0) as f32)
+        .min(1.0 - v0)
+        .max(1e-4);
+
     let total_rot = (crop.rotation_deg + if extra_rot90 { 90 } else { 0 }) % 360;
-    let mut rotated = match total_rot {
-        90 => rotate_90_cw(&cropped)?,
-        180 => rotate_180(&cropped)?,
-        270 => rotate_270_cw(&cropped)?,
-        _ => cropped,
+    let crop_px_w = nw * (src.width.max(1) as f32);
+    let crop_px_h = nh * (src.height.max(1) as f32);
+    let (rot_px_w, rot_px_h) = match total_rot {
+        90 | 270 => (crop_px_h, crop_px_w),
+        _ => (crop_px_w, crop_px_h),
     };
-    if crop.flip_horizontal {
-        rotated = flip_horizontal_16(&rotated)?;
-    }
-    if crop.flip_vertical {
-        rotated = flip_vertical_16(&rotated)?;
-    }
+    let eff_src_w = rot_px_w * uw;
+    let eff_src_h = rot_px_h * vh;
 
-    let [u0, v0, uw, vh] = uv_rect;
-    if u0.abs() > 1e-4 || v0.abs() > 1e-4 || (uw - 1.0).abs() > 1e-4 || (vh - 1.0).abs() > 1e-4 {
-        let ux0 = ((u0.clamp(0.0, 0.95) * f64::from(rotated.width)).round() as u32)
-            .min(rotated.width.saturating_sub(1));
-        let vy0 = ((v0.clamp(0.0, 0.95) * f64::from(rotated.height)).round() as u32)
-            .min(rotated.height.saturating_sub(1));
-        let uw_px = ((uw.clamp(0.05, 1.0) * f64::from(rotated.width)).round() as u32)
-            .clamp(1, rotated.width - ux0);
-        let vh_px = ((vh.clamp(0.05, 1.0) * f64::from(rotated.height)).round() as u32)
-            .clamp(1, rotated.height - vy0);
-        rotated = extract_subrect(&rotated, ux0, vy0, uw_px, vh_px)?;
-    }
-    Ok(rotated)
-}
+    // Supersample grid per output pixel when downscaling (each tap is bilinearly interpolated,
+    // so 3x3 taps blend a 6x6 source pixel footprint smoothly without aliasing).
+    let sub_x = ((eff_src_w / (dst_w as f32) * 0.65).ceil() as u32).clamp(1, 3);
+    let sub_y = ((eff_src_h / (dst_h as f32) * 0.65).ceil() as u32).clamp(1, 3);
+    let use_bicubic = sub_x == 1 && sub_y == 1 && (eff_src_w < dst_w as f32 || eff_src_h < dst_h as f32);
 
-fn flip_horizontal_16(src: &ImageBuffer16) -> Result<ImageBuffer16, ColorError> {
-    let mut dst = ImageBuffer16::new_solid(src.width, src.height, Rgb16::WHITE)?;
-    for y in 0..src.height {
-        for x in 0..src.width {
-            if let Some(px) = src.get_pixel(x, y) {
-                dst.set_pixel(src.width - 1 - x, y, px);
+    let map_uv = |u_slot: f32, v_slot: f32| -> (f32, f32) {
+        let u_rot = u0 + u_slot * uw;
+        let v_rot = v0 + v_slot * vh;
+        let u_rf = if crop.flip_horizontal {
+            1.0 - u_rot
+        } else {
+            u_rot
+        };
+        let v_rf = if crop.flip_vertical {
+            1.0 - v_rot
+        } else {
+            v_rot
+        };
+        let (u_crop, v_crop) = match total_rot {
+            90 => (v_rf, 1.0 - u_rf),
+            180 => (1.0 - u_rf, 1.0 - v_rf),
+            270 => (1.0 - v_rf, u_rf),
+            _ => (u_rf, v_rf),
+        };
+        (
+            (nx0 + u_crop * nw).clamp(0.0, 1.0),
+            (ny0 + v_crop * nh).clamp(0.0, 1.0),
+        )
+    };
+
+    let w_usize = dst_w as usize;
+    let inv_w = 1.0 / (dst_w as f32);
+    let inv_h = 1.0 / (dst_h as f32);
+    let total_taps = sub_x * sub_y;
+
+    dst.data
+        .par_chunks_exact_mut(w_usize * 3)
+        .enumerate()
+        .for_each(|(dy, row_out)| {
+            for dx in 0..dst_w {
+                let px = if use_bicubic {
+                    let u_slot = (dx as f32 + 0.5) * inv_w;
+                    let v_slot = (dy as f32 + 0.5) * inv_h;
+                    let (u_src, v_src) = map_uv(u_slot, v_slot);
+                    sample_bicubic_16(src, u_src, v_src)
+                } else if total_taps == 1 {
+                    let u_slot = (dx as f32 + 0.5) * inv_w;
+                    let v_slot = (dy as f32 + 0.5) * inv_h;
+                    let (u_src, v_src) = map_uv(u_slot, v_slot);
+                    sample_bilinear_16(src, u_src, v_src)
+                } else {
+                    let mut r_acc = 0u32;
+                    let mut g_acc = 0u32;
+                    let mut b_acc = 0u32;
+                    for sy in 0..sub_y {
+                        let v_slot = (dy as f32 + (sy as f32 + 0.5) / (sub_y as f32)) * inv_h;
+                        for sx in 0..sub_x {
+                            let u_slot = (dx as f32 + (sx as f32 + 0.5) / (sub_x as f32)) * inv_w;
+                            let (u_src, v_src) = map_uv(u_slot, v_slot);
+                            let s = sample_bilinear_16(src, u_src, v_src);
+                            r_acc += u32::from(s.r);
+                            g_acc += u32::from(s.g);
+                            b_acc += u32::from(s.b);
+                        }
+                    }
+                    Rgb16 {
+                        r: ((r_acc + total_taps / 2) / total_taps) as u16,
+                        g: ((g_acc + total_taps / 2) / total_taps) as u16,
+                        b: ((b_acc + total_taps / 2) / total_taps) as u16,
+                    }
+                };
+                let off = (dx as usize) * 3;
+                row_out[off] = px.r;
+                row_out[off + 1] = px.g;
+                row_out[off + 2] = px.b;
             }
-        }
-    }
-    Ok(dst)
-}
+        });
 
-fn flip_vertical_16(src: &ImageBuffer16) -> Result<ImageBuffer16, ColorError> {
-    let mut dst = ImageBuffer16::new_solid(src.width, src.height, Rgb16::WHITE)?;
-    for y in 0..src.height {
-        for x in 0..src.width {
-            if let Some(px) = src.get_pixel(x, y) {
-                dst.set_pixel(x, src.height - 1 - y, px);
-            }
-        }
-    }
     Ok(dst)
 }
 
@@ -293,64 +364,21 @@ fn extract_subrect(
     Ok(dst)
 }
 
-fn rotate_90_cw(src: &ImageBuffer16) -> Result<ImageBuffer16, ColorError> {
-    let mut dst = ImageBuffer16::new_solid(src.height, src.width, Rgb16::WHITE)?;
-    for y in 0..src.height {
-        for x in 0..src.width {
-            if let Some(px) = src.get_pixel(x, y) {
-                dst.set_pixel(src.height - 1 - y, x, px);
-            }
-        }
-    }
-    Ok(dst)
-}
-
-fn rotate_180(src: &ImageBuffer16) -> Result<ImageBuffer16, ColorError> {
-    let mut dst = ImageBuffer16::new_solid(src.width, src.height, Rgb16::WHITE)?;
-    for y in 0..src.height {
-        for x in 0..src.width {
-            if let Some(px) = src.get_pixel(x, y) {
-                dst.set_pixel(src.width - 1 - x, src.height - 1 - y, px);
-            }
-        }
-    }
-    Ok(dst)
-}
-
-fn rotate_270_cw(src: &ImageBuffer16) -> Result<ImageBuffer16, ColorError> {
-    let mut dst = ImageBuffer16::new_solid(src.height, src.width, Rgb16::WHITE)?;
-    for y in 0..src.height {
-        for x in 0..src.width {
-            if let Some(px) = src.get_pixel(x, y) {
-                dst.set_pixel(y, src.width - 1 - x, px);
-            }
-        }
-    }
-    Ok(dst)
-}
-
-fn blit_scaled_bilinear(
-    dst: &mut ImageBuffer16,
-    src: &ImageBuffer16,
-    rect_mm: RectMm,
-    dpi: u32,
-) {
-    let dx0 = mm_to_dots(rect_mm.x_mm, dpi);
-    let dy0 = mm_to_dots(rect_mm.y_mm, dpi);
-    let dw = mm_to_dots(rect_mm.width_mm, dpi).max(1);
-    let dh = mm_to_dots(rect_mm.height_mm, dpi).max(1);
-
-    let y_start = dy0.max(0) as u32;
-    let y_end = (dy0 + dh).clamp(0, dst.height as i32) as u32;
-    let x_start = dx0.max(0) as u32;
-    let x_end = (dx0 + dw).clamp(0, dst.width as i32) as u32;
+fn blit_exact(dst: &mut ImageBuffer16, src: &ImageBuffer16, dx0: i32, dy0: i32) {
+    let dw = src.width as i32;
+    let dh = src.height as i32;
+    let y_start = dy0.max(0);
+    let y_end = (dy0 + dh).clamp(0, dst.height as i32);
+    let x_start = dx0.max(0);
+    let x_end = (dx0 + dw).clamp(0, dst.width as i32);
 
     for py in y_start..y_end {
-        let v = ((py as i32 - dy0) as f32) / (dh as f32);
+        let sy = (py - dy0) as u32;
         for px in x_start..x_end {
-            let u = ((px as i32 - dx0) as f32) / (dw as f32);
-            let sample = sample_bilinear_16(src, u, v);
-            dst.set_pixel(px, py, sample);
+            let sx = (px - dx0) as u32;
+            if let Some(sample) = src.get_pixel(sx, sy) {
+                dst.set_pixel(px as u32, py as u32, sample);
+            }
         }
     }
 }
@@ -487,6 +515,58 @@ fn sample_bilinear_16(src: &ImageBuffer16, u: f32, v: f32) -> Rgb16 {
         r: r.clamp(0.0, 65535.0).round() as u16,
         g: g.clamp(0.0, 65535.0).round() as u16,
         b: b.clamp(0.0, 65535.0).round() as u16,
+    }
+}
+
+fn sample_bicubic_16(src: &ImageBuffer16, u: f32, v: f32) -> Rgb16 {
+    let max_x = (src.width.saturating_sub(1)) as i32;
+    let max_y = (src.height.saturating_sub(1)) as i32;
+    let x = u.clamp(0.0, 1.0) * (max_x as f32);
+    let y = v.clamp(0.0, 1.0) * (max_y as f32);
+    let x1 = x.floor() as i32;
+    let y1 = y.floor() as i32;
+    let tx = x - (x1 as f32);
+    let ty = y - (y1 as f32);
+
+    let weights = |t: f32| -> [f32; 4] {
+        let t2 = t * t;
+        let t3 = t2 * t;
+        [
+            -0.5 * t + t2 - 0.5 * t3,
+            1.0 - 2.5 * t2 + 1.5 * t3,
+            0.5 * t + 2.0 * t2 - 1.5 * t3,
+            -0.5 * t2 + 0.5 * t3,
+        ]
+    };
+
+    let wx = weights(tx);
+    let wy = weights(ty);
+
+    let mut r_acc = 0.0_f32;
+    let mut g_acc = 0.0_f32;
+    let mut b_acc = 0.0_f32;
+
+    for (j, &wy_j) in wy.iter().enumerate() {
+        let sy = (y1 + (j as i32) - 1).clamp(0, max_y) as u32;
+        let mut row_r = 0.0_f32;
+        let mut row_g = 0.0_f32;
+        let mut row_b = 0.0_f32;
+        for (i, &wx_i) in wx.iter().enumerate() {
+            let sx = (x1 + (i as i32) - 1).clamp(0, max_x) as u32;
+            let p = src.get_pixel(sx, sy).unwrap_or(Rgb16::WHITE);
+            row_r += wx_i * f32::from(p.r);
+            row_g += wx_i * f32::from(p.g);
+            row_b += wx_i * f32::from(p.b);
+        }
+        r_acc += wy_j * row_r;
+        g_acc += wy_j * row_g;
+        b_acc += wy_j * row_b;
+    }
+
+    Rgb16 {
+        r: r_acc.clamp(0.0, 65535.0).round() as u16,
+        g: g_acc.clamp(0.0, 65535.0).round() as u16,
+        b: b_acc.clamp(0.0, 65535.0).round() as u16,
     }
 }
 

@@ -1516,7 +1516,7 @@ impl Session {
 
     /// Generates two synthetic 16-bit Fine-Art demo images into the Image Pool and places the landscape onto Bogen 1.
     pub fn add_synthetic_demo_images(&mut self) -> Result<(), EngineError> {
-        let chart = generate_test_chart_16bit(480, 320)?;
+        let chart = generate_test_chart_16bit(1440, 960)?;
         let id1 = self.next_image_id;
         self.next_image_id += 1;
         self.image_buffers
@@ -1534,30 +1534,50 @@ impl Session {
             composer_pos_mm: (15.0, 15.0),
         });
 
-        let w = 480u32;
-        let h = 320u32;
+        let w = 1440u32;
+        let h = 960u32;
         let mut landscape =
             ImageBuffer16::new_solid(w, h, Rgb16::WHITE).map_err(RenderError::from)?;
+        let aa_span = 1.5 / (h as f32);
         for y in 0..h {
             let yf = (y as f32) / (h as f32);
             for x in 0..w {
                 let xf = (x as f32) / (w as f32);
-                let ridge1 = 0.52 + 0.12 * (xf * 5.2).sin() + 0.05 * (xf * 13.0).cos();
-                let ridge2 = 0.66 + 0.08 * (xf * 3.8 + 1.2).sin();
-                let px = if yf < ridge1 {
-                    let t = (yf / ridge1).clamp(0.0, 1.0);
-                    let r = (12000.0 + t * 46000.0) as u16;
-                    let g = (14000.0 + t * 28000.0) as u16;
-                    let b = (48000.0 - t * 18000.0) as u16;
-                    Rgb16::new(r, g, b)
-                } else if yf < ridge2 {
-                    Rgb16::new(9500, 10500, 21000)
-                } else {
-                    let d = ((yf - ridge2) / (1.0 - ridge2)).clamp(0.0, 1.0);
-                    let v = (6500.0 * (1.0 - d * 0.6)) as u16;
-                    Rgb16::new(v, v + 500, v + 1200)
-                };
-                landscape.set_pixel(x, y, px);
+                let ridge1 = 0.52
+                    + 0.12 * (xf * 5.2).sin()
+                    + 0.05 * (xf * 13.0).cos()
+                    + 0.015 * (xf * 31.0).sin();
+                let ridge2 = 0.66
+                    + 0.08 * (xf * 3.8 + 1.2).sin()
+                    + 0.02 * (xf * 19.0 + 0.7).cos();
+
+                let t_sky = (yf / ridge1.max(0.05)).clamp(0.0, 1.0);
+                let sky_r = 12000.0 + t_sky * 46000.0;
+                let sky_g = 14000.0 + t_sky * 28000.0;
+                let sky_b = 48000.0 - t_sky * 18000.0;
+
+                let mid_d = ((yf - ridge1) / (ridge2 - ridge1).max(0.02)).clamp(0.0, 1.0);
+                let mid_r = 9500.0 + (1.0 - mid_d) * 3200.0;
+                let mid_g = 10500.0 + (1.0 - mid_d) * 3600.0;
+                let mid_b = 21000.0 + (1.0 - mid_d) * 5500.0;
+
+                let fg_d = ((yf - ridge2) / (1.0 - ridge2).max(0.05)).clamp(0.0, 1.0);
+                let fg_v = 6500.0 * (1.0 - fg_d * 0.6);
+                let fg_r = fg_v;
+                let fg_g = fg_v + 500.0;
+                let fg_b = fg_v + 1200.0;
+
+                let w1 = ((yf - (ridge1 - aa_span)) / (2.0 * aa_span)).clamp(0.0, 1.0);
+                let w2 = ((yf - (ridge2 - aa_span)) / (2.0 * aa_span)).clamp(0.0, 1.0);
+
+                let r12 = sky_r * (1.0 - w1) + mid_r * w1;
+                let g12 = sky_g * (1.0 - w1) + mid_g * w1;
+                let b12 = sky_b * (1.0 - w1) + mid_b * w1;
+
+                let r = (r12 * (1.0 - w2) + fg_r * w2).clamp(0.0, 65535.0) as u16;
+                let g = (g12 * (1.0 - w2) + fg_g * w2).clamp(0.0, 65535.0) as u16;
+                let b = (b12 * (1.0 - w2) + fg_b * w2).clamp(0.0, 65535.0) as u16;
+                landscape.set_pixel(x, y, Rgb16::new(r, g, b));
             }
         }
         let id2 = self.next_image_id;
