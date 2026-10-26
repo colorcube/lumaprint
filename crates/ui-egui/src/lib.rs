@@ -65,6 +65,7 @@ pub struct LumaPrintApp {
     pub zoom: f32,
     pub show_crop_modal: bool,
     pub show_template_builder_modal: bool,
+    pub show_about_modal: bool,
     pub new_preset_name: String,
     pub new_template_name: String,
     pub new_template_rows: usize,
@@ -102,10 +103,11 @@ impl LumaPrintApp {
             zoom: 1.0,
             show_crop_modal: false,
             show_template_builder_modal: false,
+            show_about_modal: false,
             new_preset_name: String::from("Meine Baryta Voreinstellung"),
             new_template_name: String::from("Kontaktbogen 2x2"),
             new_template_rows: 2,
-            new_template_cols: 2,
+            new_template_cols: usize::from(2u8),
             open_file_path_input: String::new(),
             open_folder_path_input: String::new(),
             pending_folder_import: None,
@@ -114,17 +116,76 @@ impl LumaPrintApp {
     }
 
     pub fn apply_fine_art_theme(ctx: &Context) {
+        ctx.options_mut(|opt| opt.zoom_with_keyboard = false);
         let kde = install_kde_system_fonts(ctx);
         let _ = apply_theme_and_typography(ctx, ThemeKind::BreezeDark, &kde, 1.0);
     }
 
     fn ensure_theme_and_fonts(&mut self, ctx: &Context) {
+        // Prevent egui from scaling the whole GUI when pressing Ctrl++ / Ctrl+- / Ctrl+0
+        ctx.options_mut(|opt| opt.zoom_with_keyboard = false);
         if !self.fonts_installed {
             self.kde_typography = install_kde_system_fonts(ctx);
             self.fonts_installed = true;
         }
         self.tokens =
             apply_theme_and_typography(ctx, self.theme_kind, &self.kde_typography, self.ui_scale);
+    }
+
+    fn handle_keyboard_shortcuts(&mut self, ctx: &Context) {
+        if ctx.wants_keyboard_input() {
+            return;
+        }
+        let mut zoom_delta: f32 = 0.0;
+        let mut zoom_reset = false;
+        let mut do_undo = false;
+        let mut do_redo = false;
+
+        ctx.input(|i| {
+            let cmd = i.modifiers.command || i.modifiers.ctrl;
+            if !cmd {
+                return;
+            }
+            if i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals) {
+                zoom_delta += 0.15;
+            }
+            if i.key_pressed(egui::Key::Minus) {
+                zoom_delta -= 0.15;
+            }
+            if i.key_pressed(egui::Key::Num0) {
+                zoom_reset = true;
+            }
+            for ev in &i.events {
+                if let egui::Event::Text(txt) = ev {
+                    if txt == "+" || txt == "=" {
+                        zoom_delta = 0.15;
+                    } else if txt == "-" {
+                        zoom_delta = -0.15;
+                    }
+                }
+            }
+            if i.key_pressed(egui::Key::Z) {
+                if i.modifiers.shift {
+                    do_redo = true;
+                } else {
+                    do_undo = true;
+                }
+            }
+            if i.key_pressed(egui::Key::Y) {
+                do_redo = true;
+            }
+        });
+
+        if zoom_reset {
+            self.zoom = 1.0;
+        } else if zoom_delta.abs() > 0.001 {
+            self.zoom = (self.zoom + zoom_delta).clamp(0.4, 2.5);
+        }
+        if do_undo && self.session.can_undo() {
+            self.exec(EngineCommand::Undo);
+        } else if do_redo && self.session.can_redo() {
+            self.exec(EngineCommand::Redo);
+        }
     }
 
     fn exec(&mut self, cmd: EngineCommand) {
@@ -241,6 +302,7 @@ impl LumaPrintApp {
     /// Renders the complete UI into `ctx` (callable both from `eframe::App` and offscreen tests).
     pub fn render_ui(&mut self, ctx: &Context) {
         self.ensure_theme_and_fonts(ctx);
+        self.handle_keyboard_shortcuts(ctx);
         self.handle_os_dropped_files(ctx);
         self.ensure_thumbnails(ctx);
         self.refresh_preview_if_needed(ctx);
@@ -318,7 +380,7 @@ impl LumaPrintApp {
                     .stroke(Stroke::new(1.0_f32, t.separator)),
             )
             .show(ctx, |ui| {
-                // A: Main Menu Bar
+                // A: Main Menu Bar: Datei | Ansicht | Bearbeiten | Einstellungen | Hilfe
                 egui::menu::bar(ui, |ui| {
                     ui.menu_button("Datei", |ui| {
                         if ui.button("Demo-Kalibrierungsbilder hinzufügen").clicked() {
@@ -340,6 +402,92 @@ impl LumaPrintApp {
                             .clicked()
                         {
                             self.exec(EngineCommand::ResetToDefaults);
+                            ui.close_menu();
+                        }
+                    });
+
+                    ui.menu_button("Ansicht", |ui| {
+                        let view_mode = self.session.doc.canvas_view_mode;
+                        let page_cnt = self.session.doc.page_count();
+                        if ui
+                            .radio(
+                                view_mode == CanvasViewMode::SinglePage,
+                                "▢ Einzelbogen-Ansicht",
+                            )
+                            .clicked()
+                        {
+                            self.exec(EngineCommand::SetCanvasViewMode(CanvasViewMode::SinglePage));
+                            ui.close_menu();
+                        }
+                        if ui
+                            .radio(
+                                view_mode == CanvasViewMode::AllPagesOverview,
+                                format!("⊞ Alle Bögen Übersicht ({page_cnt})"),
+                            )
+                            .clicked()
+                        {
+                            self.exec(EngineCommand::SetCanvasViewMode(
+                                CanvasViewMode::AllPagesOverview,
+                            ));
+                            ui.close_menu();
+                        }
+
+                        ui.separator();
+                        if ui
+                            .checkbox(
+                                &mut self.session.doc.show_slot_guides,
+                                "Gestrichelte Slot-Linien auf dem Papier anzeigen",
+                            )
+                            .changed()
+                        {
+                            ui.close_menu();
+                        }
+
+                        ui.separator();
+                        let mut sp = self.session.doc.color.softproof;
+                        let mut sp_changed = false;
+                        if ui
+                            .checkbox(&mut sp.enabled, "👁 Softproof aktivieren")
+                            .changed()
+                        {
+                            sp_changed = true;
+                        }
+                        if ui
+                            .add_enabled(
+                                sp.enabled,
+                                egui::Checkbox::new(
+                                    &mut sp.simulate_paper_white,
+                                    "Papierweiß simulieren",
+                                ),
+                            )
+                            .changed()
+                        {
+                            sp_changed = true;
+                        }
+                        if ui
+                            .checkbox(&mut sp.gamut_warning, "⚠ Gamut-Warnung anzeigen")
+                            .changed()
+                        {
+                            sp_changed = true;
+                        }
+                        if sp_changed {
+                            self.exec(EngineCommand::SetSoftproof(sp));
+                        }
+
+                        ui.separator();
+                        ui.label(
+                            RichText::new(format!("Zoom ({:.0} %)", self.zoom * 100.0)).strong(),
+                        );
+                        if ui.button("🔍+ Zoom vergrößern (Ctrl + +)").clicked() {
+                            self.zoom = (self.zoom + 0.15).min(2.5);
+                            ui.close_menu();
+                        }
+                        if ui.button("🔍− Zoom verkleinern (Ctrl + -)").clicked() {
+                            self.zoom = (self.zoom - 0.15).max(0.4);
+                            ui.close_menu();
+                        }
+                        if ui.button("🔍 Zoom 100 % zurücksetzen (Ctrl + 0)").clicked() {
+                            self.zoom = 1.0;
                             ui.close_menu();
                         }
                     });
@@ -384,7 +532,7 @@ impl LumaPrintApp {
                         }
                     });
 
-                    ui.menu_button("Ansicht", |ui| {
+                    ui.menu_button("Einstellungen", |ui| {
                         ui.label(RichText::new("Oberflächen-Theme").strong());
                         for tk in ThemeKind::ALL {
                             if ui.radio(self.theme_kind == tk, tk.label()).clicked() {
@@ -464,24 +612,29 @@ impl LumaPrintApp {
                             }
                         }
                     });
+
+                    ui.menu_button("Hilfe", |ui| {
+                        if ui.button("ℹ Über LumaPrint…").clicked() {
+                            self.show_about_modal = true;
+                            ui.close_menu();
+                        }
+                    });
                 });
 
                 ui.add_space(4.0);
                 ui.separator();
                 ui.add_space(4.0);
 
-                // B: Strictly Global Toolbar (Undo/Redo, View Mode, Global Softproof/Gamut, Panel Toggles)
+                // B: Strictly Global Toolbar (Undo/Redo with vector icons, View Mode, Slot Guides, Global Softproof/Gamut, Panel Toggles)
                 ui.horizontal_wrapped(|ui| {
-                    if ui
-                        .add_enabled(self.session.can_undo(), egui::Button::new("↶"))
-                        .on_hover_text("Rückgängig")
+                    if draw_undo_redo_button(ui, &t, true, self.session.can_undo())
+                        .on_hover_text("Rückgängig (Ctrl+Z)")
                         .clicked()
                     {
                         self.exec(EngineCommand::Undo);
                     }
-                    if ui
-                        .add_enabled(self.session.can_redo(), egui::Button::new("↷"))
-                        .on_hover_text("Wiederholen")
+                    if draw_undo_redo_button(ui, &t, false, self.session.can_redo())
+                        .on_hover_text("Wiederholen (Ctrl+Y)")
                         .clicked()
                     {
                         self.exec(EngineCommand::Redo);
@@ -513,6 +666,16 @@ impl LumaPrintApp {
                         self.exec(EngineCommand::SetCanvasViewMode(
                             CanvasViewMode::AllPagesOverview,
                         ));
+                    }
+
+                    if ui
+                        .selectable_label(self.session.doc.show_slot_guides, "Slot-Linien")
+                        .on_hover_text(
+                            "Zeigt gestrichelte hellgraue Hilfslinien der Bildstellen (Slots) auf dem Papier",
+                        )
+                        .clicked()
+                    {
+                        self.session.doc.show_slot_guides = !self.session.doc.show_slot_guides;
                     }
 
                     ui.separator();
@@ -559,23 +722,6 @@ impl LumaPrintApp {
                     }
                     if sp_changed {
                         self.exec(EngineCommand::SetSoftproof(sp));
-                    }
-
-                    ui.separator();
-
-                    // Test-Strip 1:1 toggle
-                    let mut ts_on = self.session.doc.test_strip.enabled;
-                    if ui
-                        .selectable_label(ts_on, "📏 Probestreifen (1:1)")
-                        .on_hover_text("Druckt nur einen schmalen Streifenausschnitt im 1:1-Originalmaßstab")
-                        .clicked()
-                    {
-                        ts_on = !ts_on;
-                        let rect = self.session.doc.test_strip.norm_rect;
-                        self.exec(EngineCommand::SetTestStrip {
-                            enabled: ts_on,
-                            norm_rect: rect,
-                        });
                     }
 
                     // Right-aligned Panel Visibility Toggles
@@ -1278,9 +1424,10 @@ impl LumaPrintApp {
             .show(ui, |ui| {
                 ui.add_space(12.0);
                 let avail_w = (ui.available_width() - 24.0).max(260.0);
-                let cols = ((avail_w / 320.0).floor() as usize).clamp(1, 4);
+                let target_col_w = (320.0 * self.zoom).clamp(180.0, 680.0);
+                let cols = ((avail_w / target_col_w).floor() as usize).clamp(1, 5);
                 let card_w = ((avail_w - ((cols.saturating_sub(1)) as f32) * 18.0) / (cols as f32))
-                    .clamp(220.0, 440.0);
+                    .clamp(160.0, 720.0);
                 let card_h = (card_w * 0.82).round();
 
                 let mut page_idx = 0;
@@ -1455,6 +1602,7 @@ impl LumaPrintApp {
     ) {
         let is_active_page = page_index == self.session.doc.active_page_index;
         let active_slot = self.session.doc.active_slot_index;
+        let show_guides = self.session.doc.show_slot_guides;
         let mut pending_cmd: Option<EngineCommand> = None;
         let mut open_crop_for_id: Option<u64> = None;
 
@@ -1462,6 +1610,22 @@ impl LumaPrintApp {
             let slot_r = mm_rect_to_screen(slot.slot_rect_mm, sheet_rect.min, scale);
             let img_r = mm_rect_to_screen(slot.image_draw_rect_mm, sheet_rect.min, scale);
             let is_active_slot = is_active_page && slot.slot_index == active_slot;
+
+            // Draw dashed light-gray slot boundary lines on the paper when show_slot_guides is active
+            if show_guides {
+                let guide_col = if is_active_slot && slot.assigned_image_id.is_none() {
+                    Color32::from_rgb(0, 130, 230)
+                } else {
+                    Color32::from_rgb(180, 185, 192)
+                };
+                draw_dashed_rect(
+                    ui.painter(),
+                    slot_r.shrink(1.0),
+                    Stroke::new(1.1_f32, guide_col),
+                    6.0,
+                    4.0,
+                );
+            }
 
             if let Some(img_id) = slot.assigned_image_id {
                 let stroke = if is_active_slot {
@@ -1528,20 +1692,8 @@ impl LumaPrintApp {
                     }
                 });
             } else {
-                // Empty Slot Drop Zone: subtle dashed border + placeholder hint
-                let dash_col = if is_active_slot {
-                    Color32::from_rgb(0, 130, 230)
-                } else {
-                    Color32::from_rgb(155, 162, 175)
-                };
-                draw_dashed_rect(
-                    ui.painter(),
-                    slot_r.shrink(1.5),
-                    Stroke::new(1.2_f32, dash_col),
-                    7.0,
-                    4.0,
-                );
-                if slot_r.width() > 54.0 && slot_r.height() > 28.0 {
+                // Empty Slot Drop Zone placeholder hint
+                if show_guides && slot_r.width() > 54.0 && slot_r.height() > 28.0 {
                     let hint = if slot_r.width() > 110.0 {
                         format!(
                             "+ Bild hierher ziehen\n({:.0} × {:.0} mm)",
@@ -1555,7 +1707,7 @@ impl LumaPrintApp {
                         egui::Align2::CENTER_CENTER,
                         hint,
                         FontId::proportional(11.0),
-                        Color32::from_rgb(130, 138, 150),
+                        Color32::from_rgb(135, 142, 152),
                     );
                 }
 
@@ -2100,6 +2252,24 @@ impl LumaPrintApp {
                             );
                         });
 
+                        ui.add_space(5.0);
+                        ui.horizontal(|ui| {
+                            let mut ts_on = self.session.doc.test_strip.enabled;
+                            if ui
+                                .checkbox(&mut ts_on, "Probestreifen (1:1 Ausschnitt drucken)")
+                                .on_hover_text(
+                                    "Druckt nur einen schmalen Streifenausschnitt im 1:1-Originalmaßstab zum Papiersparen",
+                                )
+                                .changed()
+                            {
+                                let rect = self.session.doc.test_strip.norm_rect;
+                                self.exec(EngineCommand::SetTestStrip {
+                                    enabled: ts_on,
+                                    norm_rect: rect,
+                                });
+                            }
+                        });
+
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
                             if ui
@@ -2123,14 +2293,10 @@ impl LumaPrintApp {
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    let print_btn = egui::Button::new(
-                                        RichText::new("    🖨 Drucken    ")
-                                            .size(15.0)
-                                            .strong()
-                                            .color(Color32::WHITE),
-                                    )
-                                    .fill(Color32::from_rgb(0, 120, 215));
-                                    if ui.add(print_btn).clicked() {
+                                    if draw_print_button(ui)
+                                        .on_hover_text("Auftrag an den gewählten CUPS-Drucker senden")
+                                        .clicked()
+                                    {
                                         if let Err(e) = self.session.send_print_job_to_printer(360)
                                         {
                                             self.session.status_message =
@@ -3520,6 +3686,52 @@ impl LumaPrintApp {
                 self.pending_folder_import = None;
             }
         }
+
+        // 4. "Über LumaPrint" Info-Dialog (Hilfe -> Über LumaPrint…)
+        if self.show_about_modal {
+            let mut open = self.show_about_modal;
+            egui::Window::new("ℹ Über LumaPrint")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .default_width(420.0)
+                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.label(
+                        RichText::new("LumaPrint – Fine-Art Print & Layout Studio")
+                            .size(16.0)
+                            .strong()
+                            .color(self.tokens.accent),
+                    );
+                    ui.label(
+                        RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION")))
+                            .small()
+                            .color(self.tokens.text_dim),
+                    );
+                    ui.add_space(8.0);
+                    ui.label(
+                        "LumaPrint ist ein herstellerunabhängiges 16-Bit Fine-Art Layout-, Softproof- \
+                         und Druckwerkzeug für Linux/CUPS (inspiriert von Epson Print Layout).",
+                    );
+                    ui.add_space(6.0);
+                    ui.label("Kernfunktionen:");
+                    ui.label("• 16-Bit Farbpipeline mit ICC-Softproof, Papierweiß-Simulation & Gamut-Warnung");
+                    ui.label("• Erweitertes Schwarzweiß (ABW) mit 2D-Farbzirkel und Tonwertkurven");
+                    ui.label("• Mehrseiten-Bogenlayout (Standard, Vorlagen, Gallerie-Wrap, Freier Composer)");
+                    ui.label("• Automatische CUPS-PPD-Erkennung & Custom-Media-Unterstützung (.emx)");
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("📖 Dokumentation:").strong());
+                        ui.label(
+                            RichText::new("Benutzerhandbuch (Link folgt in Kürze)")
+                                .color(self.tokens.text_dim),
+                        );
+                    });
+                });
+            self.show_about_modal = open;
+        }
     }
 }
 
@@ -3527,6 +3739,147 @@ impl eframe::App for LumaPrintApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         self.render_ui(ctx);
     }
+}
+
+/// Paints a toolbar Undo (`is_undo = true`) or Redo (`is_undo = false`) button using crisp vector
+/// geometry so the icon never depends on missing system font glyphs.
+fn draw_undo_redo_button(
+    ui: &mut Ui,
+    tokens: &Tokens,
+    is_undo: bool,
+    enabled: bool,
+) -> egui::Response {
+    let size = Vec2::new(28.0, 24.0);
+    let sense = if enabled {
+        Sense::click()
+    } else {
+        Sense::hover()
+    };
+    let (rect, resp) = ui.allocate_exact_size(size, sense);
+
+    let bg = if !enabled {
+        tokens.field.gamma_multiply(0.45)
+    } else if resp.is_pointer_button_down_on() {
+        tokens.accent.gamma_multiply(0.35)
+    } else if resp.hovered() {
+        tokens.hover
+    } else {
+        tokens.field
+    };
+    let border_col = if enabled && resp.hovered() {
+        tokens.accent
+    } else {
+        tokens.field_border
+    };
+    let fg = if enabled {
+        tokens.text
+    } else {
+        tokens.text_faint
+    };
+
+    let p = ui.painter();
+    p.rect_filled(rect, CornerRadius::same(4), bg);
+    p.rect_stroke(
+        rect,
+        CornerRadius::same(4),
+        Stroke::new(1.0_f32, border_col),
+        StrokeKind::Middle,
+    );
+
+    let c = rect.center();
+    let stroke = Stroke::new(1.7_f32, fg);
+    let dir: f32 = if is_undo { -1.0 } else { 1.0 };
+
+    // Curved U-turn shaft: bottom -> side -> top -> arrowhead tip
+    let p_bottom = Pos2::new(c.x - dir * 1.0, c.y + 4.5);
+    let p_side_bot = Pos2::new(c.x - dir * 5.5, c.y + 4.5);
+    let p_side_top = Pos2::new(c.x - dir * 5.5, c.y - 2.0);
+    let p_tip = Pos2::new(c.x + dir * 5.0, c.y - 2.0);
+
+    // For undo, the arrow points left (`dir = -1.0` -> tip at left `c.x - 5.0`, curve on right `c.x + 5.5`)
+    let shaft_pts = if is_undo {
+        [
+            Pos2::new(c.x - 2.0, c.y + 4.5),
+            Pos2::new(c.x + 4.5, c.y + 4.5),
+            Pos2::new(c.x + 6.0, c.y + 3.0),
+            Pos2::new(c.x + 6.0, c.y - 0.5),
+            Pos2::new(c.x + 4.5, c.y - 2.0),
+            Pos2::new(c.x - 5.0, c.y - 2.0),
+        ]
+    } else {
+        [
+            Pos2::new(c.x + 2.0, c.y + 4.5),
+            Pos2::new(c.x - 4.5, c.y + 4.5),
+            Pos2::new(c.x - 6.0, c.y + 3.0),
+            Pos2::new(c.x - 6.0, c.y - 0.5),
+            Pos2::new(c.x - 4.5, c.y - 2.0),
+            Pos2::new(c.x + 5.0, c.y - 2.0),
+        ]
+    };
+    let _ = (p_bottom, p_side_bot, p_side_top);
+    for seg in shaft_pts.windows(2) {
+        p.line_segment([seg[0], seg[1]], stroke);
+    }
+
+    // Arrowhead at `p_tip`
+    p.line_segment(
+        [p_tip, Pos2::new(p_tip.x - dir * 3.6, p_tip.y - 3.2)],
+        stroke,
+    );
+    p.line_segment(
+        [p_tip, Pos2::new(p_tip.x - dir * 3.6, p_tip.y + 3.2)],
+        stroke,
+    );
+
+    resp
+}
+
+/// Paints the primary `"Drucken"` action button with a crisp vector printer icon and
+/// vertically centered label so there is no emoji font baseline shift.
+fn draw_print_button(ui: &mut Ui) -> egui::Response {
+    let size = Vec2::new(148.0, 32.0);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+
+    let bg = if resp.is_pointer_button_down_on() {
+        Color32::from_rgb(0, 98, 180)
+    } else if resp.hovered() {
+        Color32::from_rgb(18, 138, 235)
+    } else {
+        Color32::from_rgb(0, 120, 215)
+    };
+
+    let p = ui.painter();
+    p.rect_filled(rect, CornerRadius::same(5), bg);
+    p.rect_stroke(
+        rect,
+        CornerRadius::same(5),
+        Stroke::new(1.0_f32, Color32::from_rgb(70, 175, 255)),
+        StrokeKind::Middle,
+    );
+
+    let cy = rect.center().y;
+    let icon_cx = rect.min.x + 30.0;
+    let white_stroke = Stroke::new(1.4_f32, Color32::WHITE);
+
+    // Vector Printer Icon (top paper tray, main body, bottom output sheet) vertically centered at `cy`
+    let top_sheet = Rect::from_center_size(Pos2::new(icon_cx, cy - 5.0), Vec2::new(8.0, 4.0));
+    let body = Rect::from_center_size(Pos2::new(icon_cx, cy), Vec2::new(14.0, 7.0));
+    let bot_sheet = Rect::from_center_size(Pos2::new(icon_cx, cy + 5.0), Vec2::new(8.0, 4.5));
+
+    p.rect_stroke(top_sheet, CornerRadius::ZERO, white_stroke, StrokeKind::Middle);
+    p.rect_filled(body, CornerRadius::same(1), bg);
+    p.rect_stroke(body, CornerRadius::same(1), white_stroke, StrokeKind::Middle);
+    p.rect_filled(bot_sheet, CornerRadius::ZERO, Color32::WHITE);
+
+    p.text(
+        Pos2::new(icon_cx + 13.0, cy),
+        egui::Align2::LEFT_CENTER,
+        "Drucken",
+        FontId::proportional(14.5),
+        Color32::WHITE,
+    );
+
+    resp
 }
 
 fn draw_dashed_rect(
@@ -3653,5 +4006,57 @@ mod tests {
         }
         assert_eq!(app.page_thumb_textures.len(), 2);
         assert_eq!(app.cached_all_solved.len(), 2);
+    }
+
+    #[test]
+    fn ctrl_plus_minus_zooms_canvas_without_scaling_gui() {
+        let ctx = Context::default();
+        let mut app = LumaPrintApp::new();
+        app.show_about_modal = true;
+
+        // Initial frame sets zoom_with_keyboard = false
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            app.render_ui(ctx);
+        });
+        assert!(!ctx.options(|opt| opt.zoom_with_keyboard));
+        assert!((app.zoom - 1.0).abs() < 1e-4);
+
+        // Press Ctrl + Plus -> canvas zoom increases, GUI zoom_factor stays 1.0
+        let mut input_plus = egui::RawInput::default();
+        input_plus.modifiers.ctrl = true;
+        input_plus.events.push(egui::Event::Key {
+            key: egui::Key::Plus,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers {
+                ctrl: true,
+                ..Default::default()
+            },
+        });
+        let _ = ctx.run(input_plus, |ctx| {
+            app.render_ui(ctx);
+        });
+        assert!((app.zoom - 1.15).abs() < 1e-4);
+        assert!((ctx.zoom_factor() - 1.0).abs() < 1e-4);
+
+        // Press Ctrl + Minus -> canvas zoom decreases back to 1.0
+        let mut input_minus = egui::RawInput::default();
+        input_minus.modifiers.ctrl = true;
+        input_minus.events.push(egui::Event::Key {
+            key: egui::Key::Minus,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers {
+                ctrl: true,
+                ..Default::default()
+            },
+        });
+        let _ = ctx.run(input_minus, |ctx| {
+            app.render_ui(ctx);
+        });
+        assert!((app.zoom - 1.0).abs() < 1e-4);
+        assert!((ctx.zoom_factor() - 1.0).abs() < 1e-4);
     }
 }

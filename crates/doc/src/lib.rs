@@ -1009,6 +1009,10 @@ impl UserSettingsBackup {
     }
 }
 
+fn default_true() -> bool {
+    true
+}
+
 /// Root LumaPrint Document (`PrintJob`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PrintJobDocument {
@@ -1025,6 +1029,9 @@ pub struct PrintJobDocument {
     pub print_scope: PrintScope,
     #[serde(default)]
     pub pool_filter_unassigned_only: bool,
+    /// Shows dashed light-gray slot boundary lines on the paper sheet.
+    #[serde(default = "default_true")]
+    pub show_slot_guides: bool,
     pub canvas_backdrop: CanvasBackdropTone,
     pub show_settings_panel: bool,
     /// The Image Pool (`Bilder-Pool`).
@@ -1055,6 +1062,7 @@ impl Default for PrintJobDocument {
             canvas_view_mode: CanvasViewMode::SinglePage,
             print_scope: PrintScope::AllPages,
             pool_filter_unassigned_only: false,
+            show_slot_guides: true,
             canvas_backdrop: CanvasBackdropTone::DarkGray,
             show_settings_panel: true,
             images: Vec::new(),
