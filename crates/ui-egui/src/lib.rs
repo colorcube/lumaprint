@@ -4728,26 +4728,11 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
     fn draw_template_studio_modal(&mut self, ctx: &Context) {
         let t = self.tokens;
-        let mut open = self.show_template_builder_modal;
         let mut save_and_close = false;
         let mut cancel_close = false;
 
         let (paper_size_mm, printable_rect_mm) =
             self.studio_paper_and_printable_mm(self.template_studio.orientation);
-
-        // 1. Draw a semi-transparent modal backdrop dimmer over the main workspace so the dialog stands out clearly
-        let screen_rect = ctx.screen_rect();
-        egui::Area::new(egui::Id::new("template_studio_modal_backdrop"))
-            .order(egui::Order::Middle)
-            .fixed_pos(screen_rect.min)
-            .show(ctx, |ui| {
-                let (rect, _) = ui.allocate_exact_size(screen_rect.size(), Sense::click());
-                ui.painter()
-                    .rect_filled(rect, CornerRadius::ZERO, Color32::from_black_alpha(155));
-            });
-
-        let dialog_w = (screen_rect.width() - 90.0).clamp(760.0, 1080.0);
-        let dialog_h = (screen_rect.height() - 90.0).clamp(500.0, 700.0);
 
         let slot_count = if self.template_studio.is_free_mode {
             self.template_studio.free_slots_mm.len()
@@ -4757,209 +4742,74 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 .len()
         };
 
-        egui::Window::new("📐 Vorlagen-Studio – Bento-Wizard & Freier Slot-Editor")
-            .order(egui::Order::Foreground)
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-            .fixed_size(Vec2::new(dialog_w, dialog_h))
-            .frame(
-                egui::Frame::window(&ctx.style())
-                    .fill(t.dock)
-                    .stroke(Stroke::new(1.5_f32, t.accent.gamma_multiply(0.75)))
-                    .corner_radius(CornerRadius::same(8))
-                    .inner_margin(egui::Margin::same(12)),
-            )
-            .show(ctx, |ui| {
-                // Pin Top Header Bar first
-                egui::TopBottomPanel::top("studio_modal_top_bar")
-                    .resizable(false)
-                    .exact_height(38.0)
-                    .frame(
-                        egui::Frame::new()
-                            .fill(t.card)
-                            .inner_margin(egui::Margin::symmetric(10, 6))
-                            .corner_radius(CornerRadius::same(5)),
-                    )
-                    .show_inside(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new("Vorlagenname:").color(t.text_dim));
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.template_studio.name)
-                                    .desired_width(195.0),
-                            );
-                            ui.separator();
-                            ui.label(RichText::new("Ausrichtung:").color(t.text_dim));
-                            let prev_ori = self.template_studio.orientation;
-                            ui.selectable_value(
-                                &mut self.template_studio.orientation,
-                                Orientation::Portrait,
-                                "Hochformat",
-                            );
-                            ui.selectable_value(
-                                &mut self.template_studio.orientation,
-                                Orientation::Landscape,
-                                "Querformat",
-                            );
-                            if self.template_studio.orientation != prev_ori
-                                && self.template_studio.is_free_mode
-                            {
-                                for r in &mut self.template_studio.free_slots_mm {
-                                    std::mem::swap(&mut r.x_mm, &mut r.y_mm);
-                                    std::mem::swap(&mut r.width_mm, &mut r.height_mm);
-                                }
-                            }
-
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    let badge = if !self.template_studio.is_free_mode {
-                                        RichText::new("● Stufe 1: Raster- & Bento-Wizard")
-                                            .color(t.accent)
-                                            .strong()
-                                    } else {
-                                        RichText::new(
-                                            "● Stufe 2: Freier Slot-Editor (Einbahnstraße)",
-                                        )
-                                        .color(Color32::from_rgb(245, 175, 60))
-                                        .strong()
-                                    };
-                                    ui.label(badge);
-                                },
+        ctx.show_viewport_immediate(
+            egui::ViewportId::from_hash_of("lumaprint_template_studio_viewport"),
+            egui::ViewportBuilder::default()
+                .with_title("LumaPrint – Vorlagen-Studio (Bento-Wizard & Freier Slot-Editor)")
+                .with_inner_size([1160.0, 780.0])
+                .with_min_inner_size([840.0, 540.0])
+                .with_resizable(true),
+            |vp_ctx, class| {
+                if class == egui::ViewportClass::Embedded {
+                    // Fallback when multi-viewport is unavailable (e.g. headless unit tests):
+                    // Render inside a movable, freely resizable egui::Window
+                    let mut open = self.show_template_builder_modal;
+                    egui::Window::new("📐 Vorlagen-Studio – Bento-Wizard & Freier Slot-Editor")
+                        .order(egui::Order::Foreground)
+                        .open(&mut open)
+                        .collapsible(false)
+                        .resizable(true)
+                        .default_size(Vec2::new(1080.0, 700.0))
+                        .min_size(Vec2::new(820.0, 520.0))
+                        .frame(
+                            egui::Frame::window(&vp_ctx.style())
+                                .fill(t.dock)
+                                .stroke(Stroke::new(1.5_f32, t.accent.gamma_multiply(0.75)))
+                                .corner_radius(CornerRadius::same(8))
+                                .inner_margin(egui::Margin::same(10)),
+                        )
+                        .show(vp_ctx, |ui| {
+                            self.draw_template_studio_contents(
+                                ui,
+                                paper_size_mm,
+                                printable_rect_mm,
+                                slot_count,
+                                &mut save_and_close,
+                                &mut cancel_close,
                             );
                         });
+                    if !open {
+                        cancel_close = true;
+                    }
+                } else {
+                    // Dedicated, freely resizable native OS window (X11 / Wayland)
+                    vp_ctx.options_mut(|opt| {
+                        opt.zoom_with_keyboard = false;
                     });
-
-                // Pin Bottom Action Bar second so it is ALWAYS visible and never pushed down!
-                egui::TopBottomPanel::bottom("studio_modal_bottom_bar")
-                    .resizable(false)
-                    .exact_height(46.0)
-                    .frame(
-                        egui::Frame::new()
-                            .fill(t.card)
-                            .inner_margin(egui::Margin::symmetric(10, 8))
-                            .corner_radius(CornerRadius::same(5)),
-                    )
-                    .show_inside(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                RichText::new(format!(
-                                    "Papierformat: {} ({:.1} × {:.1} mm)  ·  {} aktive Bildstellen",
-                                    self.session.doc.printer.paper_size_key,
-                                    paper_size_mm.width_mm,
-                                    paper_size_mm.height_mm,
-                                    slot_count
-                                ))
-                                .color(t.text_dim),
-                            );
-
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    let can_save = !self.template_studio.name.trim().is_empty()
-                                        && slot_count > 0;
-                                    if ui
-                                        .add_enabled(
-                                            can_save,
-                                            egui::Button::new(
-                                                RichText::new(
-                                                    "✓ Vorlage speichern & auf Bogen anwenden",
-                                                )
-                                                .strong()
-                                                .color(Color32::WHITE),
-                                            )
-                                            .fill(Color32::from_rgb(0, 122, 215))
-                                            .min_size(Vec2::new(260.0, 30.0)),
-                                        )
-                                        .clicked()
-                                    {
-                                        save_and_close = true;
-                                    }
-                                    ui.add_space(6.0);
-                                    if ui
-                                        .add(
-                                            egui::Button::new("Abbrechen")
-                                                .min_size(Vec2::new(105.0, 30.0)),
-                                        )
-                                        .clicked()
-                                    {
-                                        cancel_close = true;
-                                    }
-                                },
+                    if vp_ctx.input(|i| {
+                        i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)
+                    }) {
+                        cancel_close = true;
+                    }
+                    egui::CentralPanel::default()
+                        .frame(
+                            egui::Frame::new()
+                                .fill(t.dock)
+                                .inner_margin(egui::Margin::same(10)),
+                        )
+                        .show(vp_ctx, |ui| {
+                            self.draw_template_studio_contents(
+                                ui,
+                                paper_size_mm,
+                                printable_rect_mm,
+                                slot_count,
+                                &mut save_and_close,
+                                &mut cancel_close,
                             );
                         });
-                    });
-
-                // Left Inspector Column with structured cards
-                egui::SidePanel::left("studio_modal_left_inspector")
-                    .resizable(false)
-                    .exact_width(370.0)
-                    .frame(
-                        egui::Frame::new()
-                            .fill(t.dock)
-                            .inner_margin(egui::Margin::symmetric(4, 6)),
-                    )
-                    .show_inside(ui, |ui| {
-                        egui::ScrollArea::vertical()
-                            .id_salt("studio_left_scroll")
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                if !self.template_studio.is_free_mode {
-                                    self.draw_studio_stage1_controls(ui, paper_size_mm);
-                                } else {
-                                    self.draw_studio_stage2_controls(ui, paper_size_mm);
-                                }
-
-                                ui.add_space(6.0);
-                                studio_card_frame(&t).show(ui, |ui| {
-                                    ui.set_min_width(ui.available_width());
-                                    ui.label(
-                                        RichText::new("✂ Schnittmarken & Bildunterschrift")
-                                            .strong()
-                                            .color(t.accent),
-                                    );
-                                    ui.add_space(4.0);
-                                    ui.checkbox(
-                                        &mut self.template_studio.cut_marks,
-                                        "Eck-Schnittmarken um jede Bildstelle",
-                                    );
-                                    ui.add_space(4.0);
-                                    ui.horizontal(|ui| {
-                                        ui.label(
-                                            RichText::new("Unterschrift:").color(t.text_dim),
-                                        );
-                                        egui::ComboBox::from_id_salt("studio_caption_combo")
-                                            .selected_text(
-                                                self.template_studio.caption_mode.label_de(),
-                                            )
-                                            .width(210.0)
-                                            .show_ui(ui, |ui| {
-                                                for cm in SlotCaptionMode::ALL {
-                                                    ui.selectable_value(
-                                                        &mut self.template_studio.caption_mode,
-                                                        cm,
-                                                        cm.label_de(),
-                                                    );
-                                                }
-                                            });
-                                    });
-                                });
-                            });
-                    });
-
-                // Right Central Area: Large Interactive Sheet Preview
-                egui::CentralPanel::default()
-                    .frame(
-                        egui::Frame::new()
-                            .fill(Color32::from_rgb(28, 31, 36))
-                            .inner_margin(egui::Margin::same(6))
-                            .corner_radius(CornerRadius::same(6)),
-                    )
-                    .show_inside(ui, |ui| {
-                        self.draw_template_studio_preview(ui, paper_size_mm, printable_rect_mm);
-                    });
-            });
+                }
+            },
+        );
 
         if save_and_close {
             let studio_ori = self.template_studio.orientation;
@@ -4973,9 +4823,191 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             self.show_template_builder_modal = false;
         } else if cancel_close {
             self.show_template_builder_modal = false;
-        } else if self.show_template_builder_modal {
-            self.show_template_builder_modal = open;
         }
+    }
+
+    fn draw_template_studio_contents(
+        &mut self,
+        ui: &mut Ui,
+        paper_size_mm: SizeMm,
+        printable_rect_mm: RectMm,
+        slot_count: usize,
+        save_and_close: &mut bool,
+        cancel_close: &mut bool,
+    ) {
+        let t = self.tokens;
+
+        // Pin Top Header Bar first
+        egui::TopBottomPanel::top("studio_modal_top_bar")
+            .resizable(false)
+            .exact_height(38.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(t.card)
+                    .inner_margin(egui::Margin::symmetric(10, 6))
+                    .corner_radius(CornerRadius::same(5)),
+            )
+            .show_inside(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Vorlagenname:").color(t.text_dim));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.template_studio.name)
+                            .desired_width(195.0),
+                    );
+                    ui.separator();
+                    ui.label(RichText::new("Ausrichtung:").color(t.text_dim));
+                    let prev_ori = self.template_studio.orientation;
+                    ui.selectable_value(
+                        &mut self.template_studio.orientation,
+                        Orientation::Portrait,
+                        "Hochformat",
+                    );
+                    ui.selectable_value(
+                        &mut self.template_studio.orientation,
+                        Orientation::Landscape,
+                        "Querformat",
+                    );
+                    if self.template_studio.orientation != prev_ori
+                        && self.template_studio.is_free_mode
+                    {
+                        for r in &mut self.template_studio.free_slots_mm {
+                            std::mem::swap(&mut r.x_mm, &mut r.y_mm);
+                            std::mem::swap(&mut r.width_mm, &mut r.height_mm);
+                        }
+                    }
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let badge = if !self.template_studio.is_free_mode {
+                            RichText::new("● Stufe 1: Raster- & Bento-Wizard")
+                                .color(t.accent)
+                                .strong()
+                        } else {
+                            RichText::new("● Stufe 2: Freier Slot-Editor (Einbahnstraße)")
+                                .color(Color32::from_rgb(245, 175, 60))
+                                .strong()
+                        };
+                        ui.label(badge);
+                    });
+                });
+            });
+
+        // Pin Bottom Action Bar second so it is ALWAYS visible and never pushed down!
+        egui::TopBottomPanel::bottom("studio_modal_bottom_bar")
+            .resizable(false)
+            .exact_height(46.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(t.card)
+                    .inner_margin(egui::Margin::symmetric(10, 8))
+                    .corner_radius(CornerRadius::same(5)),
+            )
+            .show_inside(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(format!(
+                            "Papierformat: {} ({:.1} × {:.1} mm)  ·  {} aktive Bildstellen",
+                            self.session.doc.printer.paper_size_key,
+                            paper_size_mm.width_mm,
+                            paper_size_mm.height_mm,
+                            slot_count
+                        ))
+                        .color(t.text_dim),
+                    );
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let can_save =
+                            !self.template_studio.name.trim().is_empty() && slot_count > 0;
+                        if ui
+                            .add_enabled(
+                                can_save,
+                                egui::Button::new(
+                                    RichText::new("✓ Vorlage speichern & auf Bogen anwenden")
+                                        .strong()
+                                        .color(Color32::WHITE),
+                                )
+                                .fill(Color32::from_rgb(0, 122, 215))
+                                .min_size(Vec2::new(260.0, 30.0)),
+                            )
+                            .clicked()
+                        {
+                            *save_and_close = true;
+                        }
+                        ui.add_space(6.0);
+                        if ui
+                            .add(egui::Button::new("Abbrechen").min_size(Vec2::new(105.0, 30.0)))
+                            .clicked()
+                        {
+                            *cancel_close = true;
+                        }
+                    });
+                });
+            });
+
+        // Left Inspector Column with structured cards (resizable splitter)
+        egui::SidePanel::left("studio_modal_left_inspector")
+            .resizable(true)
+            .default_width(370.0)
+            .width_range(310.0..=520.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(t.dock)
+                    .inner_margin(egui::Margin::symmetric(4, 6)),
+            )
+            .show_inside(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("studio_left_scroll")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        if !self.template_studio.is_free_mode {
+                            self.draw_studio_stage1_controls(ui, paper_size_mm);
+                        } else {
+                            self.draw_studio_stage2_controls(ui, paper_size_mm);
+                        }
+
+                        ui.add_space(6.0);
+                        studio_card_frame(&t).show(ui, |ui| {
+                            ui.set_min_width(ui.available_width());
+                            ui.label(
+                                RichText::new("✂ Schnittmarken & Bildunterschrift")
+                                    .strong()
+                                    .color(t.accent),
+                            );
+                            ui.add_space(4.0);
+                            ui.checkbox(
+                                &mut self.template_studio.cut_marks,
+                                "Eck-Schnittmarken um jede Bildstelle",
+                            );
+                            ui.add_space(4.0);
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new("Unterschrift:").color(t.text_dim));
+                                egui::ComboBox::from_id_salt("studio_caption_combo")
+                                    .selected_text(self.template_studio.caption_mode.label_de())
+                                    .width(210.0)
+                                    .show_ui(ui, |ui| {
+                                        for cm in SlotCaptionMode::ALL {
+                                            ui.selectable_value(
+                                                &mut self.template_studio.caption_mode,
+                                                cm,
+                                                cm.label_de(),
+                                            );
+                                        }
+                                    });
+                            });
+                        });
+                    });
+            });
+
+        // Right Central Area: Large Interactive Sheet Preview
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::new()
+                    .fill(Color32::from_rgb(28, 31, 36))
+                    .inner_margin(egui::Margin::same(6))
+                    .corner_radius(CornerRadius::same(6)),
+            )
+            .show_inside(ui, |ui| {
+                self.draw_template_studio_preview(ui, paper_size_mm, printable_rect_mm);
+            });
     }
 
     fn draw_studio_stage1_controls(&mut self, ui: &mut Ui, paper_size_mm: SizeMm) {
