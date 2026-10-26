@@ -3194,74 +3194,71 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         let t = self.tokens;
         let cur_mode_lbl = self.session.doc.layout.kind_label_de();
 
-        egui::Grid::new("grid_layout_mode_top")
-            .num_columns(2)
-            .spacing([14.0, 10.0])
-            .min_col_width(130.0)
-            .show(ui, |ui| {
-                ui.label(RichText::new("Layout-Typ:").color(t.text_dim));
-                egui::ComboBox::from_id_salt("layout_mode_combo")
-                    .selected_text(cur_mode_lbl)
-                    .width(245.0)
-                    .show_ui(ui, |ui| {
-                        if ui
-                            .selectable_label(
-                                matches!(self.session.doc.layout, LayoutMode::Standard(_)),
-                                "Standard (Einzelbild)",
-                            )
-                            .clicked()
-                        {
-                            self.exec(EngineCommand::SetLayoutMode(LayoutMode::Standard(
-                                StandardLayoutSpec::default(),
-                            )));
-                        }
-                        if ui
-                            .selectable_label(
-                                matches!(self.session.doc.layout, LayoutMode::Panorama(_)),
-                                "Panorama (Rollenpapier / Banner)",
-                            )
-                            .clicked()
-                        {
-                            self.exec(EngineCommand::SetLayoutMode(LayoutMode::Panorama(
-                                Default::default(),
-                            )));
-                        }
-                        if ui
-                            .selectable_label(
-                                matches!(self.session.doc.layout, LayoutMode::GalleryWrap(_)),
-                                "Gallerie Wrap (Leinwand-Keilrahmen)",
-                            )
-                            .clicked()
-                        {
-                            self.exec(EngineCommand::SetLayoutMode(LayoutMode::GalleryWrap(
-                                GalleryWrapSpec::default(),
-                            )));
-                        }
-                        if ui
-                            .selectable_label(
-                                matches!(self.session.doc.layout, LayoutMode::Template(_)),
-                                "Vorlage (Mehrere Bilder)",
-                            )
-                            .clicked()
-                        {
-                            self.exec(EngineCommand::SetLayoutMode(LayoutMode::Template(
-                                TemplateLayoutSpec::default(),
-                            )));
-                        }
-                        if ui
-                            .selectable_label(
-                                matches!(self.session.doc.layout, LayoutMode::FreeComposer(_)),
-                                "Freies Layout / Auto-Nesting (Composer)",
-                            )
-                            .clicked()
-                        {
-                            self.exec(EngineCommand::SetLayoutMode(LayoutMode::FreeComposer(
-                                Default::default(),
-                            )));
-                        }
-                    });
-                ui.end_row();
-            });
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Layout-Typ:").color(t.text_dim));
+            ui.label(RichText::new(cur_mode_lbl).strong().color(t.accent));
+        });
+        ui.add_space(4.0);
+
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+
+            let is_std = matches!(self.session.doc.layout, LayoutMode::Standard(_));
+            if draw_layout_type_tile(ui, &t, LayoutTypeIcon::Standard, "Standard", is_std)
+                .on_hover_text("Standard (Einzelbild mit Rändern, Bildgröße oder Randlos)")
+                .clicked()
+                && !is_std
+            {
+                self.exec(EngineCommand::SetLayoutMode(LayoutMode::Standard(
+                    StandardLayoutSpec::default(),
+                )));
+            }
+
+            let is_tpl = matches!(self.session.doc.layout, LayoutMode::Template(_));
+            if draw_layout_type_tile(ui, &t, LayoutTypeIcon::Template, "Vorlage", is_tpl)
+                .on_hover_text("Vorlage / Raster (Mehrere Bilder pro Bogen, z. B. 2×2 Kontaktbogen)")
+                .clicked()
+                && !is_tpl
+            {
+                self.exec(EngineCommand::SetLayoutMode(LayoutMode::Template(
+                    TemplateLayoutSpec::default(),
+                )));
+            }
+
+            let is_gw = matches!(self.session.doc.layout, LayoutMode::GalleryWrap(_));
+            if draw_layout_type_tile(ui, &t, LayoutTypeIcon::GalleryWrap, "Gallerie", is_gw)
+                .on_hover_text("Gallerie Wrap (Leinwand-Keilrahmen mit gespiegelten/gedehnten Falzkanten)")
+                .clicked()
+                && !is_gw
+            {
+                self.exec(EngineCommand::SetLayoutMode(LayoutMode::GalleryWrap(
+                    GalleryWrapSpec::default(),
+                )));
+            }
+
+            let is_pano = matches!(self.session.doc.layout, LayoutMode::Panorama(_));
+            if draw_layout_type_tile(ui, &t, LayoutTypeIcon::Panorama, "Panorama", is_pano)
+                .on_hover_text("Panorama (Rollenpapier / freie Bannerlänge)")
+                .clicked()
+                && !is_pano
+            {
+                self.exec(EngineCommand::SetLayoutMode(LayoutMode::Panorama(
+                    Default::default(),
+                )));
+            }
+
+            let is_free = matches!(self.session.doc.layout, LayoutMode::FreeComposer(_));
+            if draw_layout_type_tile(ui, &t, LayoutTypeIcon::FreeComposer, "Frei", is_free)
+                .on_hover_text("Freies Layout / Auto-Nesting (Composer für platzsparende Anordnung)")
+                .clicked()
+                && !is_free
+            {
+                self.exec(EngineCommand::SetLayoutMode(LayoutMode::FreeComposer(
+                    Default::default(),
+                )));
+            }
+        });
+        ui.add_space(6.0);
 
         if self.session.doc.page_count() > 1 {
             ui.add_space(4.0);
@@ -4572,6 +4569,177 @@ fn draw_slot_guides_toolbar_button(
 
     let inner = Rect::from_center_size(rect.center(), Vec2::new(16.0, 12.0));
     draw_dashed_rect(p, inner, Stroke::new(1.5_f32, fg), 3.0, 2.0);
+
+    resp
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LayoutTypeIcon {
+    Standard,
+    Template,
+    GalleryWrap,
+    Panorama,
+    FreeComposer,
+}
+
+/// Paints a visual icon tile button for selecting the sheet `LayoutMode` in the right dock.
+fn draw_layout_type_tile(
+    ui: &mut Ui,
+    tokens: &Tokens,
+    icon: LayoutTypeIcon,
+    label: &str,
+    active: bool,
+) -> egui::Response {
+    let size = Vec2::new(66.0, 54.0);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+
+    let bg = if resp.is_pointer_button_down_on() {
+        tokens.accent.gamma_multiply(0.36)
+    } else if active {
+        tokens.accent.gamma_multiply(0.22)
+    } else if resp.hovered() {
+        tokens.hover
+    } else {
+        tokens.field
+    };
+    let border_stroke = if active {
+        Stroke::new(1.6_f32, tokens.accent)
+    } else if resp.hovered() {
+        Stroke::new(1.2_f32, tokens.accent.gamma_multiply(0.75))
+    } else {
+        Stroke::new(1.0_f32, tokens.field_border)
+    };
+    let fg = if active {
+        tokens.accent
+    } else if resp.hovered() {
+        tokens.text
+    } else {
+        tokens.text_dim
+    };
+    let slot_fill = if active {
+        tokens.accent.gamma_multiply(0.35)
+    } else {
+        fg.gamma_multiply(0.22)
+    };
+
+    let p = ui.painter();
+    p.rect_filled(rect, CornerRadius::same(6), bg);
+    p.rect_stroke(rect, CornerRadius::same(6), border_stroke, StrokeKind::Middle);
+
+    let icon_c = Pos2::new(rect.center().x, rect.min.y + 19.0);
+    let sheet_stroke = Stroke::new(1.2_f32, fg.gamma_multiply(0.85));
+    let slot_stroke = Stroke::new(1.3_f32, fg);
+
+    match icon {
+        LayoutTypeIcon::Standard => {
+            let sheet = Rect::from_center_size(icon_c, Vec2::new(22.0, 26.0));
+            let photo = Rect::from_center_size(icon_c, Vec2::new(14.0, 18.0));
+            p.rect_stroke(sheet, CornerRadius::same(2), sheet_stroke, StrokeKind::Middle);
+            p.rect_filled(photo, CornerRadius::same(1), slot_fill);
+            p.rect_stroke(photo, CornerRadius::same(1), slot_stroke, StrokeKind::Middle);
+        }
+        LayoutTypeIcon::Template => {
+            let sheet = Rect::from_center_size(icon_c, Vec2::new(24.0, 26.0));
+            p.rect_stroke(sheet, CornerRadius::same(2), sheet_stroke, StrokeKind::Middle);
+            for (dx, dy) in [(-4.2_f32, -4.8_f32), (4.2, -4.8), (-4.2, 4.8), (4.2, 4.8)] {
+                let cell =
+                    Rect::from_center_size(icon_c + Vec2::new(dx, dy), Vec2::new(6.4, 7.2));
+                p.rect_filled(cell, CornerRadius::same(1), slot_fill);
+                p.rect_stroke(cell, CornerRadius::same(1), slot_stroke, StrokeKind::Middle);
+            }
+        }
+        LayoutTypeIcon::GalleryWrap => {
+            let outer = Rect::from_center_size(icon_c, Vec2::new(24.0, 24.0));
+            let center = Rect::from_center_size(icon_c, Vec2::new(13.0, 13.0));
+            let top_flap = Rect::from_min_max(
+                Pos2::new(center.min.x, outer.min.y),
+                Pos2::new(center.max.x, center.min.y),
+            );
+            let bot_flap = Rect::from_min_max(
+                Pos2::new(center.min.x, center.max.y),
+                Pos2::new(center.max.x, outer.max.y),
+            );
+            let left_flap = Rect::from_min_max(
+                Pos2::new(outer.min.x, center.min.y),
+                Pos2::new(center.min.x, center.max.y),
+            );
+            let right_flap = Rect::from_min_max(
+                Pos2::new(center.max.x, center.min.y),
+                Pos2::new(outer.max.x, center.max.y),
+            );
+            for flap in [top_flap, bot_flap, left_flap, right_flap] {
+                p.rect_filled(flap, CornerRadius::ZERO, fg.gamma_multiply(0.14));
+                p.rect_stroke(flap, CornerRadius::ZERO, sheet_stroke, StrokeKind::Middle);
+            }
+            p.rect_filled(center, CornerRadius::ZERO, slot_fill);
+            p.rect_stroke(center, CornerRadius::ZERO, slot_stroke, StrokeKind::Middle);
+        }
+        LayoutTypeIcon::Panorama => {
+            let sheet = Rect::from_center_size(icon_c, Vec2::new(36.0, 15.0));
+            let pano = Rect::from_center_size(icon_c, Vec2::new(30.0, 9.5));
+            p.rect_stroke(sheet, CornerRadius::same(2), sheet_stroke, StrokeKind::Middle);
+            p.rect_filled(pano, CornerRadius::same(1), slot_fill);
+            p.rect_stroke(pano, CornerRadius::same(1), slot_stroke, StrokeKind::Middle);
+            // Subtle panoramic horizon peaks inside the wide frame
+            p.line_segment(
+                [
+                    Pos2::new(pano.min.x + 3.0, pano.max.y - 2.0),
+                    Pos2::new(pano.min.x + 9.5, pano.min.y + 3.0),
+                ],
+                sheet_stroke,
+            );
+            p.line_segment(
+                [
+                    Pos2::new(pano.min.x + 9.5, pano.min.y + 3.0),
+                    Pos2::new(pano.min.x + 15.0, pano.max.y - 2.0),
+                ],
+                sheet_stroke,
+            );
+            p.line_segment(
+                [
+                    Pos2::new(pano.min.x + 13.5, pano.max.y - 2.5),
+                    Pos2::new(pano.min.x + 20.5, pano.min.y + 2.5),
+                ],
+                sheet_stroke,
+            );
+            p.line_segment(
+                [
+                    Pos2::new(pano.min.x + 20.5, pano.min.y + 2.5),
+                    Pos2::new(pano.max.x - 3.0, pano.max.y - 2.0),
+                ],
+                sheet_stroke,
+            );
+        }
+        LayoutTypeIcon::FreeComposer => {
+            let sheet = Rect::from_center_size(icon_c, Vec2::new(24.0, 26.0));
+            p.rect_stroke(sheet, CornerRadius::same(2), sheet_stroke, StrokeKind::Middle);
+            let slot_a = Rect::from_min_size(
+                Pos2::new(sheet.min.x + 3.0, sheet.min.y + 3.0),
+                Vec2::new(8.0, 12.5),
+            );
+            let slot_b = Rect::from_min_size(
+                Pos2::new(sheet.min.x + 13.0, sheet.min.y + 3.0),
+                Vec2::new(8.0, 7.5),
+            );
+            let slot_c = Rect::from_min_size(
+                Pos2::new(sheet.min.x + 3.0, sheet.min.y + 17.5),
+                Vec2::new(18.0, 5.5),
+            );
+            for r in [slot_a, slot_b, slot_c] {
+                p.rect_filled(r, CornerRadius::same(1), slot_fill);
+                p.rect_stroke(r, CornerRadius::same(1), slot_stroke, StrokeKind::Middle);
+            }
+        }
+    }
+
+    p.text(
+        Pos2::new(rect.center().x, rect.max.y - 9.0),
+        egui::Align2::CENTER_CENTER,
+        label,
+        FontId::proportional(10.8),
+        if active { tokens.text } else { fg },
+    );
 
     resp
 }
