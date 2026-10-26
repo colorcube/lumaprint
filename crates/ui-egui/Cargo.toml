@@ -1,0 +1,23 @@
+[package]
+name = "lumaprint-ui-egui"
+description = "Dark Fine-Art egui/eframe UI for LumaPrint modeled after Epson Print Layout & TurboPrint Composer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+lumaprint-geom = { workspace = true }
+lumaprint-color = { workspace = true }
+lumaprint-cms = { workspace = true }
+lumaprint-codecs = { workspace = true }
+lumaprint-doc = { workspace = true }
+lumaprint-layout = { workspace = true }
+lumaprint-render = { workspace = true }
+lumaprint-engine = { workspace = true }
+egui = { workspace = true }
+eframe = { workspace = true }
+serde = { workspace = true }

@@ -1,0 +1,14 @@
+[package]
+name = "lumaprint-geom"
+description = "Physical units (mm, inch, pt, 360/720/1440 dpi grids), rectangles, margins, and Epson SC-P900/P700 paper definitions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }

@@ -1,0 +1,20 @@
+[package]
+name = "lumaprint-codecs"
+description = "8/16-bit TIFF, PNG, and JPEG decoders/encoders, EXIF & embedded ICC profile extraction, and synthetic test charts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+lumaprint-color = { workspace = true }
+lumaprint-cms = { workspace = true }
+image = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

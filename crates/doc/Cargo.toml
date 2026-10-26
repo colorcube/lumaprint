@@ -1,0 +1,19 @@
+[package]
+name = "lumaprint-doc"
+description = "Document model for LumaPrint: PrintJob, MediaSpecs, LayoutModes, GalleryWrap, ColorSettings, Presets, and JSON Backup"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+lumaprint-geom = { workspace = true }
+lumaprint-color = { workspace = true }
+lumaprint-cms = { workspace = true }
+lumaprint-codecs = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

@@ -1,0 +1,7 @@
+/target/
+/site/
+*.prn
+*.tif
+*.tiff
+*.swp
+.DS_Store

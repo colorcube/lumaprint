@@ -1,0 +1,16 @@
+[package]
+name = "lumaprint-cms"
+description = "Pure-Rust ICC v2/v4 color management for LumaPrint: mft1/mft2 LUTs, Matrix/TRC, BPC, Softproofing, and Gamut Warning"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+lumaprint-color = { workspace = true }
+rayon = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }

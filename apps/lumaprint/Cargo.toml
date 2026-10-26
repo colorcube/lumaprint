@@ -1,0 +1,21 @@
+[package]
+name = "lumaprint"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "lumaprint"
+path = "src/main.rs"
+
+[dependencies]
+lumaprint-ui-egui = { path = "../../crates/ui-egui" }
+lumaprint-engine = { path = "../../crates/engine" }
+lumaprint-codecs = { path = "../../crates/codecs" }
+lumaprint-color = { path = "../../crates/color" }
+egui.workspace = true
+eframe.workspace = true
+
+[lints]
+workspace = true

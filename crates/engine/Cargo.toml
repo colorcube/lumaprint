@@ -1,0 +1,25 @@
+[package]
+name = "lumaprint-engine"
+description = "LumaPrint L5 Engine: Session, Command Registry, Undo/Redo, System Printer Discovery, and ICC Auto-Loader"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+lumaprint-geom = { workspace = true }
+lumaprint-color = { workspace = true }
+lumaprint-cms = { workspace = true }
+lumaprint-codecs = { workspace = true }
+lumaprint-doc = { workspace = true }
+lumaprint-layout = { workspace = true }
+lumaprint-render = { workspace = true }
+lumaprint-cups = { workspace = true }
+lumaprint-ipp = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }

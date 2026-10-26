@@ -1,0 +1,87 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/geom",
+    "crates/color",
+    "crates/cms",
+    "crates/codecs",
+    "crates/doc",
+    "crates/layout",
+    "crates/render",
+    "crates/cups",
+    "crates/ipp",
+    "crates/engine",
+    "crates/ui-egui",
+    "apps/lumaprint",
+    "apps/lumaprint-cli",
+]
+default-members = [
+    "crates/geom",
+    "crates/color",
+    "crates/cms",
+    "crates/codecs",
+    "crates/doc",
+    "crates/layout",
+    "crates/render",
+    "crates/cups",
+    "crates/ipp",
+    "crates/engine",
+    "crates/ui-egui",
+    "apps/lumaprint",
+    "apps/lumaprint-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+rust-version = "1.85"
+
+[workspace.dependencies]
+# Internal workspace crates (L0 -> L6)
+lumaprint-geom = { path = "crates/geom" }
+lumaprint-color = { path = "crates/color" }
+lumaprint-cms = { path = "crates/cms" }
+lumaprint-codecs = { path = "crates/codecs" }
+lumaprint-doc = { path = "crates/doc" }
+lumaprint-layout = { path = "crates/layout" }
+lumaprint-render = { path = "crates/render" }
+lumaprint-cups = { path = "crates/cups" }
+lumaprint-ipp = { path = "crates/ipp" }
+lumaprint-engine = { path = "crates/engine" }
+lumaprint-ui-egui = { path = "crates/ui-egui" }
+
+# External crates (matching local cache & PhotoCraft standards)
+thiserror = "2"
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+bytemuck = { version = "1", features = ["derive"] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff"] }
+png = "0.18"
+tiff = "0.11"
+zune-core = "0.5"
+zune-jpeg = "0.5"
+rayon = "1"
+log = "0.4"
+egui = { version = "0.31.1", default-features = false, features = ["default_fonts"] }
+eframe = { version = "0.31.1", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
+tempfile = "3"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev]
+opt-level = 1
+debug = "line-tables-only"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

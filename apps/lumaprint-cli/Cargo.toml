@@ -1,0 +1,29 @@
+[package]
+name = "lumaprint-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "lumaprint-cli"
+path = "src/main.rs"
+
+[dependencies]
+lumaprint-geom = { path = "../../crates/geom" }
+lumaprint-color = { path = "../../crates/color" }
+lumaprint-cms = { path = "../../crates/cms" }
+lumaprint-codecs = { path = "../../crates/codecs" }
+lumaprint-doc = { path = "../../crates/doc" }
+lumaprint-layout = { path = "../../crates/layout" }
+lumaprint-render = { path = "../../crates/render" }
+lumaprint-cups = { path = "../../crates/cups" }
+lumaprint-ipp = { path = "../../crates/ipp" }
+lumaprint-engine = { path = "../../crates/engine" }
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,19 @@
+[package]
+name = "lumaprint-render"
+description = "16-bit page & band renderer for LumaPrint: scaling, Gallery Wrap mirror/blur synthesis, output sharpening, and color pipeline"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+lumaprint-geom = { workspace = true }
+lumaprint-color = { workspace = true }
+lumaprint-cms = { workspace = true }
+lumaprint-doc = { workspace = true }
+lumaprint-layout = { workspace = true }
+rayon = { workspace = true }
+thiserror = { workspace = true }

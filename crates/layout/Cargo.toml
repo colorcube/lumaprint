@@ -1,0 +1,17 @@
+[package]
+name = "lumaprint-layout"
+description = "Layout solver for LumaPrint: Standard, Panorama, Gallery Wrap, EPL Templates (up to 5x5), and Smart Auto-Nesting"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+lumaprint-geom = { workspace = true }
+lumaprint-color = { workspace = true }
+lumaprint-doc = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }

@@ -1,0 +1,15 @@
+[package]
+name = "lumaprint-ipp"
+description = "Pure-Rust IPP status client (10-channel SC-P900 ink levels) and TCP port 9100 raw print job sender"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+lumaprint-color = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }

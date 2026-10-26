@@ -1,0 +1,15 @@
+[package]
+name = "lumaprint-color"
+description = "16-bit pixel buffers, Advanced B&W Photo (ABW) 2D color wheel toning, tone curves, and highlight point shift"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+rayon = { workspace = true }

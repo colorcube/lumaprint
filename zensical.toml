@@ -1,0 +1,19 @@
+[project]
+site_name = "LumaPrint Handbuch — Fine-Art Print Layout & Color Management"
+site_description = "Benutzerhandbuch & Architektur-Dokumentation für LumaPrint (Epson SureColor SC-P900 / SC-P700)"
+site_author = "LumaPrint Team"
+docs_dir = "docs"
+site_dir = "site"
+language = "de"
+
+nav = [
+    { "Übersicht & Schnellstart" = "index.md" },
+    { "Architektur (L0–L6)" = "architecture.md" },
+    { "Benutzerhandbuch" = [
+        { "Hauptfenster & Bedienung" = "user-guide/main-window.md" },
+        { "Drucker, Medien & Zufuhr" = "user-guide/printer-and-media.md" },
+        { "Layout-Modi (Standard, Panorama, Gallery Wrap, Vorlage, Composer)" = "user-guide/layout-modes.md" },
+        { "Farbmanagement, ICC & Advanced B&W (ABW)" = "user-guide/color-and-abw.md" },
+        { "Pro-Funktionen (Teststreifen, Softproof, Schärfung, IPP-Tintenstand)" = "user-guide/pro-features.md" },
+    ] },
+]
