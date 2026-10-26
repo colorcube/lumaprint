@@ -247,42 +247,50 @@ impl LumaPrintApp {
         let start_dir = default_dialog_start_dir();
         std::thread::spawn(move || {
             let py_script = r#"
-import sys
-from PyQt6.QtWidgets import QApplication, QFileDialog, QDialog, QDialogButtonBox
+import os, sys, ctypes
+os.environ.setdefault("QT_QPA_PLATFORMTHEME", "kde")
+os.environ["QT_NO_XDG_DESKTOP_PORTAL"] = "1"
+os.environ["PLASMA_INTEGRATION_USE_PORTAL"] = "0"
+
+from PyQt6 import sip
+from PyQt6.QtCore import QTimer
+from PyQt6.QtWidgets import QApplication, QFileDialog, QDialog, QWidget
 
 app = QApplication(sys.argv)
-class UnifiedPicker(QFileDialog):
-    def __init__(self, start_dir):
-        super().__init__(None, "Bilder oder Ordner zum Bilder-Pool hinzufügen", start_dir)
-        self.setOption(QFileDialog.Option.DontUseNativeDialog, True)
-        self.setFileMode(QFileDialog.FileMode.ExistingFiles)
-        self.setNameFilters([
-            "Bilder & Ordner (*.tif *.tiff *.png *.jpg *.jpeg *.TIF *.TIFF *.PNG *.JPG *.JPEG)",
-            "Alle Dateien (*)"
-        ])
-        self.chosen = []
-        box = self.findChild(QDialogButtonBox)
-        if box:
-            open_btn = box.button(QDialogButtonBox.StandardButton.Open)
-            if open_btn:
-                open_btn.setText("Hinzufügen")
-                open_btn.clicked.disconnect()
-                open_btn.clicked.connect(self.finish_selection)
-            cancel_btn = box.button(QDialogButtonBox.StandardButton.Cancel)
-            if cancel_btn:
-                cancel_btn.setText("Abbrechen")
-    def finish_selection(self):
-        sel = self.selectedFiles()
-        if not sel:
-            sel = [self.directory().absolutePath()]
-        self.chosen = sel
-        QDialog.accept(self)
+start_dir = sys.argv[1] if len(sys.argv) > 1 else "."
 
-dlg = UnifiedPicker(sys.argv[1] if len(sys.argv) > 1 else ".")
-dlg.resize(860, 560)
+# Instantiate QFileDialog directly (not subclassed and without DontUseNativeDialog)
+# so Qt6's canBeNativeDialog() stays true and loads KDEPlasmaPlatformTheme6's KFileWidget.
+dlg = QFileDialog(None, "Bilder oder Ordner zum Bilder-Pool hinzufügen", start_dir)
+dlg.setFileMode(QFileDialog.FileMode.ExistingFiles)
+dlg.setNameFilter(
+    "Bilder & Ordner (*.tif *.tiff *.png *.jpg *.jpeg *.webp *.bmp *.TIF *.TIFF *.PNG *.JPG *.JPEG *.WEBP *.BMP);;Alle Dateien (*)"
+)
+dlg.setLabelText(QFileDialog.DialogLabel.Accept, "Hinzufügen")
+
+def enable_kde_files_and_dirs():
+    try:
+        kio_lib = ctypes.CDLL("libKF6KIOFileWidgets.so.6")
+        set_mode = kio_lib._ZN11KFileWidget7setModeE6QFlagsIN5KFile4ModeEE
+        set_mode.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+        set_mode.restype = None
+        for top in QApplication.topLevelWidgets():
+            for w in top.findChildren(QWidget):
+                if w.metaObject().className() == "KFileWidget":
+                    ptr = sip.unwrapinstance(w)
+                    # KFile::Files (0x4) | KFile::Directory (0x2) | KFile::ExistingOnly (0x8) = 0x0e
+                    set_mode(ptr, 0x0e)
+                    dlg.setLabelText(QFileDialog.DialogLabel.Accept, "Hinzufügen")
+                    return
+    except Exception:
+        pass
+
+QTimer.singleShot(0, enable_kde_files_and_dirs)
 if dlg.exec() == int(QDialog.DialogCode.Accepted):
-    res = dlg.chosen if dlg.chosen else dlg.selectedFiles()
-    for p in res:
+    sel = dlg.selectedFiles()
+    if not sel:
+        sel = [dlg.directory().absolutePath()]
+    for p in sel:
         print(p)
 "#;
             let out = std::process::Command::new("python3")
