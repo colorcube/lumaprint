@@ -4735,77 +4735,185 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         let (paper_size_mm, printable_rect_mm) =
             self.studio_paper_and_printable_mm(self.template_studio.orientation);
 
-        egui::Window::new("📐 Vorlagen-Studio – Bento-Wizard & Freier Slot-Editor")
-            .open(&mut open)
-            .resizable(true)
-            .collapsible(false)
-            .default_size(Vec2::new(1020.0, 700.0))
-            .min_size(Vec2::new(820.0, 540.0))
+        // 1. Draw a semi-transparent modal backdrop dimmer over the main workspace so the dialog stands out clearly
+        let screen_rect = ctx.screen_rect();
+        egui::Area::new(egui::Id::new("template_studio_modal_backdrop"))
+            .order(egui::Order::Middle)
+            .fixed_pos(screen_rect.min)
             .show(ctx, |ui| {
-                // Top Header Bar: Template Name, Orientation, and Stage Indicator
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Vorlagenname:").color(t.text_dim));
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.template_studio.name)
-                            .desired_width(210.0),
-                    );
-                    ui.separator();
-                    ui.label(RichText::new("Ausrichtung:").color(t.text_dim));
-                    let prev_ori = self.template_studio.orientation;
-                    ui.selectable_value(
-                        &mut self.template_studio.orientation,
-                        Orientation::Portrait,
-                        "Hochformat",
-                    );
-                    ui.selectable_value(
-                        &mut self.template_studio.orientation,
-                        Orientation::Landscape,
-                        "Querformat",
-                    );
-                    if self.template_studio.orientation != prev_ori
-                        && self.template_studio.is_free_mode
-                    {
-                        for r in &mut self.template_studio.free_slots_mm {
-                            std::mem::swap(&mut r.x_mm, &mut r.y_mm);
-                            std::mem::swap(&mut r.width_mm, &mut r.height_mm);
-                        }
-                    }
+                let (rect, _) = ui.allocate_exact_size(screen_rect.size(), Sense::click());
+                ui.painter()
+                    .rect_filled(rect, CornerRadius::ZERO, Color32::from_black_alpha(155));
+            });
 
-                    ui.separator();
-                    let stage_badge = if !self.template_studio.is_free_mode {
-                        RichText::new("Stufe 1: Raster- & Bento-Wizard")
-                            .color(t.accent)
-                            .strong()
-                    } else {
-                        RichText::new("Stufe 2: Freier Slot-Editor (Manuelle Maße, kein Zurück)")
-                            .color(Color32::from_rgb(245, 175, 60))
-                            .strong()
-                    };
-                    ui.label(stage_badge);
-                });
-                ui.separator();
+        let dialog_w = (screen_rect.width() - 90.0).clamp(760.0, 1080.0);
+        let dialog_h = (screen_rect.height() - 90.0).clamp(500.0, 700.0);
 
-                // Main Split Area: Left Controls (370 px) + Right Interactive Sheet Preview (remaining width)
-                let avail = ui.available_size();
-                let body_h = (avail.y - 44.0).max(400.0);
+        let slot_count = if self.template_studio.is_free_mode {
+            self.template_studio.free_slots_mm.len()
+        } else {
+            self.template_studio
+                .compute_bento_slots_mm(paper_size_mm)
+                .len()
+        };
 
-                ui.allocate_ui(Vec2::new(avail.x, body_h), |ui| {
-                    ui.horizontal(|ui| {
-                        // Left Inspector / Wizard Column
-                        ui.allocate_ui(Vec2::new(375.0, body_h), |ui| {
-                            egui::ScrollArea::vertical()
-                                .id_salt("studio_left_scroll")
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| {
-                                    if !self.template_studio.is_free_mode {
-                                        self.draw_studio_stage1_controls(ui, paper_size_mm);
+        egui::Window::new("📐 Vorlagen-Studio – Bento-Wizard & Freier Slot-Editor")
+            .order(egui::Order::Foreground)
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+            .fixed_size(Vec2::new(dialog_w, dialog_h))
+            .frame(
+                egui::Frame::window(&ctx.style())
+                    .fill(t.dock)
+                    .stroke(Stroke::new(1.5_f32, t.accent.gamma_multiply(0.75)))
+                    .corner_radius(CornerRadius::same(8))
+                    .inner_margin(egui::Margin::same(12)),
+            )
+            .show(ctx, |ui| {
+                // Pin Top Header Bar first
+                egui::TopBottomPanel::top("studio_modal_top_bar")
+                    .resizable(false)
+                    .exact_height(38.0)
+                    .frame(
+                        egui::Frame::new()
+                            .fill(t.card)
+                            .inner_margin(egui::Margin::symmetric(10, 6))
+                            .corner_radius(CornerRadius::same(5)),
+                    )
+                    .show_inside(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("Vorlagenname:").color(t.text_dim));
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.template_studio.name)
+                                    .desired_width(195.0),
+                            );
+                            ui.separator();
+                            ui.label(RichText::new("Ausrichtung:").color(t.text_dim));
+                            let prev_ori = self.template_studio.orientation;
+                            ui.selectable_value(
+                                &mut self.template_studio.orientation,
+                                Orientation::Portrait,
+                                "Hochformat",
+                            );
+                            ui.selectable_value(
+                                &mut self.template_studio.orientation,
+                                Orientation::Landscape,
+                                "Querformat",
+                            );
+                            if self.template_studio.orientation != prev_ori
+                                && self.template_studio.is_free_mode
+                            {
+                                for r in &mut self.template_studio.free_slots_mm {
+                                    std::mem::swap(&mut r.x_mm, &mut r.y_mm);
+                                    std::mem::swap(&mut r.width_mm, &mut r.height_mm);
+                                }
+                            }
+
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    let badge = if !self.template_studio.is_free_mode {
+                                        RichText::new("● Stufe 1: Raster- & Bento-Wizard")
+                                            .color(t.accent)
+                                            .strong()
                                     } else {
-                                        self.draw_studio_stage2_controls(ui, paper_size_mm);
-                                    }
+                                        RichText::new(
+                                            "● Stufe 2: Freier Slot-Editor (Einbahnstraße)",
+                                        )
+                                        .color(Color32::from_rgb(245, 175, 60))
+                                        .strong()
+                                    };
+                                    ui.label(badge);
+                                },
+                            );
+                        });
+                    });
 
-                                    ui.add_space(10.0);
-                                    ui.separator();
-                                    ui.add_space(4.0);
+                // Pin Bottom Action Bar second so it is ALWAYS visible and never pushed down!
+                egui::TopBottomPanel::bottom("studio_modal_bottom_bar")
+                    .resizable(false)
+                    .exact_height(46.0)
+                    .frame(
+                        egui::Frame::new()
+                            .fill(t.card)
+                            .inner_margin(egui::Margin::symmetric(10, 8))
+                            .corner_radius(CornerRadius::same(5)),
+                    )
+                    .show_inside(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!(
+                                    "Papierformat: {} ({:.1} × {:.1} mm)  ·  {} aktive Bildstellen",
+                                    self.session.doc.printer.paper_size_key,
+                                    paper_size_mm.width_mm,
+                                    paper_size_mm.height_mm,
+                                    slot_count
+                                ))
+                                .color(t.text_dim),
+                            );
+
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    let can_save = !self.template_studio.name.trim().is_empty()
+                                        && slot_count > 0;
+                                    if ui
+                                        .add_enabled(
+                                            can_save,
+                                            egui::Button::new(
+                                                RichText::new(
+                                                    "✓ Vorlage speichern & auf Bogen anwenden",
+                                                )
+                                                .strong()
+                                                .color(Color32::WHITE),
+                                            )
+                                            .fill(Color32::from_rgb(0, 122, 215))
+                                            .min_size(Vec2::new(260.0, 30.0)),
+                                        )
+                                        .clicked()
+                                    {
+                                        save_and_close = true;
+                                    }
+                                    ui.add_space(6.0);
+                                    if ui
+                                        .add(
+                                            egui::Button::new("Abbrechen")
+                                                .min_size(Vec2::new(105.0, 30.0)),
+                                        )
+                                        .clicked()
+                                    {
+                                        cancel_close = true;
+                                    }
+                                },
+                            );
+                        });
+                    });
+
+                // Left Inspector Column with structured cards
+                egui::SidePanel::left("studio_modal_left_inspector")
+                    .resizable(false)
+                    .exact_width(370.0)
+                    .frame(
+                        egui::Frame::new()
+                            .fill(t.dock)
+                            .inner_margin(egui::Margin::symmetric(4, 6)),
+                    )
+                    .show_inside(ui, |ui| {
+                        egui::ScrollArea::vertical()
+                            .id_salt("studio_left_scroll")
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                if !self.template_studio.is_free_mode {
+                                    self.draw_studio_stage1_controls(ui, paper_size_mm);
+                                } else {
+                                    self.draw_studio_stage2_controls(ui, paper_size_mm);
+                                }
+
+                                ui.add_space(6.0);
+                                studio_card_frame(&t).show(ui, |ui| {
+                                    ui.set_min_width(ui.available_width());
                                     ui.label(
                                         RichText::new("✂ Schnittmarken & Bildunterschrift")
                                             .strong()
@@ -4814,18 +4922,18 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                     ui.add_space(4.0);
                                     ui.checkbox(
                                         &mut self.template_studio.cut_marks,
-                                        "✂ Eck-Schnittmarken um jede Bildstelle drucken",
+                                        "Eck-Schnittmarken um jede Bildstelle",
                                     );
                                     ui.add_space(4.0);
                                     ui.horizontal(|ui| {
                                         ui.label(
-                                            RichText::new("Bildunterschrift:").color(t.text_dim),
+                                            RichText::new("Unterschrift:").color(t.text_dim),
                                         );
                                         egui::ComboBox::from_id_salt("studio_caption_combo")
                                             .selected_text(
                                                 self.template_studio.caption_mode.label_de(),
                                             )
-                                            .width(220.0)
+                                            .width(210.0)
                                             .show_ui(ui, |ui| {
                                                 for cm in SlotCaptionMode::ALL {
                                                     ui.selectable_value(
@@ -4837,64 +4945,20 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                             });
                                     });
                                 });
-                        });
-
-                        ui.separator();
-
-                        // Right Large Interactive Sheet Preview
-                        let right_w = ui.available_width().max(320.0);
-                        ui.allocate_ui(Vec2::new(right_w, body_h), |ui| {
-                            self.draw_template_studio_preview(
-                                ui,
-                                paper_size_mm,
-                                printable_rect_mm,
-                            );
-                        });
+                            });
                     });
-                });
 
-                ui.separator();
-                // Bottom Action Bar
-                ui.horizontal(|ui| {
-                    let slot_count = if self.template_studio.is_free_mode {
-                        self.template_studio.free_slots_mm.len()
-                    } else {
-                        self.template_studio
-                            .compute_bento_slots_mm(paper_size_mm)
-                            .len()
-                    };
-                    ui.label(
-                        RichText::new(format!(
-                            "Papierformat: {} ({:.1} × {:.1} mm) · {} aktive Bildstellen",
-                            self.session.doc.printer.paper_size_key,
-                            paper_size_mm.width_mm,
-                            paper_size_mm.height_mm,
-                            slot_count
-                        ))
-                        .small()
-                        .color(t.text_dim),
-                    );
-
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let can_save =
-                            !self.template_studio.name.trim().is_empty() && slot_count > 0;
-                        if ui
-                            .add_enabled(
-                                can_save,
-                                egui::Button::new(
-                                    RichText::new("✓ Vorlage speichern & auf Bogen anwenden")
-                                        .strong(),
-                                ),
-                            )
-                            .clicked()
-                        {
-                            save_and_close = true;
-                        }
-                        if ui.button("Abbrechen").clicked() {
-                            cancel_close = true;
-                        }
+                // Right Central Area: Large Interactive Sheet Preview
+                egui::CentralPanel::default()
+                    .frame(
+                        egui::Frame::new()
+                            .fill(Color32::from_rgb(28, 31, 36))
+                            .inner_margin(egui::Margin::same(6))
+                            .corner_radius(CornerRadius::same(6)),
+                    )
+                    .show_inside(ui, |ui| {
+                        self.draw_template_studio_preview(ui, paper_size_mm, printable_rect_mm);
                     });
-                });
             });
 
         if save_and_close {
@@ -4916,401 +4980,410 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
     fn draw_studio_stage1_controls(&mut self, ui: &mut Ui, paper_size_mm: SizeMm) {
         let t = self.tokens;
-        ui.label(
-            RichText::new("1. Basis-Raster & Abstände (mm)")
-                .strong()
-                .color(t.accent),
-        );
-        ui.add_space(4.0);
 
-        let mut grid_changed = false;
-        egui::Grid::new("studio_stage1_grid")
-            .num_columns(2)
-            .spacing([12.0, 8.0])
-            .min_col_width(115.0)
-            .show(ui, |ui| {
-                ui.label(RichText::new("Zeilen × Spalten:").color(t.text_dim));
-                ui.horizontal(|ui| {
-                    grid_changed |= ui
-                        .add(
-                            egui::DragValue::new(&mut self.template_studio.rows)
-                                .range(1..=10)
-                                .prefix("Z: "),
-                        )
-                        .changed();
-                    ui.label("×");
-                    grid_changed |= ui
-                        .add(
-                            egui::DragValue::new(&mut self.template_studio.cols)
-                                .range(1..=10)
-                                .prefix("S: "),
-                        )
-                        .changed();
-                });
-                ui.end_row();
-
-                ui.label(RichText::new("Außenränder:").color(t.text_dim));
-                ui.checkbox(
-                    &mut self.template_studio.uniform_margins,
-                    "🔗 Alle 4 Seiten koppeln",
-                );
-                ui.end_row();
-
-                if self.template_studio.uniform_margins {
-                    ui.label(RichText::new("Rand rundum:").color(t.text_dim));
-                    let mut m = self.template_studio.margins_mm.top_mm;
-                    if ui
-                        .add(
-                            egui::DragValue::new(&mut m)
-                                .range(0.0..=80.0)
-                                .speed(0.5)
-                                .suffix(" mm"),
-                        )
-                        .changed()
-                    {
-                        self.template_studio.margins_mm = MarginsMm::uniform(m);
-                    }
-                    ui.end_row();
-                } else {
-                    ui.label(RichText::new("Oben / Unten:").color(t.text_dim));
-                    ui.horizontal(|ui| {
-                        ui.add(
-                            egui::DragValue::new(&mut self.template_studio.margins_mm.top_mm)
-                                .range(0.0..=80.0)
-                                .speed(0.5)
-                                .suffix(" mm"),
-                        );
-                        ui.label("×");
-                        ui.add(
-                            egui::DragValue::new(&mut self.template_studio.margins_mm.bottom_mm)
-                                .range(0.0..=80.0)
-                                .speed(0.5)
-                                .suffix(" mm"),
-                        );
-                    });
-                    ui.end_row();
-
-                    ui.label(RichText::new("Links / Rechts:").color(t.text_dim));
-                    ui.horizontal(|ui| {
-                        ui.add(
-                            egui::DragValue::new(&mut self.template_studio.margins_mm.left_mm)
-                                .range(0.0..=80.0)
-                                .speed(0.5)
-                                .suffix(" mm"),
-                        );
-                        ui.label("×");
-                        ui.add(
-                            egui::DragValue::new(&mut self.template_studio.margins_mm.right_mm)
-                                .range(0.0..=80.0)
-                                .speed(0.5)
-                                .suffix(" mm"),
-                        );
-                    });
-                    ui.end_row();
-                }
-
-                ui.label(RichText::new("Steg H / V:").color(t.text_dim));
-                ui.horizontal(|ui| {
-                    ui.add(
-                        egui::DragValue::new(&mut self.template_studio.gap_h_mm)
-                            .range(0.0..=50.0)
-                            .speed(0.5)
-                            .prefix("H: ")
-                            .suffix(" mm"),
-                    );
-                    ui.add(
-                        egui::DragValue::new(&mut self.template_studio.gap_v_mm)
-                            .range(0.0..=50.0)
-                            .speed(0.5)
-                            .prefix("V: ")
-                            .suffix(" mm"),
-                    );
-                });
-                ui.end_row();
-            });
-
-        if grid_changed {
-            self.template_studio.sanitize_grid_bounds();
-        }
-
-        ui.add_space(10.0);
-        ui.separator();
-        ui.add_space(4.0);
-        ui.label(
-            RichText::new("2. Bento-Zellen verbinden / freilassen")
-                .strong()
-                .color(t.accent),
-        );
-        ui.label(
-            RichText::new(
-                "Tipp: In der großen Bogen-Vorschau rechts Zellen anklicken oder mit gedrückter Maustaste über mehrere Zellen ziehen.",
-            )
-            .small()
-            .color(t.text_faint),
-        );
-        ui.add_space(4.0);
-
-        let can_merge = self
-            .template_studio
-            .selected_cells
-            .is_some_and(|[r0, c0, r1, c1]| r1 > r0 || c1 > c0);
-        let has_selection = self.template_studio.selected_cells.is_some();
-
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .add_enabled(
-                    can_merge,
-                    egui::Button::new("⊞ Ausgewählte Zellen verbinden (Merge)"),
-                )
-                .on_hover_text("Verbindet den markierten Zellbereich zu einem großen Bild-Slot")
-                .clicked()
-            {
-                self.template_studio.merge_selected_cells();
-            }
-            if ui
-                .add_enabled(has_selection, egui::Button::new("⊟ Trennen (Unmerge)"))
-                .on_hover_text("Teilt verbundene Zellen wieder in Einzelzellen auf")
-                .clicked()
-            {
-                self.template_studio.unmerge_selected_cells();
-            }
-            if ui
-                .add_enabled(
-                    has_selection,
-                    egui::Button::new("⬜ Zelle(n) leer / aktiv schalten"),
-                )
-                .on_hover_text("Schaltet die markierte(n) Zelle(n) als Weißraum frei oder wieder aktiv")
-                .clicked()
-            {
-                self.template_studio.toggle_selected_cells_disabled();
-            }
-        });
-
-        ui.add_space(6.0);
-        ui.label(RichText::new("Bento-Schnellvorlagen:").small().color(t.text_dim));
-        ui.horizontal_wrapped(|ui| {
-            if ui.small_button("Standard-Raster").clicked() {
-                self.template_studio.merged_regions.clear();
-                self.template_studio.disabled_cells.clear();
-            }
-            if ui.small_button("1 Groß oben + 3 Unten").clicked() {
-                self.template_studio.rows = 3;
-                self.template_studio.cols = 3;
-                self.template_studio.merged_regions = vec![[0, 0, 1, 2]];
-                self.template_studio.disabled_cells.clear();
-                self.template_studio.selected_cells = Some([0, 0, 1, 2]);
-            }
-            if ui.small_button("1 Groß links + 2 Rechts").clicked() {
-                self.template_studio.rows = 2;
-                self.template_studio.cols = 3;
-                self.template_studio.merged_regions = vec![[0, 0, 1, 1]];
-                self.template_studio.disabled_cells.clear();
-                self.template_studio.selected_cells = Some([0, 0, 1, 1]);
-            }
-            if ui.small_button("Panorama oben + 2 Unten").clicked() {
-                self.template_studio.rows = 2;
-                self.template_studio.cols = 2;
-                self.template_studio.merged_regions = vec![[0, 0, 0, 1]];
-                self.template_studio.disabled_cells.clear();
-                self.template_studio.selected_cells = Some([0, 0, 0, 1]);
-            }
-        });
-
-        ui.add_space(12.0);
-        ui.separator();
-        ui.add_space(6.0);
-        ui.label(
-            RichText::new("3. Wechsel in den freien Modus (Einbahnstraße)")
-                .strong()
-                .color(Color32::from_rgb(245, 175, 60)),
-        );
-        ui.label(
-            RichText::new(
-                "Für freie Platzierung per Maus, individuelle Millimeter-Maße oder Standard-Fotoformate (10×15, 13×18 …). Ein Zurück zum Raster-Wizard ist danach nicht mehr möglich.",
-            )
-            .small()
-            .color(t.text_faint),
-        );
-        ui.add_space(4.0);
-        if ui
-            .button(
-                RichText::new("🔓 Jetzt in freien Slot-Editor wechseln (kein Zurück)")
-                    .strong()
-                    .color(Color32::from_rgb(255, 195, 85)),
-            )
-            .clicked()
-        {
-            self.template_studio.enter_free_mode(paper_size_mm);
-        }
-    }
-
-    fn draw_studio_stage2_controls(&mut self, ui: &mut Ui, paper_size_mm: SizeMm) {
-        let t = self.tokens;
-        ui.label(
-            RichText::new("Freier Slot-Editor (Millimeter-Maße & Maus)")
-                .strong()
-                .color(Color32::from_rgb(245, 175, 60)),
-        );
-        ui.add_space(4.0);
-
-        ui.checkbox(
-            &mut self.template_studio.snap_enabled,
-            "🧲 Magnetisches Einrasten (Ränder, Bogenmitte & Nachbar-Slots)",
-        );
-
-        ui.add_space(6.0);
-        ui.label(RichText::new("Slot hinzufügen (Festmaß-Stempel):").color(t.text_dim));
-        ui.horizontal_wrapped(|ui| {
-            let stamps: &[(&str, f64, f64)] = &[
-                ("+ Freier Slot", 80.0, 80.0),
-                ("+ 9×13 cm", 89.0, 127.0),
-                ("+ 10×15 cm", 102.0, 152.0),
-                ("+ 13×18 cm", 127.0, 178.0),
-                ("+ 15×20 cm", 152.0, 203.0),
-                ("+ 20×30 cm", 203.0, 305.0),
-            ];
-            for &(lbl, w, h) in stamps {
-                if ui.small_button(lbl).clicked() {
-                    let offset = (self.template_studio.free_slots_mm.len() as f64 * 6.0) % 40.0;
-                    let w_clamped = w.min(paper_size_mm.width_mm - 10.0).max(15.0);
-                    let h_clamped = h.min(paper_size_mm.height_mm - 10.0).max(15.0);
-                    let x = ((paper_size_mm.width_mm - w_clamped) * 0.5 + offset)
-                        .clamp(0.0, (paper_size_mm.width_mm - w_clamped).max(0.0));
-                    let y = ((paper_size_mm.height_mm - h_clamped) * 0.5 + offset)
-                        .clamp(0.0, (paper_size_mm.height_mm - h_clamped).max(0.0));
-                    self.template_studio
-                        .free_slots_mm
-                        .push(RectMm::new(x, y, w_clamped, h_clamped));
-                    self.template_studio.selected_free_slot =
-                        Some(self.template_studio.free_slots_mm.len() - 1);
-                }
-            }
-        });
-
-        ui.add_space(8.0);
-        ui.separator();
-        ui.add_space(4.0);
-
-        // Selected Slot Millimeter Inspector
-        if let Some(sel_idx) = self.template_studio.selected_free_slot
-            && sel_idx < self.template_studio.free_slots_mm.len()
-        {
+        // Card 1: Grid & Margins
+        studio_card_frame(&t).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
             ui.label(
-                RichText::new(format!("Ausgewählte Bildstelle #{}", sel_idx + 1))
+                RichText::new("1. Basis-Raster & Ränder (mm)")
                     .strong()
                     .color(t.accent),
             );
             ui.add_space(4.0);
 
-            let mut slot = self.template_studio.free_slots_mm[sel_idx];
-            let max_w = paper_size_mm.width_mm.max(20.0);
-            let max_h = paper_size_mm.height_mm.max(20.0);
-
-            egui::Grid::new("studio_stage2_inspector")
+            let mut grid_changed = false;
+            egui::Grid::new("studio_stage1_grid")
                 .num_columns(2)
-                .spacing([12.0, 8.0])
-                .min_col_width(115.0)
+                .spacing([10.0, 6.0])
+                .min_col_width(105.0)
                 .show(ui, |ui| {
-                    ui.label(RichText::new("Position X / Y:").color(t.text_dim));
+                    ui.label(RichText::new("Zeilen × Spalten:").color(t.text_dim));
                     ui.horizontal(|ui| {
-                        ui.add(
-                            egui::DragValue::new(&mut slot.x_mm)
-                                .range(0.0..=(max_w - 10.0))
-                                .speed(0.5)
-                                .prefix("X: ")
-                                .suffix(" mm"),
-                        );
-                        ui.add(
-                            egui::DragValue::new(&mut slot.y_mm)
-                                .range(0.0..=(max_h - 10.0))
-                                .speed(0.5)
-                                .prefix("Y: ")
-                                .suffix(" mm"),
-                        );
+                        grid_changed |= ui
+                            .add(
+                                egui::DragValue::new(&mut self.template_studio.rows)
+                                    .range(1..=10)
+                                    .prefix("Z: "),
+                            )
+                            .changed();
+                        ui.label("×");
+                        grid_changed |= ui
+                            .add(
+                                egui::DragValue::new(&mut self.template_studio.cols)
+                                    .range(1..=10)
+                                    .prefix("S: "),
+                            )
+                            .changed();
                     });
                     ui.end_row();
 
-                    ui.label(RichText::new("Breite / Höhe:").color(t.text_dim));
+                    ui.label(RichText::new("Außenränder:").color(t.text_dim));
+                    ui.checkbox(
+                        &mut self.template_studio.uniform_margins,
+                        "🔗 Alle 4 Seiten koppeln",
+                    );
+                    ui.end_row();
+
+                    if self.template_studio.uniform_margins {
+                        ui.label(RichText::new("Rand rundum:").color(t.text_dim));
+                        let mut m = self.template_studio.margins_mm.top_mm;
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut m)
+                                    .range(0.0..=80.0)
+                                    .speed(0.5)
+                                    .suffix(" mm"),
+                            )
+                            .changed()
+                        {
+                            self.template_studio.margins_mm = MarginsMm::uniform(m);
+                        }
+                        ui.end_row();
+                    } else {
+                        ui.label(RichText::new("Oben / Unten:").color(t.text_dim));
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::DragValue::new(&mut self.template_studio.margins_mm.top_mm)
+                                    .range(0.0..=80.0)
+                                    .speed(0.5)
+                                    .suffix(" mm"),
+                            );
+                            ui.label("×");
+                            ui.add(
+                                egui::DragValue::new(
+                                    &mut self.template_studio.margins_mm.bottom_mm,
+                                )
+                                .range(0.0..=80.0)
+                                .speed(0.5)
+                                .suffix(" mm"),
+                            );
+                        });
+                        ui.end_row();
+
+                        ui.label(RichText::new("Links / Rechts:").color(t.text_dim));
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::DragValue::new(&mut self.template_studio.margins_mm.left_mm)
+                                    .range(0.0..=80.0)
+                                    .speed(0.5)
+                                    .suffix(" mm"),
+                            );
+                            ui.label("×");
+                            ui.add(
+                                egui::DragValue::new(
+                                    &mut self.template_studio.margins_mm.right_mm,
+                                )
+                                .range(0.0..=80.0)
+                                .speed(0.5)
+                                .suffix(" mm"),
+                            );
+                        });
+                        ui.end_row();
+                    }
+
+                    ui.label(RichText::new("Steg H / V:").color(t.text_dim));
                     ui.horizontal(|ui| {
                         ui.add(
-                            egui::DragValue::new(&mut slot.width_mm)
-                                .range(10.0..=max_w)
+                            egui::DragValue::new(&mut self.template_studio.gap_h_mm)
+                                .range(0.0..=50.0)
                                 .speed(0.5)
-                                .prefix("B: ")
+                                .prefix("H: ")
                                 .suffix(" mm"),
                         );
                         ui.add(
-                            egui::DragValue::new(&mut slot.height_mm)
-                                .range(10.0..=max_h)
+                            egui::DragValue::new(&mut self.template_studio.gap_v_mm)
+                                .range(0.0..=50.0)
                                 .speed(0.5)
-                                .prefix("H: ")
+                                .prefix("V: ")
                                 .suffix(" mm"),
                         );
                     });
                     ui.end_row();
                 });
 
-            self.template_studio.free_slots_mm[sel_idx] = slot;
+            if grid_changed {
+                self.template_studio.sanitize_grid_bounds();
+            }
+        });
 
-            ui.add_space(6.0);
+        ui.add_space(6.0);
+
+        // Card 2: Bento Cell Merge & Presets
+        studio_card_frame(&t).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.label(
+                RichText::new("2. Zellen verbinden (Bento-Layout)")
+                    .strong()
+                    .color(t.accent),
+            );
+            ui.label(
+                RichText::new(
+                    "Rechts im Bogen Zellen anklicken oder mit gedrückter Maustaste über mehrere Zellen ziehen:",
+                )
+                .small()
+                .color(t.text_faint),
+            );
+            ui.add_space(4.0);
+
+            let can_merge = self
+                .template_studio
+                .selected_cells
+                .is_some_and(|[r0, c0, r1, c1]| r1 > r0 || c1 > c0);
+            let has_selection = self.template_studio.selected_cells.is_some();
+
             ui.horizontal_wrapped(|ui| {
                 if ui
-                    .small_button("🔄 B ↔ H tauschen")
-                    .on_hover_text("Tauscht Breite und Höhe dieser Bildstelle (Hoch-/Querformat)")
-                    .clicked()
-                {
-                    let s = &mut self.template_studio.free_slots_mm[sel_idx];
-                    std::mem::swap(&mut s.width_mm, &mut s.height_mm);
-                }
-                if ui
-                    .small_button("↔ Horizontal zentrieren")
-                    .clicked()
-                {
-                    let s = &mut self.template_studio.free_slots_mm[sel_idx];
-                    s.x_mm = ((paper_size_mm.width_mm - s.width_mm) * 0.5).max(0.0);
-                }
-                if ui
-                    .small_button("↕ Vertikal zentrieren")
-                    .clicked()
-                {
-                    let s = &mut self.template_studio.free_slots_mm[sel_idx];
-                    s.y_mm = ((paper_size_mm.height_mm - s.height_mm) * 0.5).max(0.0);
-                }
-                if ui.small_button("⧉ Duplizieren").clicked() {
-                    let s = self.template_studio.free_slots_mm[sel_idx];
-                    let dup = RectMm::new(
-                        (s.x_mm + 8.0).min(paper_size_mm.width_mm - s.width_mm),
-                        (s.y_mm + 8.0).min(paper_size_mm.height_mm - s.height_mm),
-                        s.width_mm,
-                        s.height_mm,
-                    );
-                    self.template_studio.free_slots_mm.push(dup);
-                    self.template_studio.selected_free_slot =
-                        Some(self.template_studio.free_slots_mm.len() - 1);
-                }
-                if ui
                     .add_enabled(
-                        self.template_studio.free_slots_mm.len() > 1,
-                        egui::Button::new("🗑 Löschen").small(),
+                        can_merge,
+                        egui::Button::new("⊞ Zellen verbinden (Merge)"),
                     )
                     .clicked()
                 {
-                    self.template_studio.free_slots_mm.remove(sel_idx);
-                    self.template_studio.selected_free_slot =
-                        if self.template_studio.free_slots_mm.is_empty() {
-                            None
-                        } else {
-                            Some(sel_idx.saturating_sub(1))
-                        };
+                    self.template_studio.merge_selected_cells();
+                }
+                if ui
+                    .add_enabled(has_selection, egui::Button::new("⊟ Trennen"))
+                    .clicked()
+                {
+                    self.template_studio.unmerge_selected_cells();
+                }
+                if ui
+                    .add_enabled(
+                        has_selection,
+                        egui::Button::new("⬜ Zelle leer / aktiv"),
+                    )
+                    .clicked()
+                {
+                    self.template_studio.toggle_selected_cells_disabled();
                 }
             });
-        } else {
+
+            ui.add_space(4.0);
+            ui.label(RichText::new("Schnellvorlagen:").small().color(t.text_dim));
+            ui.horizontal_wrapped(|ui| {
+                if ui.small_button("Standard-Raster").clicked() {
+                    self.template_studio.merged_regions.clear();
+                    self.template_studio.disabled_cells.clear();
+                }
+                if ui.small_button("1 Groß oben + 3 Unten").clicked() {
+                    self.template_studio.rows = 3;
+                    self.template_studio.cols = 3;
+                    self.template_studio.merged_regions = vec![[0, 0, 1, 2]];
+                    self.template_studio.disabled_cells.clear();
+                    self.template_studio.selected_cells = Some([0, 0, 1, 2]);
+                }
+                if ui.small_button("1 Groß links + 2 Rechts").clicked() {
+                    self.template_studio.rows = 2;
+                    self.template_studio.cols = 3;
+                    self.template_studio.merged_regions = vec![[0, 0, 1, 1]];
+                    self.template_studio.disabled_cells.clear();
+                    self.template_studio.selected_cells = Some([0, 0, 1, 1]);
+                }
+                if ui.small_button("Panorama + 2 Unten").clicked() {
+                    self.template_studio.rows = 2;
+                    self.template_studio.cols = 2;
+                    self.template_studio.merged_regions = vec![[0, 0, 0, 1]];
+                    self.template_studio.disabled_cells.clear();
+                    self.template_studio.selected_cells = Some([0, 0, 0, 1]);
+                }
+            });
+        });
+
+        ui.add_space(6.0);
+
+        // Card 3: One-Way Switch to Stage 2
+        studio_card_frame(&t).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
             ui.label(
-                RichText::new("Klicke rechts auf dem Bogen eine Bildstelle an, um ihre exakten Millimeter-Maße zu bearbeiten.")
+                RichText::new("3. Freier Slot-Editor (Einbahnstraße)")
+                    .strong()
+                    .color(Color32::from_rgb(245, 175, 60)),
+            );
+            ui.label(
+                RichText::new(
+                    "Für freie Maus-Platzierung & exakte Millimeter-Maße. Ein Zurück zum Raster ist danach nicht mehr möglich.",
+                )
+                .small()
+                .color(t.text_faint),
+            );
+            ui.add_space(4.0);
+            if ui
+                .button(
+                    RichText::new("🔓 In freien Modus wechseln (kein Zurück)")
+                        .strong()
+                        .color(Color32::from_rgb(255, 195, 85)),
+                )
+                .clicked()
+            {
+                self.template_studio.enter_free_mode(paper_size_mm);
+            }
+        });
+    }
+
+    fn draw_studio_stage2_controls(&mut self, ui: &mut Ui, paper_size_mm: SizeMm) {
+        let t = self.tokens;
+
+        // Card 1: Free Mode Stamps & Magnet Snap
+        studio_card_frame(&t).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.label(
+                RichText::new("1. Bildstellen hinzufügen & Einrasten")
+                    .strong()
+                    .color(Color32::from_rgb(245, 175, 60)),
+            );
+            ui.add_space(4.0);
+            ui.checkbox(
+                &mut self.template_studio.snap_enabled,
+                "🧲 Magnetisches Einrasten (Ränder, Mitte & Slots)",
+            );
+            ui.add_space(4.0);
+            ui.label(RichText::new("Festmaß-Stempel:").small().color(t.text_dim));
+            ui.horizontal_wrapped(|ui| {
+                let stamps: &[(&str, f64, f64)] = &[
+                    ("+ Freier Slot", 80.0, 80.0),
+                    ("+ 9×13 cm", 89.0, 127.0),
+                    ("+ 10×15 cm", 102.0, 152.0),
+                    ("+ 13×18 cm", 127.0, 178.0),
+                    ("+ 15×20 cm", 152.0, 203.0),
+                    ("+ 20×30 cm", 203.0, 305.0),
+                ];
+                for &(lbl, w, h) in stamps {
+                    if ui.small_button(lbl).clicked() {
+                        let offset =
+                            (self.template_studio.free_slots_mm.len() as f64 * 6.0) % 40.0;
+                        let w_clamped = w.min(paper_size_mm.width_mm - 10.0).max(15.0);
+                        let h_clamped = h.min(paper_size_mm.height_mm - 10.0).max(15.0);
+                        let x = ((paper_size_mm.width_mm - w_clamped) * 0.5 + offset)
+                            .clamp(0.0, (paper_size_mm.width_mm - w_clamped).max(0.0));
+                        let y = ((paper_size_mm.height_mm - h_clamped) * 0.5 + offset)
+                            .clamp(0.0, (paper_size_mm.height_mm - h_clamped).max(0.0));
+                        self.template_studio
+                            .free_slots_mm
+                            .push(RectMm::new(x, y, w_clamped, h_clamped));
+                        self.template_studio.selected_free_slot =
+                            Some(self.template_studio.free_slots_mm.len() - 1);
+                    }
+                }
+            });
+        });
+
+        ui.add_space(6.0);
+
+        // Card 2: Selected Slot Millimeter Inspector
+        studio_card_frame(&t).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            if let Some(sel_idx) = self.template_studio.selected_free_slot
+                && sel_idx < self.template_studio.free_slots_mm.len()
+            {
+                ui.label(
+                    RichText::new(format!("2. Bildstelle #{} (Manuelle Maße)", sel_idx + 1))
+                        .strong()
+                        .color(t.accent),
+                );
+                ui.add_space(4.0);
+
+                let mut slot = self.template_studio.free_slots_mm[sel_idx];
+                let max_w = paper_size_mm.width_mm.max(20.0);
+                let max_h = paper_size_mm.height_mm.max(20.0);
+
+                egui::Grid::new("studio_stage2_inspector")
+                    .num_columns(2)
+                    .spacing([10.0, 6.0])
+                    .min_col_width(105.0)
+                    .show(ui, |ui| {
+                        ui.label(RichText::new("Position X / Y:").color(t.text_dim));
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::DragValue::new(&mut slot.x_mm)
+                                    .range(0.0..=(max_w - 10.0))
+                                    .speed(0.5)
+                                    .prefix("X: ")
+                                    .suffix(" mm"),
+                            );
+                            ui.add(
+                                egui::DragValue::new(&mut slot.y_mm)
+                                    .range(0.0..=(max_h - 10.0))
+                                    .speed(0.5)
+                                    .prefix("Y: ")
+                                    .suffix(" mm"),
+                            );
+                        });
+                        ui.end_row();
+
+                        ui.label(RichText::new("Breite / Höhe:").color(t.text_dim));
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::DragValue::new(&mut slot.width_mm)
+                                    .range(10.0..=max_w)
+                                    .speed(0.5)
+                                    .prefix("B: ")
+                                    .suffix(" mm"),
+                            );
+                            ui.add(
+                                egui::DragValue::new(&mut slot.height_mm)
+                                    .range(10.0..=max_h)
+                                    .speed(0.5)
+                                    .prefix("H: ")
+                                    .suffix(" mm"),
+                            );
+                        });
+                        ui.end_row();
+                    });
+
+                self.template_studio.free_slots_mm[sel_idx] = slot;
+
+                ui.add_space(6.0);
+                ui.horizontal_wrapped(|ui| {
+                    if ui.small_button("🔄 B ↔ H tauschen").clicked() {
+                        let s = &mut self.template_studio.free_slots_mm[sel_idx];
+                        std::mem::swap(&mut s.width_mm, &mut s.height_mm);
+                    }
+                    if ui.small_button("↔ Horiz. zentrieren").clicked() {
+                        let s = &mut self.template_studio.free_slots_mm[sel_idx];
+                        s.x_mm = ((paper_size_mm.width_mm - s.width_mm) * 0.5).max(0.0);
+                    }
+                    if ui.small_button("↕ Vert. zentrieren").clicked() {
+                        let s = &mut self.template_studio.free_slots_mm[sel_idx];
+                        s.y_mm = ((paper_size_mm.height_mm - s.height_mm) * 0.5).max(0.0);
+                    }
+                    if ui.small_button("⧉ Duplizieren").clicked() {
+                        let s = self.template_studio.free_slots_mm[sel_idx];
+                        let dup = RectMm::new(
+                            (s.x_mm + 8.0).min(paper_size_mm.width_mm - s.width_mm),
+                            (s.y_mm + 8.0).min(paper_size_mm.height_mm - s.height_mm),
+                            s.width_mm,
+                            s.height_mm,
+                        );
+                        self.template_studio.free_slots_mm.push(dup);
+                        self.template_studio.selected_free_slot =
+                            Some(self.template_studio.free_slots_mm.len() - 1);
+                    }
+                    if ui
+                        .add_enabled(
+                            self.template_studio.free_slots_mm.len() > 1,
+                            egui::Button::new("🗑 Löschen").small(),
+                        )
+                        .clicked()
+                    {
+                        self.template_studio.free_slots_mm.remove(sel_idx);
+                        self.template_studio.selected_free_slot =
+                            if self.template_studio.free_slots_mm.is_empty() {
+                                None
+                            } else {
+                                Some(sel_idx.saturating_sub(1))
+                            };
+                    }
+                });
+            } else {
+                ui.label(
+                    RichText::new(
+                        "Klicke rechts im Bogen eine Bildstelle an, um ihre exakten Millimeter-Maße zu bearbeiten.",
+                    )
                     .small()
                     .color(t.text_faint),
-            );
-        }
+                );
+            }
+        });
     }
 
     fn draw_template_studio_preview(
@@ -5320,8 +5393,12 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         printable_rect_mm: RectMm,
     ) {
         let t = self.tokens;
-        let avail = ui.available_size();
-        let (canvas_rect, canvas_resp) = ui.allocate_exact_size(avail, Sense::click_and_drag());
+        let canvas_rect = ui.max_rect();
+        let canvas_resp = ui.interact(
+            canvas_rect,
+            egui::Id::new("template_studio_preview_canvas"),
+            Sense::click_and_drag(),
+        );
         let p = ui.painter_at(canvas_rect);
 
         // Dark studio backdrop
@@ -6507,6 +6584,14 @@ fn draw_screen_cut_marks(painter: &egui::Painter, rect: Rect, scale: f32, stroke
     }
 }
 
+fn studio_card_frame(t: &Tokens) -> egui::Frame {
+    egui::Frame::new()
+        .fill(t.card)
+        .stroke(Stroke::new(1.0_f32, t.field_border))
+        .corner_radius(CornerRadius::same(6))
+        .inner_margin(egui::Margin::same(10))
+}
+
 fn build_thumbnail_color_image(buf: &ImageBuffer16, max_w: u32, max_h: u32) -> ColorImage {
     let src_w = buf.width.max(1);
     let src_h = buf.height.max(1);
@@ -6939,10 +7024,32 @@ mod tests {
             4
         );
 
-        // Render Stage 1 modal frame
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            app.render_ui(ctx);
-        });
+        // Render Stage 1 modal across 8 frames with mouse movements and verify the modal footer bar never shifts downward
+        let mut footer_tops = Vec::new();
+        for frame in 0..8 {
+            let mut input = egui::RawInput::default();
+            input.events.push(egui::Event::PointerMoved(Pos2::new(
+                450.0 + (frame as f32) * 10.0,
+                320.0 + (frame as f32) * 5.0,
+            )));
+            let _ = ctx.run(input, |ctx| {
+                app.render_ui(ctx);
+                if let Some(state) = egui::containers::panel::PanelState::load(
+                    ctx,
+                    egui::Id::new("studio_modal_bottom_bar"),
+                ) {
+                    footer_tops.push(state.rect.min.y);
+                }
+            });
+        }
+        assert!(footer_tops.len() >= 7);
+        let settled_top = footer_tops[1];
+        for &y in &footer_tops[1..] {
+            assert!(
+                (y - settled_top).abs() < 0.5,
+                "studio_modal_bottom_bar shifted vertically across hover frames: {footer_tops:?}"
+            );
+        }
 
         // Switch one-way into Stage 2 Free Mode and adjust slot 0 manually to 100x150 mm
         app.template_studio.enter_free_mode(paper_mm);
@@ -6975,4 +7082,3 @@ mod tests {
         assert!((solved.slots[0].slot_rect_mm.height_mm - 150.0).abs() < 0.01);
     }
 }
-
