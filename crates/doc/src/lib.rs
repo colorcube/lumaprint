@@ -739,7 +739,11 @@ impl LayoutMode {
     }
 }
 
-/// Non-destructive image crop, rotation, and mirror (`Bildbeschnitt`, EPL manual p. 15, 43).
+fn default_one_f64() -> f64 {
+    1.0
+}
+
+/// Non-destructive image crop, rotation, mirror, fit/fill mode, and in-slot zoom/pan (`Bildbeschnitt`, EPL manual p. 15, 43).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct CropSpec {
     /// Normalized crop rectangle `[x0, y0, width, height]` in `0.0..=1.0`.
@@ -752,6 +756,21 @@ pub struct CropSpec {
     /// Horizontal mirror (`Horizontal spiegeln`).
     #[serde(default)]
     pub flip_horizontal: bool,
+    /// Vertical mirror (`Vertikal spiegeln`).
+    #[serde(default)]
+    pub flip_vertical: bool,
+    /// `false` = `Bild einpassen` (Fit, default), `true` = `Fläche ausfüllen` (Fill).
+    #[serde(default)]
+    pub fill_slot: bool,
+    /// In-slot zoom multiplier (`1.0..=8.0`, controlled via `Shift + Mausrad`).
+    #[serde(default = "default_one_f64")]
+    pub slot_zoom: f64,
+    /// Normalized horizontal pan offset (`-1.0..=1.0`, controlled via `Shift + Linksklick`).
+    #[serde(default)]
+    pub pan_x: f64,
+    /// Normalized vertical pan offset (`-1.0..=1.0`, controlled via `Shift + Linksklick`).
+    #[serde(default)]
+    pub pan_y: f64,
 }
 
 impl Default for CropSpec {
@@ -763,6 +782,11 @@ impl Default for CropSpec {
             norm_h: 1.0,
             rotation_deg: 0,
             flip_horizontal: false,
+            flip_vertical: false,
+            fill_slot: false,
+            slot_zoom: 1.0,
+            pan_x: 0.0,
+            pan_y: 0.0,
         }
     }
 }

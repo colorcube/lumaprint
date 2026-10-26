@@ -29,8 +29,10 @@ pub struct SolvedImageSlot {
     pub slot_index: usize,
     /// Bounding box of the slot on the page (in `mm` from top-left of paper).
     pub slot_rect_mm: RectMm,
-    /// Actual image drawing rectangle (fitted or filled according to aspect ratio & crop).
+    /// Actual image drawing rectangle (fitted or filled according to aspect ratio, zoom & crop).
     pub image_draw_rect_mm: RectMm,
+    /// Normalized visible sub-rectangle `[u0, v0, uw, vh]` (`0.0..=1.0`) of the cropped/rotated image.
+    pub uv_rect: [f64; 4],
     pub assigned_image_id: Option<u64>,
     pub effective_ppi: Option<f64>,
     pub frame_line: FrameLineSpec,
@@ -285,28 +287,26 @@ pub fn solve_page_layout_at(doc: &PrintJobDocument, page_index: usize) -> Solved
                 }
             };
 
-            let image_draw_rect_mm = if active_img.is_none() {
-                slot_rect_mm
-            } else if doc.printer.borderless && std_spec.fit_to_scale {
-                slot_rect_mm.fill_aspect(img_aspect)
-            } else if std_spec.keep_aspect_ratio {
-                let fitted = slot_rect_mm.fit_aspect(img_aspect);
-                apply_centering(fitted, paper_size_mm, std_spec.centering)
-            } else {
-                slot_rect_mm
-            };
-
-            let effective_ppi = active_img.map(|img| {
-                let (cw, ch) = effective_cropped_pixels(img);
-                let ppi = image_draw_rect_mm.effective_ppi(cw, ch);
+            let (image_draw_rect_mm, uv_rect, effective_ppi) = if let Some(img) = active_img {
+                let force_fill = doc.printer.borderless && std_spec.fit_to_scale;
+                let (draw_r, uv, ppi) = solve_slot_draw_and_uv(
+                    slot_rect_mm,
+                    img,
+                    force_fill,
+                    std_spec.keep_aspect_ratio,
+                    std_spec.centering,
+                    Some(paper_size_mm),
+                );
                 if ppi < 180.0 {
                     warnings.push(format!(
                         "Niedrige Bildauflösung: {:.0} ppi (empfohlen >= 240 ppi für Fine-Art-Druck).",
                         ppi
                     ));
                 }
-                ppi
-            });
+                (draw_r, uv, Some(ppi))
+            } else {
+                (slot_rect_mm, [0.0, 0.0, 1.0, 1.0], None)
+            };
 
             SolvedPageLayout {
                 paper_size_mm,
@@ -315,6 +315,7 @@ pub fn solve_page_layout_at(doc: &PrintJobDocument, page_index: usize) -> Solved
                     slot_index: 0,
                     slot_rect_mm,
                     image_draw_rect_mm,
+                    uv_rect,
                     assigned_image_id: active_img.map(|i| i.id),
                     effective_ppi,
                     frame_line: std_spec.frame_line,
@@ -346,19 +347,29 @@ pub fn solve_page_layout_at(doc: &PrintJobDocument, page_index: usize) -> Solved
                 width_mm,
                 height_mm: img_h + 2.0 * m,
             };
-            let draw_rect = RectMm::new(m, m, usable_w, img_h);
-            let effective_ppi = active_img.map(|img| {
-                let (cw, ch) = effective_cropped_pixels(img);
-                draw_rect.effective_ppi(cw, ch)
-            });
+            let slot_rect = RectMm::new(m, m, usable_w, img_h);
+            let (draw_rect, uv_rect, effective_ppi) = if let Some(img) = active_img {
+                let (dr, uv, ppi) = solve_slot_draw_and_uv(
+                    slot_rect,
+                    img,
+                    false,
+                    true,
+                    CenteringMode::Center,
+                    None,
+                );
+                (dr, uv, Some(ppi))
+            } else {
+                (slot_rect, [0.0, 0.0, 1.0, 1.0], None)
+            };
 
             SolvedPageLayout {
                 paper_size_mm,
-                printable_rect_mm: draw_rect,
+                printable_rect_mm: slot_rect,
                 slots: vec![SolvedImageSlot {
                     slot_index: 0,
-                    slot_rect_mm: draw_rect,
+                    slot_rect_mm: slot_rect,
                     image_draw_rect_mm: draw_rect,
+                    uv_rect,
                     assigned_image_id: active_img.map(|i| i.id),
                     effective_ppi,
                     frame_line: FrameLineSpec::default(),
@@ -433,10 +444,19 @@ pub fn solve_page_layout_at(doc: &PrintJobDocument, page_index: usize) -> Solved
                 ]);
             }
 
-            let effective_ppi = active_img.map(|img| {
-                let (cw, ch) = effective_cropped_pixels(img);
-                front_canvas_rect_mm.effective_ppi(cw, ch)
-            });
+            let (uv_rect, effective_ppi) = if let Some(img) = active_img {
+                let (_dr, uv, ppi) = solve_slot_draw_and_uv(
+                    front_canvas_rect_mm,
+                    img,
+                    true,
+                    true,
+                    CenteringMode::Center,
+                    None,
+                );
+                (uv, Some(ppi))
+            } else {
+                ([0.0, 0.0, 1.0, 1.0], None)
+            };
 
             SolvedPageLayout {
                 paper_size_mm,
@@ -445,6 +465,7 @@ pub fn solve_page_layout_at(doc: &PrintJobDocument, page_index: usize) -> Solved
                     slot_index: 0,
                     slot_rect_mm: total_wrap_rect_mm,
                     image_draw_rect_mm: front_canvas_rect_mm,
+                    uv_rect,
                     assigned_image_id: active_img.map(|i| i.id),
                     effective_ppi,
                     frame_line: FrameLineSpec::default(),
@@ -494,25 +515,25 @@ pub fn solve_page_layout_at(doc: &PrintJobDocument, page_index: usize) -> Solved
                 let assigned_img =
                     assigned_id.and_then(|id| doc.images.iter().find(|i| i.id == id));
 
-                let image_draw_rect_mm = if let Some(img) = assigned_img {
-                    let img_aspect = effective_cropped_aspect(img);
-                    if tpl_spec.show_full_images {
-                        slot_rect_mm.fit_aspect(img_aspect)
-                    } else {
-                        slot_rect_mm.fill_aspect(img_aspect)
-                    }
+                let (image_draw_rect_mm, uv_rect, effective_ppi) = if let Some(img) = assigned_img {
+                    let (dr, uv, ppi) = solve_slot_draw_and_uv(
+                        slot_rect_mm,
+                        img,
+                        !tpl_spec.show_full_images,
+                        true,
+                        CenteringMode::Center,
+                        None,
+                    );
+                    (dr, uv, Some(ppi))
                 } else {
-                    slot_rect_mm
+                    (slot_rect_mm, [0.0, 0.0, 1.0, 1.0], None)
                 };
-                let effective_ppi = assigned_img.map(|img| {
-                    let (cw, ch) = effective_cropped_pixels(img);
-                    image_draw_rect_mm.effective_ppi(cw, ch)
-                });
 
                 slots.push(SolvedImageSlot {
                     slot_index: idx,
                     slot_rect_mm,
                     image_draw_rect_mm,
+                    uv_rect,
                     assigned_image_id: assigned_img.map(|i| i.id),
                     effective_ppi,
                     frame_line: tpl_spec.frame_line,
@@ -556,6 +577,7 @@ pub fn solve_page_layout_at(doc: &PrintJobDocument, page_index: usize) -> Solved
                     slot_index: 0,
                     slot_rect_mm: printable_rect_mm,
                     image_draw_rect_mm: printable_rect_mm,
+                    uv_rect: [0.0, 0.0, 1.0, 1.0],
                     assigned_image_id: None,
                     effective_ppi: None,
                     frame_line: comp_spec.frame_line,
@@ -617,13 +639,20 @@ pub fn solve_auto_nested_slots(
         }
 
         let rect = RectMm::new(cur_x, cur_y, w, h);
-        let (cw, ch) = effective_cropped_pixels(img);
-        let ppi = rect.effective_ppi(if rotated_90 { ch } else { cw }, if rotated_90 { cw } else { ch });
+        let (draw_rect, uv_rect, ppi) = solve_slot_draw_and_uv(
+            rect,
+            img,
+            false,
+            true,
+            CenteringMode::Center,
+            None,
+        );
 
         slots.push(SolvedImageSlot {
             slot_index: idx,
             slot_rect_mm: rect,
-            image_draw_rect_mm: rect,
+            image_draw_rect_mm: draw_rect,
+            uv_rect,
             assigned_image_id: Some(img.id),
             effective_ppi: Some(ppi),
             frame_line,
@@ -635,6 +664,71 @@ pub fn solve_auto_nested_slots(
     }
 
     slots
+}
+
+/// Computes `(image_draw_rect_mm, uv_rect, effective_ppi)` inside `slot_rect_mm` taking into account:
+/// - Fit (`Bild einpassen`: `fill_slot == false`) vs Fill (`Fläche ausfüllen`: `fill_slot == true` or `force_fill`)
+/// - In-slot zoom (`crop.slot_zoom`, `1.0..=8.0`)
+/// - In-slot pan (`crop.pan_x`, `crop.pan_y` in `-1.0..=1.0`)
+fn solve_slot_draw_and_uv(
+    slot_rect_mm: RectMm,
+    img: &SourceImageEntry,
+    force_fill: bool,
+    keep_aspect: bool,
+    centering: CenteringMode,
+    page_size_mm: Option<SizeMm>,
+) -> (RectMm, [f64; 4], f64) {
+    let (cw, ch) = effective_cropped_pixels(img);
+    let img_aspect = f64::from(cw) / f64::from(ch.max(1));
+
+    let base_fitted = if keep_aspect {
+        slot_rect_mm.fit_aspect(img_aspect)
+    } else {
+        slot_rect_mm
+    };
+
+    let use_fill = force_fill || img.crop.fill_slot;
+    let base_scale = if use_fill {
+        let sx = slot_rect_mm.width_mm / base_fitted.width_mm.max(0.1);
+        let sy = slot_rect_mm.height_mm / base_fitted.height_mm.max(0.1);
+        sx.max(sy)
+    } else {
+        1.0
+    };
+
+    let zoom = img.crop.slot_zoom.clamp(1.0, 8.0);
+    let total_scale = base_scale * zoom;
+
+    let virt_w = (base_fitted.width_mm * total_scale).max(0.1);
+    let virt_h = (base_fitted.height_mm * total_scale).max(0.1);
+
+    let draw_w = virt_w.min(slot_rect_mm.width_mm);
+    let draw_h = virt_h.min(slot_rect_mm.height_mm);
+
+    let mut draw_rect = RectMm::new(
+        slot_rect_mm.x_mm + (slot_rect_mm.width_mm - draw_w) * 0.5,
+        slot_rect_mm.y_mm + (slot_rect_mm.height_mm - draw_h) * 0.5,
+        draw_w,
+        draw_h,
+    );
+    if let Some(page) = page_size_mm {
+        if total_scale <= 1.001 {
+            draw_rect = apply_centering(draw_rect, page, centering);
+        }
+    }
+
+    let uw = (draw_w / virt_w).clamp(0.05, 1.0);
+    let vh = (draw_h / virt_h).clamp(0.05, 1.0);
+    let max_u0 = (1.0 - uw).max(0.0);
+    let max_v0 = (1.0 - vh).max(0.0);
+    let u0 = (max_u0 * 0.5 * (1.0 + img.crop.pan_x.clamp(-1.0, 1.0))).clamp(0.0, max_u0);
+    let v0 = (max_v0 * 0.5 * (1.0 + img.crop.pan_y.clamp(-1.0, 1.0))).clamp(0.0, max_v0);
+
+    let vis_px_w = ((f64::from(cw) * uw).round() as u32).max(1);
+    let vis_px_h = ((f64::from(ch) * vh).round() as u32).max(1);
+    let ppi = draw_rect.effective_ppi(vis_px_w, vis_px_h);
+
+    (draw_rect, [u0, v0, uw, vh], ppi)
 }
 
 fn apply_centering(mut rect: RectMm, page: SizeMm, mode: CenteringMode) -> RectMm {

@@ -91,8 +91,9 @@ pub fn render_page_at_16bit(
         let src_entry = doc.images.iter().find(|e| e.id == img_id);
         let crop = src_entry.map(|e| e.crop).unwrap_or_default();
 
-        // Prepare a working copy of the image with non-destructive color/ABW/ICC applied
-        let mut proc_buf = extract_cropped_and_rotated(src_buf, crop, slot.rotated_90)?;
+        // Prepare a working copy of the image with non-destructive crop, rotation, flip, zoom/pan, and color/ABW/ICC applied
+        let mut proc_buf =
+            extract_cropped_and_rotated(src_buf, crop, slot.rotated_90, slot.uv_rect)?;
         apply_color_pipeline(
             doc,
             &mut proc_buf,
@@ -209,6 +210,7 @@ fn extract_cropped_and_rotated(
     src: &ImageBuffer16,
     crop: lumaprint_doc::CropSpec,
     extra_rot90: bool,
+    uv_rect: [f64; 4],
 ) -> Result<ImageBuffer16, ColorError> {
     let x0 = ((crop.norm_x.clamp(0.0, 0.95) * f64::from(src.width)).round() as u32)
         .min(src.width.saturating_sub(1));
@@ -221,17 +223,32 @@ fn extract_cropped_and_rotated(
 
     let cropped = extract_subrect(src, x0, y0, cw, ch)?;
     let total_rot = (crop.rotation_deg + if extra_rot90 { 90 } else { 0 }) % 360;
-    let rotated = match total_rot {
+    let mut rotated = match total_rot {
         90 => rotate_90_cw(&cropped)?,
         180 => rotate_180(&cropped)?,
         270 => rotate_270_cw(&cropped)?,
         _ => cropped,
     };
     if crop.flip_horizontal {
-        flip_horizontal_16(&rotated)
-    } else {
-        Ok(rotated)
+        rotated = flip_horizontal_16(&rotated)?;
     }
+    if crop.flip_vertical {
+        rotated = flip_vertical_16(&rotated)?;
+    }
+
+    let [u0, v0, uw, vh] = uv_rect;
+    if u0.abs() > 1e-4 || v0.abs() > 1e-4 || (uw - 1.0).abs() > 1e-4 || (vh - 1.0).abs() > 1e-4 {
+        let ux0 = ((u0.clamp(0.0, 0.95) * f64::from(rotated.width)).round() as u32)
+            .min(rotated.width.saturating_sub(1));
+        let vy0 = ((v0.clamp(0.0, 0.95) * f64::from(rotated.height)).round() as u32)
+            .min(rotated.height.saturating_sub(1));
+        let uw_px = ((uw.clamp(0.05, 1.0) * f64::from(rotated.width)).round() as u32)
+            .clamp(1, rotated.width - ux0);
+        let vh_px = ((vh.clamp(0.05, 1.0) * f64::from(rotated.height)).round() as u32)
+            .clamp(1, rotated.height - vy0);
+        rotated = extract_subrect(&rotated, ux0, vy0, uw_px, vh_px)?;
+    }
+    Ok(rotated)
 }
 
 fn flip_horizontal_16(src: &ImageBuffer16) -> Result<ImageBuffer16, ColorError> {
@@ -240,6 +257,18 @@ fn flip_horizontal_16(src: &ImageBuffer16) -> Result<ImageBuffer16, ColorError> 
         for x in 0..src.width {
             if let Some(px) = src.get_pixel(x, y) {
                 dst.set_pixel(src.width - 1 - x, y, px);
+            }
+        }
+    }
+    Ok(dst)
+}
+
+fn flip_vertical_16(src: &ImageBuffer16) -> Result<ImageBuffer16, ColorError> {
+    let mut dst = ImageBuffer16::new_solid(src.width, src.height, Rgb16::WHITE)?;
+    for y in 0..src.height {
+        for x in 0..src.width {
+            if let Some(px) = src.get_pixel(x, y) {
+                dst.set_pixel(x, src.height - 1 - y, px);
             }
         }
     }

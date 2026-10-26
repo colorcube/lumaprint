@@ -58,7 +58,8 @@ fn main() -> ExitCode {
         viewport: egui::ViewportBuilder::default()
             .with_title("LumaPrint — Fine-Art Print Layout & Color Management (Epson SC-P900 / SC-P700)")
             .with_inner_size([1520.0, 960.0])
-            .with_min_inner_size([1100.0, 720.0]),
+            .with_min_inner_size([1100.0, 720.0])
+            .with_drag_and_drop(true),
         ..Default::default()
     };
 

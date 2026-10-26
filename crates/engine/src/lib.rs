@@ -214,6 +214,15 @@ pub const COMMAND_CATALOG: &[CommandSpec] = &[
 pub enum EngineCommand {
     AddImageFile { path: String },
     ImportImageFiles { paths: Vec<String> },
+    ImportAndPlaceOnSheet {
+        paths: Vec<String>,
+        target_slot: Option<(usize, usize)>,
+    },
+    PlacePoolImageOnSheet {
+        image_id: u64,
+        page_index: usize,
+        slot_index: Option<usize>,
+    },
     AddDemoImages,
     RemoveImage { image_id: u64 },
     SelectActiveImage { index: usize },
@@ -674,7 +683,7 @@ impl Session {
 
         match cmd {
             EngineCommand::AddImageFile { path } => {
-                let fname = self.import_single_image_into_pool(&path)?;
+                let (_id, fname) = self.import_single_image_into_pool(&path)?;
                 self.status_message =
                     format!("Bild '{}' in den Bilder-Pool aufgenommen (16-Bit).", fname);
             }
@@ -686,6 +695,64 @@ impl Session {
                     }
                 }
                 self.status_message = format!("{count} Bild(er) in den Bilder-Pool importiert.");
+            }
+            EngineCommand::ImportAndPlaceOnSheet { paths, target_slot } => {
+                self.doc.sync_active_page_to_list();
+                let mut imported_ids = Vec::new();
+                for p in paths {
+                    if let Ok((id, _)) = self.import_single_image_into_pool(&p) {
+                        imported_ids.push(id);
+                    }
+                }
+                let start_page = target_slot
+                    .map(|(pi, _)| pi)
+                    .unwrap_or(self.doc.active_page_index);
+                for (i, img_id) in imported_ids.iter().copied().enumerate() {
+                    let explicit_slot = if i == 0 {
+                        target_slot.map(|(_, si)| si)
+                    } else {
+                        None
+                    };
+                    let (placed_page, placed_slot) =
+                        self.place_image_id_on_sheet(img_id, start_page, explicit_slot);
+                    self.doc.active_page_index = placed_page;
+                    self.doc.active_slot_index = placed_slot;
+                }
+                self.doc.load_active_page_from_list();
+                self.status_message = format!(
+                    "{} Bild(er) importiert und auf Bogen platziert ({} Bogen/Bögen gesamt).",
+                    imported_ids.len(),
+                    self.doc.pages.len()
+                );
+                return Ok(());
+            }
+            EngineCommand::PlacePoolImageOnSheet {
+                image_id,
+                page_index,
+                slot_index,
+            } => {
+                self.doc.sync_active_page_to_list();
+                let (placed_page, placed_slot) =
+                    self.place_image_id_on_sheet(image_id, page_index, slot_index);
+                self.doc.active_page_index = placed_page;
+                self.doc.active_slot_index = placed_slot;
+                self.doc.load_active_page_from_list();
+                if let Some((idx, img)) = self
+                    .doc
+                    .images
+                    .iter()
+                    .enumerate()
+                    .find(|(_, i)| i.id == image_id)
+                {
+                    self.doc.active_image_index = idx;
+                    self.status_message = format!(
+                        "Bild '{}' auf Bogen {} (Bildstelle {}) platziert.",
+                        img.display_name,
+                        placed_page + 1,
+                        placed_slot + 1
+                    );
+                }
+                return Ok(());
             }
             EngineCommand::AddDemoImages => {
                 self.add_synthetic_demo_images()?;
@@ -936,6 +1003,11 @@ impl Session {
                     *slot = image_id;
                 }
                 self.doc.active_slot_index = slot_index;
+                self.doc.sync_active_page_to_list();
+                if let Some(id) = image_id {
+                    let pi = self.doc.active_page_index;
+                    self.auto_orient_image_for_slot(id, pi, slot_index);
+                }
             }
             EngineCommand::AssignImageToPageSlot {
                 page_index,
@@ -955,6 +1027,7 @@ impl Session {
                 self.doc.active_slot_index = slot_index;
                 self.doc.load_active_page_from_list();
                 if let Some(id) = image_id {
+                    self.auto_orient_image_for_slot(id, page_index, slot_index);
                     if let Some((idx, img)) = self
                         .doc
                         .images
@@ -1012,6 +1085,12 @@ impl Session {
                     }
                     pb.slot_assignments[slot_b] = val_a;
                 }
+                if let Some(id_b) = val_b {
+                    self.auto_orient_image_for_slot(id_b, page_a, slot_a);
+                }
+                if let Some(id_a) = val_a {
+                    self.auto_orient_image_for_slot(id_a, page_b, slot_b);
+                }
                 self.doc.load_active_page_from_list();
                 return Ok(());
             }
@@ -1065,9 +1144,13 @@ impl Session {
                     slot_assignments: slots,
                 };
                 self.doc.pages.push(new_page);
-                self.doc.active_page_index = self.doc.pages.len() - 1;
+                let new_pi = self.doc.pages.len() - 1;
+                self.doc.active_page_index = new_pi;
                 self.doc.active_slot_index = 0;
                 self.doc.load_active_page_from_list();
+                if let Some(id) = initial_image_id {
+                    self.auto_orient_image_for_slot(id, new_pi, 0);
+                }
                 self.status_message = format!("Neuer Bogen {} angelegt.", self.doc.pages.len());
                 return Ok(());
             }
@@ -1174,49 +1257,7 @@ impl Session {
                 };
 
                 for img_id in target_ids {
-                    let mut placed = false;
-                    let page_len = self.doc.pages.len();
-                    for p_idx in 0..page_len {
-                        let cap = slots_capacity_for_layout(&self.doc, &self.doc.pages[p_idx].layout);
-                        if let Some(page) = self.doc.pages.get_mut(p_idx) {
-                            if page.slot_assignments.len() < cap {
-                                page.slot_assignments.resize(25, None);
-                            }
-                            if let Some(empty_slot) = page
-                                .slot_assignments
-                                .iter_mut()
-                                .take(cap)
-                                .find(|s| s.is_none())
-                            {
-                                *empty_slot = Some(img_id);
-                                placed = true;
-                                break;
-                            }
-                        }
-                    }
-                    if !placed {
-                        let next_id = self
-                            .doc
-                            .pages
-                            .iter()
-                            .map(|p| p.id)
-                            .max()
-                            .unwrap_or(0)
-                            + 1;
-                        let inherited_layout = self
-                            .doc
-                            .pages
-                            .last()
-                            .map(|p| p.layout.clone())
-                            .unwrap_or_else(|| self.doc.layout.clone());
-                        let mut slots = vec![None; 25];
-                        slots[0] = Some(img_id);
-                        self.doc.pages.push(PrintSheetPage {
-                            id: next_id,
-                            layout: inherited_layout,
-                            slot_assignments: slots,
-                        });
-                    }
+                    let _ = self.place_image_id_on_sheet(img_id, 0, None);
                 }
                 self.doc.load_active_page_from_list();
                 self.status_message = format!(
@@ -1322,7 +1363,109 @@ impl Session {
         Ok(())
     }
 
-    fn import_single_image_into_pool(&mut self, path: &str) -> Result<String, EngineError> {
+    /// Automatically rotates `image_id` by 90° if its current cropped aspect orientation
+    /// (landscape vs. portrait) does not match the target slot's orientation on `page_index`.
+    fn auto_orient_image_for_slot(&mut self, image_id: u64, page_index: usize, slot_index: usize) {
+        let solved = solve_page_layout_at(&self.doc, page_index);
+        let Some(slot) = solved
+            .slots
+            .get(slot_index)
+            .or_else(|| solved.slots.first())
+        else {
+            return;
+        };
+        let slot_w = slot.slot_rect_mm.width_mm;
+        let slot_h = slot.slot_rect_mm.height_mm;
+        if (slot_w - slot_h).abs() <= 1.0 {
+            return;
+        }
+        let slot_is_landscape = slot_w > slot_h;
+        if let Some(img) = self.doc.images.iter_mut().find(|i| i.id == image_id) {
+            let base_w = f64::from(img.meta.width.max(1)) * img.crop.norm_w.clamp(0.05, 1.0);
+            let base_h = f64::from(img.meta.height.max(1)) * img.crop.norm_h.clamp(0.05, 1.0);
+            let (eff_w, eff_h) = match img.crop.rotation_deg % 360 {
+                90 | 270 => (base_h, base_w),
+                _ => (base_w, base_h),
+            };
+            if (eff_w - eff_h).abs() > 1.0 {
+                let img_is_landscape = eff_w > eff_h;
+                if img_is_landscape != slot_is_landscape {
+                    img.crop.rotation_deg = (img.crop.rotation_deg + 90) % 360;
+                }
+            }
+        }
+    }
+
+    /// Places `img_id` into `explicit_slot` on `preferred_page` if provided, or into the next
+    /// available free slot starting from `preferred_page`, adding a new page if all slots are full.
+    fn place_image_id_on_sheet(
+        &mut self,
+        img_id: u64,
+        preferred_page: usize,
+        explicit_slot: Option<usize>,
+    ) -> (usize, usize) {
+        if let Some(si) = explicit_slot {
+            let pi = preferred_page.min(self.doc.pages.len().saturating_sub(1));
+            if let Some(page) = self.doc.pages.get_mut(pi) {
+                if si >= page.slot_assignments.len() {
+                    page.slot_assignments.resize(si + 1, None);
+                }
+                page.slot_assignments[si] = Some(img_id);
+            }
+            self.auto_orient_image_for_slot(img_id, pi, si);
+            return (pi, si);
+        }
+
+        let page_len = self.doc.pages.len();
+        let start_pi = preferred_page.min(page_len.saturating_sub(1));
+        for p_idx in start_pi..page_len {
+            let cap = slots_capacity_for_layout(&self.doc, &self.doc.pages[p_idx].layout);
+            if let Some(page) = self.doc.pages.get_mut(p_idx) {
+                if page.slot_assignments.len() < cap {
+                    page.slot_assignments.resize(25, None);
+                }
+                if let Some((si, empty_slot)) = page
+                    .slot_assignments
+                    .iter_mut()
+                    .enumerate()
+                    .take(cap)
+                    .find(|(_, s)| s.is_none())
+                {
+                    *empty_slot = Some(img_id);
+                    self.auto_orient_image_for_slot(img_id, p_idx, si);
+                    return (p_idx, si);
+                }
+            }
+        }
+
+        let next_id = self
+            .doc
+            .pages
+            .iter()
+            .map(|p| p.id)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let inherited_layout = self
+            .doc
+            .pages
+            .get(start_pi)
+            .or_else(|| self.doc.pages.last())
+            .map(|p| p.layout.clone())
+            .unwrap_or_else(|| self.doc.layout.clone());
+        let mut slots = vec![None; 25];
+        slots[0] = Some(img_id);
+        self.doc.pages.push(PrintSheetPage {
+            id: next_id,
+            layout: inherited_layout,
+            slot_assignments: slots,
+        });
+        let new_pi = self.doc.pages.len() - 1;
+        self.auto_orient_image_for_slot(img_id, new_pi, 0);
+        (new_pi, 0)
+    }
+
+    fn import_single_image_into_pool(&mut self, path: &str) -> Result<(u64, String), EngineError> {
         let loaded = load_image_file(path)?;
         let id = self.next_image_id;
         self.next_image_id += 1;
@@ -1347,7 +1490,7 @@ impl Session {
             composer_pos_mm: (15.0, 15.0),
         });
         self.doc.active_image_index = self.doc.images.len().saturating_sub(1);
-        Ok(fname)
+        Ok((id, fname))
     }
 
     /// Generates two synthetic 16-bit Fine-Art demo images into the Image Pool and places the landscape onto Bogen 1.
@@ -1426,6 +1569,7 @@ impl Session {
         if self.doc.slot_assignments.first().copied().flatten().is_none() {
             self.doc.slot_assignments[0] = Some(id2);
             self.doc.sync_active_page_to_list();
+            self.auto_orient_image_for_slot(id2, 0, 0);
         }
         Ok(())
     }
@@ -1810,4 +1954,31 @@ mod tests {
             assert_eq!(cnt, 0);
         }
     }
+
+    #[test]
+    fn auto_orient_image_matches_slot_orientation_on_placement() {
+        let mut session = Session::new();
+        // Default sheet is Portrait (A4 Portrait), single slot is portrait.
+        // Add demo images (both are 6000x4000 / 480x320 landscape).
+        // Image 2 is placed on slot 0 of Bogen 1 during AddDemoImages -> should be auto-rotated to 90 deg!
+        session.execute(EngineCommand::AddDemoImages).unwrap();
+        let img2 = &session.doc.images[1];
+        assert_eq!(img2.crop.rotation_deg % 180, 90);
+
+        // Image 1 in pool is unplaced (rotation 0). Now switch sheet to Landscape and place Image 1 -> stays 0 deg.
+        session
+            .execute(EngineCommand::SetOrientation(Orientation::Landscape))
+            .unwrap();
+        let img1_id = session.doc.images[0].id;
+        session
+            .execute(EngineCommand::PlacePoolImageOnSheet {
+                image_id: img1_id,
+                page_index: 0,
+                slot_index: Some(0),
+            })
+            .unwrap();
+        assert_eq!(session.doc.images[0].crop.rotation_deg % 180, 0);
+    }
 }
+
+
