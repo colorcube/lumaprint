@@ -709,7 +709,17 @@ impl Session {
                     .unwrap_or(self.doc.active_page_index);
                 for (i, img_id) in imported_ids.iter().copied().enumerate() {
                     let explicit_slot = if i == 0 {
-                        target_slot.map(|(_, si)| si)
+                        target_slot.and_then(|(pi, si)| {
+                            let is_empty = self
+                                .doc
+                                .pages
+                                .get(pi)
+                                .and_then(|p| p.slot_assignments.get(si))
+                                .copied()
+                                .flatten()
+                                .is_none();
+                            is_empty.then_some(si)
+                        })
                     } else {
                         None
                     };
@@ -1234,7 +1244,7 @@ impl Session {
             }
             EngineCommand::AutoDistributePoolImages { only_unassigned } => {
                 self.doc.sync_active_page_to_list();
-                let target_ids: Vec<u64> = if only_unassigned {
+                let mut target_ids: Vec<u64> = if only_unassigned {
                     self.doc
                         .images
                         .iter()
@@ -1245,6 +1255,10 @@ impl Session {
                         .map(|img| img.id)
                         .collect()
                 } else {
+                    Vec::new()
+                };
+
+                if !only_unassigned || target_ids.is_empty() {
                     // Clear existing pages and distribute all images in the pool cleanly
                     let base_layout = self.doc.layout.clone();
                     self.doc.pages = vec![PrintSheetPage {
@@ -1253,11 +1267,18 @@ impl Session {
                         slot_assignments: vec![None; 25],
                     }];
                     self.doc.active_page_index = 0;
-                    self.doc.images.iter().map(|img| img.id).collect()
-                };
+                    target_ids = self.doc.images.iter().map(|img| img.id).collect();
+                }
 
+                let mut last_placed: Option<(usize, usize)> = None;
                 for img_id in target_ids {
-                    let _ = self.place_image_id_on_sheet(img_id, 0, None);
+                    last_placed = Some(self.place_image_id_on_sheet(img_id, 0, None));
+                }
+                if let Some((pi, si)) = last_placed {
+                    if only_unassigned {
+                        self.doc.active_page_index = pi;
+                        self.doc.active_slot_index = si;
+                    }
                 }
                 self.doc.load_active_page_from_list();
                 self.status_message = format!(

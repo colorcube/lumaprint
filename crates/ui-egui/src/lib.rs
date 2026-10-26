@@ -48,6 +48,13 @@ enum DragPayload {
     ReorderPage(usize),
 }
 
+#[derive(Debug, Clone)]
+enum NativeDialogResult {
+    ImportFiles(Vec<String>),
+    ImportFolder(std::path::PathBuf),
+    ExportPrintFile(std::path::PathBuf),
+}
+
 /// Main LumaPrint GUI Application state.
 pub struct LumaPrintApp {
     pub session: Session,
@@ -81,6 +88,8 @@ pub struct LumaPrintApp {
     last_slot_screen_rects: Vec<(usize, usize, Rect)>,
     last_nav_card_rects: Vec<(usize, Rect)>,
     last_nav_add_rect: Option<Rect>,
+    pending_os_dropped_paths: Option<(Vec<std::path::PathBuf>, u8)>,
+    dialog_rx: Option<std::sync::mpsc::Receiver<NativeDialogResult>>,
 }
 
 impl Default for LumaPrintApp {
@@ -126,6 +135,8 @@ impl LumaPrintApp {
             last_slot_screen_rects: Vec::new(),
             last_nav_card_rects: Vec::new(),
             last_nav_add_rect: None,
+            pending_os_dropped_paths: None,
+            dialog_rx: None,
         }
     }
 
@@ -154,8 +165,21 @@ impl LumaPrintApp {
         let mut zoom_reset = false;
         let mut do_undo = false;
         let mut do_redo = false;
+        let mut pasted_paths: Vec<std::path::PathBuf> = Vec::new();
 
         ctx.input(|i| {
+            for ev in &i.events {
+                if let egui::Event::Paste(text) = ev {
+                    for line in text.lines() {
+                        if let Some(p) = parse_dropped_or_pasted_path(line) {
+                            if p.exists() {
+                                pasted_paths.push(p);
+                            }
+                        }
+                    }
+                }
+            }
+
             let cmd = i.modifiers.command || i.modifiers.ctrl;
             if !cmd {
                 return;
@@ -190,6 +214,13 @@ impl LumaPrintApp {
             }
         });
 
+        if !pasted_paths.is_empty() {
+            let pos = ctx
+                .input(|i| i.pointer.hover_pos().or_else(|| i.pointer.interact_pos()))
+                .or(self.last_drag_pos);
+            self.process_os_dropped_paths(pasted_paths, pos);
+        }
+
         if zoom_reset {
             self.zoom = 1.0;
         } else if zoom_delta.abs() > 0.001 {
@@ -209,6 +240,174 @@ impl LumaPrintApp {
         self.dirty_preview = true;
     }
 
+    fn open_native_image_picker(&mut self) {
+        if self.dialog_rx.is_some() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.dialog_rx = Some(rx);
+        let start_dir = default_dialog_start_dir();
+        std::thread::spawn(move || {
+            let out = std::process::Command::new("kdialog")
+                .args([
+                    "--title",
+                    "Bilder in Bilder-Pool importieren",
+                    "--multiple",
+                    "--separate-output",
+                    "--getopenfilename",
+                    &start_dir,
+                    "Bilddateien (*.tif *.tiff *.png *.jpg *.jpeg *.TIF *.TIFF *.PNG *.JPG *.JPEG)|Alle Dateien (*)",
+                ])
+                .output()
+                .or_else(|_| {
+                    std::process::Command::new("zenity")
+                        .args([
+                            "--file-selection",
+                            "--multiple",
+                            "--separator=\n",
+                            "--title=Bilder in Bilder-Pool importieren",
+                            "--file-filter=Bilddateien (TIFF, PNG, JPEG) | *.tif *.tiff *.TIF *.TIFF *.png *.PNG *.jpg *.jpeg *.JPG *.JPEG",
+                            "--file-filter=Alle Dateien | *",
+                        ])
+                        .output()
+                });
+            if let Ok(output) = out {
+                if output.status.success() {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let files: Vec<String> = stdout
+                        .lines()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(String::from)
+                        .collect();
+                    if !files.is_empty() {
+                        let _ = tx.send(NativeDialogResult::ImportFiles(files));
+                    }
+                }
+            }
+        });
+    }
+
+    fn open_native_folder_picker(&mut self) {
+        if self.dialog_rx.is_some() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.dialog_rx = Some(rx);
+        let start_dir = default_dialog_start_dir();
+        std::thread::spawn(move || {
+            let out = std::process::Command::new("kdialog")
+                .args([
+                    "--title",
+                    "Bildordner in Bilder-Pool importieren",
+                    "--getexistingdirectory",
+                    &start_dir,
+                ])
+                .output()
+                .or_else(|_| {
+                    std::process::Command::new("zenity")
+                        .args([
+                            "--file-selection",
+                            "--directory",
+                            "--title=Bildordner in Bilder-Pool importieren",
+                        ])
+                        .output()
+                });
+            if let Ok(output) = out {
+                if output.status.success() {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    if let Some(folder) = stdout.lines().map(str::trim).find(|s| !s.is_empty()) {
+                        let _ = tx.send(NativeDialogResult::ImportFolder(
+                            std::path::PathBuf::from(folder),
+                        ));
+                    }
+                }
+            }
+        });
+    }
+
+    fn open_native_export_picker(&mut self) {
+        if self.dialog_rx.is_some() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.dialog_rx = Some(rx);
+        let default_path = if self.export_path_input.trim().is_empty() {
+            String::from("/tmp/lumaprint_sheet.tif")
+        } else {
+            self.export_path_input.trim().to_string()
+        };
+        std::thread::spawn(move || {
+            let out = std::process::Command::new("kdialog")
+                .args([
+                    "--title",
+                    "16-Bit Druckbogen exportieren",
+                    "--getsavefilename",
+                    &default_path,
+                    "16-Bit TIFF / PNG (*.tif *.tiff *.png)",
+                ])
+                .output()
+                .or_else(|_| {
+                    std::process::Command::new("zenity")
+                        .args([
+                            "--file-selection",
+                            "--save",
+                            &format!("--filename={default_path}"),
+                            "--title=16-Bit Druckbogen exportieren",
+                        ])
+                        .output()
+                });
+            if let Ok(output) = out {
+                if output.status.success() {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    if let Some(target) = stdout.lines().map(str::trim).find(|s| !s.is_empty()) {
+                        let _ = tx.send(NativeDialogResult::ExportPrintFile(
+                            std::path::PathBuf::from(target),
+                        ));
+                    }
+                }
+            }
+        });
+    }
+
+    fn poll_native_dialog(&mut self, ctx: &Context) {
+        let Some(ref rx) = self.dialog_rx else {
+            return;
+        };
+        ctx.request_repaint_after(std::time::Duration::from_millis(80));
+        match rx.try_recv() {
+            Ok(res) => {
+                self.dialog_rx = None;
+                match res {
+                    NativeDialogResult::ImportFiles(paths) => {
+                        self.exec(EngineCommand::ImportImageFiles { paths });
+                    }
+                    NativeDialogResult::ImportFolder(folder) => {
+                        self.import_folder_with_guard(&folder);
+                    }
+                    NativeDialogResult::ExportPrintFile(path) => {
+                        let p_str = path.to_string_lossy().into_owned();
+                        self.export_path_input = p_str.clone();
+                        match self.session.export_print_file(&path, 360) {
+                            Ok(()) => {
+                                self.session.status_message = format!(
+                                    "Druckbogen erfolgreich nach '{p_str}' exportiert."
+                                );
+                            }
+                            Err(e) => {
+                                self.session.status_message = format!("Export-Fehler: {e}");
+                            }
+                        }
+                    }
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.dialog_rx = None;
+            }
+        }
+    }
+
     fn import_folder_with_guard(&mut self, folder_path: &Path) {
         let paths = scan_folder_for_images(folder_path);
         if paths.is_empty() {
@@ -224,39 +423,80 @@ impl LumaPrintApp {
     }
 
     fn handle_os_dropped_files(&mut self, ctx: &Context) {
-        let (dropped, drop_pos) = ctx.input(|i| {
+        let (dropped, live_pos, has_hovered_files) = ctx.input(|i| {
             (
                 i.raw.dropped_files.clone(),
-                i.pointer
-                    .hover_pos()
-                    .or_else(|| i.pointer.interact_pos())
-                    .or(self.last_drag_pos),
+                i.pointer.hover_pos().or_else(|| i.pointer.interact_pos()),
+                !i.raw.hovered_files.is_empty(),
             )
         });
-        if dropped.is_empty() {
-            return;
+        if has_hovered_files {
+            ctx.request_repaint();
         }
 
+        if !dropped.is_empty() {
+            let mut paths = Vec::new();
+            for df in dropped {
+                if let Some(p) = df.path {
+                    if let Some(clean) = parse_dropped_or_pasted_path(&p.to_string_lossy()) {
+                        paths.push(clean);
+                    } else {
+                        paths.push(p);
+                    }
+                } else if !df.name.is_empty() {
+                    if let Some(clean) = parse_dropped_or_pasted_path(&df.name) {
+                        paths.push(clean);
+                    }
+                }
+            }
+            if !paths.is_empty() {
+                if let Some(pos) = live_pos {
+                    self.process_os_dropped_paths(paths, Some(pos));
+                    return;
+                }
+                // Under X11 / XWayland XDND, the file manager holds a pointer grab until XdndDrop completes,
+                // so `EnterNotify` / `CursorMoved` with `hover_pos()` arrives on the frame right after `dropped_files`.
+                self.pending_os_dropped_paths = Some((paths, 3));
+                ctx.request_repaint();
+                return;
+            }
+        }
+
+        if let Some((paths, rem)) = self.pending_os_dropped_paths.take() {
+            if let Some(pos) = live_pos {
+                self.process_os_dropped_paths(paths, Some(pos));
+            } else if rem > 1 {
+                self.pending_os_dropped_paths = Some((paths, rem - 1));
+                ctx.request_repaint();
+            } else {
+                self.process_os_dropped_paths(paths, self.last_drag_pos);
+            }
+        }
+    }
+
+    fn process_os_dropped_paths(
+        &mut self,
+        paths: Vec<std::path::PathBuf>,
+        drop_pos: Option<Pos2>,
+    ) {
         let dropped_in_pool = drop_pos.is_some_and(|p| self.last_pool_rect.contains(p));
         let dropped_in_canvas = drop_pos.is_some_and(|p| self.last_canvas_rect.contains(p));
 
         let mut collected_files = Vec::new();
-        for df in dropped {
-            if let Some(path) = df.path {
-                if path.is_dir() {
-                    if dropped_in_pool || !dropped_in_canvas {
-                        self.import_folder_with_guard(&path);
-                    } else {
-                        let folder_imgs = scan_folder_for_images(&path);
-                        if folder_imgs.len() > 50 {
-                            self.pending_folder_import = Some(folder_imgs);
-                        } else {
-                            collected_files.extend(folder_imgs);
-                        }
-                    }
+        for path in paths {
+            if path.is_dir() {
+                if dropped_in_pool || !dropped_in_canvas {
+                    self.import_folder_with_guard(&path);
                 } else {
-                    collected_files.push(path.to_string_lossy().into_owned());
+                    let folder_imgs = scan_folder_for_images(&path);
+                    if folder_imgs.len() > 50 {
+                        self.pending_folder_import = Some(folder_imgs);
+                    } else {
+                        collected_files.extend(folder_imgs);
+                    }
                 }
+            } else {
+                collected_files.push(path.to_string_lossy().into_owned());
             }
         }
 
@@ -377,6 +617,7 @@ impl LumaPrintApp {
         }
         self.ensure_theme_and_fonts(ctx);
         self.handle_keyboard_shortcuts(ctx);
+        self.poll_native_dialog(ctx);
         self.handle_os_dropped_files(ctx);
         self.ensure_thumbnails(ctx);
         self.refresh_preview_if_needed(ctx);
@@ -525,6 +766,29 @@ impl LumaPrintApp {
     }
 
     fn draw_drag_tooltip(&self, ctx: &Context) {
+        let os_hovered_count = ctx.input(|i| i.raw.hovered_files.len());
+        if os_hovered_count > 0 {
+            egui::Area::new(egui::Id::new("lumaprint_os_dnd_banner"))
+                .order(egui::Order::Tooltip)
+                .anchor(egui::Align2::CENTER_TOP, Vec2::new(0.0, 56.0))
+                .interactable(false)
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style())
+                        .fill(self.tokens.chrome)
+                        .stroke(Stroke::new(2.0_f32, self.tokens.accent))
+                        .inner_margin(egui::Margin::symmetric(14, 8))
+                        .show(ui, |ui| {
+                            ui.label(
+                                RichText::new(format!(
+                                    "📥 {os_hovered_count} Datei(en) ablegen: Links in den Bilder-Pool oder direkt auf den Bogen zum Platzieren"
+                                ))
+                                .strong()
+                                .color(self.tokens.text),
+                            );
+                        });
+                });
+        }
+
         let Some(payload) = self
             .active_drag
             .or_else(|| egui::DragAndDrop::payload::<DragPayload>(ctx).map(|p| *p))
@@ -588,12 +852,25 @@ impl LumaPrintApp {
                 // A: Main Menu Bar: Datei | Ansicht | Bearbeiten | Einstellungen | Hilfe
                 egui::menu::bar(ui, |ui| {
                     ui.menu_button("Datei", |ui| {
+                        if ui.button("➕ + Bilder in Pool importieren…").clicked() {
+                            self.open_native_image_picker();
+                            ui.close_menu();
+                        }
+                        if ui.button("📁 + Ordner in Pool importieren…").clicked() {
+                            self.open_native_folder_picker();
+                            ui.close_menu();
+                        }
+                        if ui.button("💾 16-Bit Druckbogen exportieren…").clicked() {
+                            self.open_native_export_picker();
+                            ui.close_menu();
+                        }
+                        ui.separator();
                         if ui.button("Demo-Kalibrierungsbilder hinzufügen").clicked() {
                             self.exec(EngineCommand::AddDemoImages);
                             ui.close_menu();
                         }
                         if ui
-                            .button("🪄 Unplatzierte Pool-Bilder auf Bögen verteilen")
+                            .button("🪄 Pool-Bilder auf Bögen verteilen")
                             .clicked()
                         {
                             self.exec(EngineCommand::AutoDistributePoolImages {
@@ -1022,7 +1299,7 @@ impl LumaPrintApp {
                 if ui
                     .button("🪄 Auf Bögen verteilen")
                     .on_hover_text(
-                        "Verteilt alle unplatzierten Bilder aus dem Pool automatisch auf freie Bildstellen und legt bei Bedarf neue Bögen an",
+                        "Verteilt Bilder aus dem Pool automatisch auf freie Bildstellen und legt bei Bedarf neue Bögen an",
                     )
                     .clicked()
                 {
@@ -1035,37 +1312,62 @@ impl LumaPrintApp {
 
         ui.add_space(4.0);
 
-        // Single image path import
+        // Single/multiple image import (opens native file picker when text field is empty, or imports typed path)
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("+ Bild").clicked() && !self.open_file_path_input.trim().is_empty() {
-                    let p = self.open_file_path_input.trim().to_string();
-                    self.exec(EngineCommand::AddImageFile { path: p });
-                }
+                let btn_clicked = ui
+                    .button("+ Bild")
+                    .on_hover_text(
+                        "Öffnet die Dateiauswahl zum Hinzufügen von Bildern (oder lädt den eingegebenen Pfad)",
+                    )
+                    .clicked();
                 let edit_w = ui.available_width().max(60.0);
-                ui.add(
+                let text_resp = ui.add(
                     egui::TextEdit::singleline(&mut self.open_file_path_input)
                         .desired_width(edit_w)
-                        .hint_text("Bilddatei-Pfad (oder per Drag&Drop)..."),
+                        .hint_text("Pfad oder Klick auf '+ Bild'…"),
                 );
+                let enter_pressed =
+                    text_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if btn_clicked || enter_pressed {
+                    let trimmed = self.open_file_path_input.trim().to_string();
+                    if !trimmed.is_empty() {
+                        self.open_file_path_input.clear();
+                        self.exec(EngineCommand::AddImageFile { path: trimmed });
+                    } else if btn_clicked {
+                        self.open_native_image_picker();
+                    }
+                }
             });
         });
 
-        // Folder import with >50 confirmation guard
+        // Folder import with >50 confirmation guard (opens native folder picker when text field is empty, or imports typed folder)
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("📁 + Ordner").clicked()
-                    && !self.open_folder_path_input.trim().is_empty()
-                {
-                    let folder = Path::new(self.open_folder_path_input.trim()).to_path_buf();
-                    self.import_folder_with_guard(&folder);
-                }
+                let btn_clicked = ui
+                    .button("📁 + Ordner")
+                    .on_hover_text(
+                        "Öffnet die Ordnerauswahl zum Importieren eines Bildordners (oder lädt den eingegebenen Pfad)",
+                    )
+                    .clicked();
                 let edit_w = ui.available_width().max(60.0);
-                ui.add(
+                let text_resp = ui.add(
                     egui::TextEdit::singleline(&mut self.open_folder_path_input)
                         .desired_width(edit_w)
-                        .hint_text("Ordner-Pfad importieren..."),
+                        .hint_text("Ordner-Pfad oder Klick auf '+ Ordner'…"),
                 );
+                let enter_pressed =
+                    text_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if btn_clicked || enter_pressed {
+                    let trimmed = self.open_folder_path_input.trim().to_string();
+                    if !trimmed.is_empty() {
+                        self.open_folder_path_input.clear();
+                        let folder = Path::new(&trimmed).to_path_buf();
+                        self.import_folder_with_guard(&folder);
+                    } else if btn_clicked {
+                        self.open_native_folder_picker();
+                    }
+                }
             });
         });
 
@@ -2511,17 +2813,7 @@ impl LumaPrintApp {
                                 .on_hover_text("16-Bit Druckbogen in Datei exportieren")
                                 .clicked()
                             {
-                                let path = self.export_path_input.clone();
-                                match self.session.export_print_file(&path, 360) {
-                                    Ok(()) => {
-                                        self.session.status_message = format!(
-                                            "Druckbogen erfolgreich nach '{path}' exportiert."
-                                        );
-                                    }
-                                    Err(e) => {
-                                        self.session.status_message = format!("Export-Fehler: {e}");
-                                    }
-                                }
+                                self.open_native_export_picker();
                             }
 
                             ui.with_layout(
@@ -4384,6 +4676,61 @@ fn build_thumbnail_color_image(buf: &ImageBuffer16, max_w: u32, max_h: u32) -> C
     ColorImage::from_rgb([dst_w as usize, dst_h as usize], &rgb8)
 }
 
+fn default_dialog_start_dir() -> String {
+    if let Ok(home) = std::env::var("HOME") {
+        let pictures_de = Path::new(&home).join("Bilder");
+        if pictures_de.is_dir() {
+            return pictures_de.to_string_lossy().into_owned();
+        }
+        let pictures_en = Path::new(&home).join("Pictures");
+        if pictures_en.is_dir() {
+            return pictures_en.to_string_lossy().into_owned();
+        }
+        return home;
+    }
+    String::from(".")
+}
+
+fn parse_dropped_or_pasted_path(raw: &str) -> Option<std::path::PathBuf> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        return None;
+    }
+    let stripped = if let Some(rest) = trimmed.strip_prefix("file://localhost") {
+        rest
+    } else if let Some(rest) = trimmed.strip_prefix("file://") {
+        rest
+    } else {
+        trimmed
+    };
+    let decoded = percent_decode_path(stripped);
+    if decoded.is_empty() {
+        None
+    } else {
+        Some(std::path::PathBuf::from(decoded))
+    }
+}
+
+fn percent_decode_path(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = (bytes[i + 1] as char).to_digit(16);
+            let lo = (bytes[i + 2] as char).to_digit(16);
+            if let (Some(h), Some(l)) = (hi, lo) {
+                out.push(((h << 4) | l) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4578,4 +4925,56 @@ mod tests {
         assert_eq!(app.session.doc.page_count(), 2);
         assert_eq!(app.session.doc.page_slots(1)[0], Some(1));
     }
+
+    #[test]
+    fn os_drag_and_drop_with_deferred_xdnd_cursor_and_native_dialog_rx_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let img_path = dir.path().join("dropped_test.png");
+        let chart = lumaprint_codecs::generate_test_chart_16bit(32, 24).unwrap();
+        lumaprint_codecs::save_png16(&chart.buffer, &img_path).unwrap();
+
+        let ctx = Context::default();
+        let mut app = LumaPrintApp::new();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            app.render_ui(ctx);
+        });
+        assert_eq!(app.session.doc.images.len(), 2);
+        assert_eq!(app.session.doc.page_count(), 1);
+
+        // Simulate X11 XDND drop where Frame 1 has dropped_files and hover_pos = None (pointer grab held by file manager),
+        // and Frame 2 delivers PointerMoved over the Bogen once the grab releases.
+        let mut drop_frame = egui::RawInput::default();
+        drop_frame.dropped_files.push(egui::DroppedFile {
+            path: Some(img_path.clone()),
+            ..Default::default()
+        });
+        let _ = ctx.run(drop_frame, |ctx| {
+            app.render_ui(ctx);
+        });
+        assert!(app.pending_os_dropped_paths.is_some());
+
+        let mut enter_frame = egui::RawInput::default();
+        enter_frame
+            .events
+            .push(egui::Event::PointerMoved(app.last_canvas_rect.center()));
+        let _ = ctx.run(enter_frame, |ctx| {
+            app.render_ui(ctx);
+        });
+        // Dropped onto Bogen -> imported into pool (now 3 images) AND placed onto a new sheet (now 2 pages)!
+        assert_eq!(app.session.doc.images.len(), 3);
+        assert_eq!(app.session.doc.page_count(), 2);
+
+        // Also test native dialog channel result polling
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.dialog_rx = Some(rx);
+        tx.send(NativeDialogResult::ImportFiles(vec![
+            img_path.to_string_lossy().into_owned(),
+        ]))
+        .unwrap();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            app.render_ui(ctx);
+        });
+        assert_eq!(app.session.doc.images.len(), 4);
+    }
 }
+

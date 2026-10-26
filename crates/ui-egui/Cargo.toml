@@ -21,3 +21,7 @@ lumaprint-engine = { workspace = true }
 egui = { workspace = true }
 eframe = { workspace = true }
 serde = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+

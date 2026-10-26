@@ -820,7 +820,10 @@ pub fn parse_ppd_cups_icc_profiles(ppd_text: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
     for line in ppd_text.lines() {
         let trimmed = line.trim();
-        let Some(rest) = trimmed.strip_prefix("*cupsICCProfile ") else {
+        let Some(rest) = trimmed
+            .strip_prefix("*cupsICCProfile ")
+            .or_else(|| trimmed.strip_prefix("*%cupsICCProfile "))
+        else {
             continue;
         };
         let Some((lhs, rhs)) = rest.split_once(':') else {
