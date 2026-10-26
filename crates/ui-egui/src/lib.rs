@@ -50,8 +50,7 @@ enum DragPayload {
 
 #[derive(Debug, Clone)]
 enum NativeDialogResult {
-    ImportFiles(Vec<String>),
-    ImportFolder(std::path::PathBuf),
+    AddPaths(Vec<std::path::PathBuf>),
     ExportPrintFile(std::path::PathBuf),
 }
 
@@ -77,8 +76,6 @@ pub struct LumaPrintApp {
     pub new_template_name: String,
     pub new_template_rows: usize,
     pub new_template_cols: usize,
-    pub open_file_path_input: String,
-    pub open_folder_path_input: String,
     pub pending_folder_import: Option<Vec<String>>,
     pub export_path_input: String,
     active_drag: Option<DragPayload>,
@@ -124,8 +121,6 @@ impl LumaPrintApp {
             new_template_name: String::from("Kontaktbogen 2x2"),
             new_template_rows: 2,
             new_template_cols: usize::from(2u8),
-            open_file_path_input: String::new(),
-            open_folder_path_input: String::new(),
             pending_folder_import: None,
             export_path_input: String::from("/tmp/lumaprint_sheet.tif"),
             active_drag: None,
@@ -240,7 +235,8 @@ impl LumaPrintApp {
         self.dirty_preview = true;
     }
 
-    fn open_native_image_picker(&mut self) {
+    /// Opens a single unified dialog allowing the user to select image files AND/OR folders.
+    fn open_native_add_picker(&mut self) {
         if self.dialog_rx.is_some() {
             return;
         }
@@ -248,24 +244,75 @@ impl LumaPrintApp {
         self.dialog_rx = Some(rx);
         let start_dir = default_dialog_start_dir();
         std::thread::spawn(move || {
-            let out = std::process::Command::new("kdialog")
-                .args([
-                    "--title",
-                    "Bilder in Bilder-Pool importieren",
-                    "--multiple",
-                    "--separate-output",
-                    "--getopenfilename",
-                    &start_dir,
-                    "Bilddateien (*.tif *.tiff *.png *.jpg *.jpeg *.TIF *.TIFF *.PNG *.JPG *.JPEG)|Alle Dateien (*)",
-                ])
+            let py_script = r#"
+import sys
+from PyQt6.QtWidgets import QApplication, QFileDialog, QDialog, QDialogButtonBox
+
+app = QApplication(sys.argv)
+class UnifiedPicker(QFileDialog):
+    def __init__(self, start_dir):
+        super().__init__(None, "Bilder oder Ordner zum Bilder-Pool hinzufügen", start_dir)
+        self.setOption(QFileDialog.Option.DontUseNativeDialog, True)
+        self.setFileMode(QFileDialog.FileMode.ExistingFiles)
+        self.setNameFilters([
+            "Bilder & Ordner (*.tif *.tiff *.png *.jpg *.jpeg *.TIF *.TIFF *.PNG *.JPG *.JPEG)",
+            "Alle Dateien (*)"
+        ])
+        self.chosen = []
+        box = self.findChild(QDialogButtonBox)
+        if box:
+            open_btn = box.button(QDialogButtonBox.StandardButton.Open)
+            if open_btn:
+                open_btn.setText("Hinzufügen")
+                open_btn.clicked.disconnect()
+                open_btn.clicked.connect(self.finish_selection)
+            cancel_btn = box.button(QDialogButtonBox.StandardButton.Cancel)
+            if cancel_btn:
+                cancel_btn.setText("Abbrechen")
+    def finish_selection(self):
+        sel = self.selectedFiles()
+        if not sel:
+            sel = [self.directory().absolutePath()]
+        self.chosen = sel
+        QDialog.accept(self)
+
+dlg = UnifiedPicker(sys.argv[1] if len(sys.argv) > 1 else ".")
+dlg.resize(860, 560)
+if dlg.exec() == int(QDialog.DialogCode.Accepted):
+    res = dlg.chosen if dlg.chosen else dlg.selectedFiles()
+    for p in res:
+        print(p)
+"#;
+            let out = std::process::Command::new("python3")
+                .args(["-c", py_script, &start_dir])
                 .output()
+                .and_then(|o| {
+                    if o.status.success() || o.status.code() == Some(0) {
+                        Ok(o)
+                    } else {
+                        Err(std::io::Error::other("PyQt6 picker unavailable"))
+                    }
+                })
+                .or_else(|_| {
+                    std::process::Command::new("kdialog")
+                        .args([
+                            "--title",
+                            "Bilder zum Bilder-Pool hinzufügen",
+                            "--multiple",
+                            "--separate-output",
+                            "--getopenfilename",
+                            &start_dir,
+                            "Bilddateien (*.tif *.tiff *.png *.jpg *.jpeg *.TIF *.TIFF *.PNG *.JPG *.JPEG)|Alle Dateien (*)",
+                        ])
+                        .output()
+                })
                 .or_else(|_| {
                     std::process::Command::new("zenity")
                         .args([
                             "--file-selection",
                             "--multiple",
                             "--separator=\n",
-                            "--title=Bilder in Bilder-Pool importieren",
+                            "--title=Bilder zum Bilder-Pool hinzufügen",
                             "--file-filter=Bilddateien (TIFF, PNG, JPEG) | *.tif *.tiff *.TIF *.TIFF *.png *.PNG *.jpg *.jpeg *.JPG *.JPEG",
                             "--file-filter=Alle Dateien | *",
                         ])
@@ -274,52 +321,14 @@ impl LumaPrintApp {
             if let Ok(output) = out {
                 if output.status.success() {
                     let stdout = String::from_utf8_lossy(&output.stdout);
-                    let files: Vec<String> = stdout
+                    let paths: Vec<std::path::PathBuf> = stdout
                         .lines()
                         .map(str::trim)
                         .filter(|s| !s.is_empty())
-                        .map(String::from)
+                        .map(std::path::PathBuf::from)
                         .collect();
-                    if !files.is_empty() {
-                        let _ = tx.send(NativeDialogResult::ImportFiles(files));
-                    }
-                }
-            }
-        });
-    }
-
-    fn open_native_folder_picker(&mut self) {
-        if self.dialog_rx.is_some() {
-            return;
-        }
-        let (tx, rx) = std::sync::mpsc::channel();
-        self.dialog_rx = Some(rx);
-        let start_dir = default_dialog_start_dir();
-        std::thread::spawn(move || {
-            let out = std::process::Command::new("kdialog")
-                .args([
-                    "--title",
-                    "Bildordner in Bilder-Pool importieren",
-                    "--getexistingdirectory",
-                    &start_dir,
-                ])
-                .output()
-                .or_else(|_| {
-                    std::process::Command::new("zenity")
-                        .args([
-                            "--file-selection",
-                            "--directory",
-                            "--title=Bildordner in Bilder-Pool importieren",
-                        ])
-                        .output()
-                });
-            if let Ok(output) = out {
-                if output.status.success() {
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    if let Some(folder) = stdout.lines().map(str::trim).find(|s| !s.is_empty()) {
-                        let _ = tx.send(NativeDialogResult::ImportFolder(
-                            std::path::PathBuf::from(folder),
-                        ));
+                    if !paths.is_empty() {
+                        let _ = tx.send(NativeDialogResult::AddPaths(paths));
                     }
                 }
             }
@@ -379,11 +388,18 @@ impl LumaPrintApp {
             Ok(res) => {
                 self.dialog_rx = None;
                 match res {
-                    NativeDialogResult::ImportFiles(paths) => {
-                        self.exec(EngineCommand::ImportImageFiles { paths });
-                    }
-                    NativeDialogResult::ImportFolder(folder) => {
-                        self.import_folder_with_guard(&folder);
+                    NativeDialogResult::AddPaths(paths) => {
+                        let mut file_paths = Vec::new();
+                        for p in paths {
+                            if p.is_dir() {
+                                self.import_folder_with_guard(&p);
+                            } else {
+                                file_paths.push(p.to_string_lossy().into_owned());
+                            }
+                        }
+                        if !file_paths.is_empty() {
+                            self.exec(EngineCommand::ImportImageFiles { paths: file_paths });
+                        }
                     }
                     NativeDialogResult::ExportPrintFile(path) => {
                         let p_str = path.to_string_lossy().into_owned();
@@ -852,12 +868,8 @@ impl LumaPrintApp {
                 // A: Main Menu Bar: Datei | Ansicht | Bearbeiten | Einstellungen | Hilfe
                 egui::menu::bar(ui, |ui| {
                     ui.menu_button("Datei", |ui| {
-                        if ui.button("➕ + Bilder in Pool importieren…").clicked() {
-                            self.open_native_image_picker();
-                            ui.close_menu();
-                        }
-                        if ui.button("📁 + Ordner in Pool importieren…").clicked() {
-                            self.open_native_folder_picker();
+                        if ui.button("➕ Hinzufügen (Bilder / Ordner)…").clicked() {
+                            self.open_native_add_picker();
                             ui.close_menu();
                         }
                         if ui.button("💾 16-Bit Druckbogen exportieren…").clicked() {
@@ -1288,87 +1300,40 @@ impl LumaPrintApp {
         let panel_w = ui.available_width();
         ui.set_max_width(panel_w);
 
-        // Header with Pool count & Auto-Distribute button
+        // Header with Pool count
         ui.horizontal(|ui| {
             ui.label(
                 RichText::new(format!("Bilder-Pool ({})", self.session.doc.images.len()))
                     .strong()
                     .color(t.text),
             );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .button("🪄 Auf Bögen verteilen")
-                    .on_hover_text(
-                        "Verteilt Bilder aus dem Pool automatisch auf freie Bildstellen und legt bei Bedarf neue Bögen an",
-                    )
-                    .clicked()
-                {
-                    self.exec(EngineCommand::AutoDistributePoolImages {
-                        only_unassigned: true,
-                    });
-                }
-            });
         });
 
         ui.add_space(4.0);
 
-        // Single/multiple image import (opens native file picker when text field is empty, or imports typed path)
+        // Single "Hinzufügen" button (images and folders allowed) + "Auf Bögen verteilen"
         ui.horizontal(|ui| {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let btn_clicked = ui
-                    .button("+ Bild")
-                    .on_hover_text(
-                        "Öffnet die Dateiauswahl zum Hinzufügen von Bildern (oder lädt den eingegebenen Pfad)",
-                    )
-                    .clicked();
-                let edit_w = ui.available_width().max(60.0);
-                let text_resp = ui.add(
-                    egui::TextEdit::singleline(&mut self.open_file_path_input)
-                        .desired_width(edit_w)
-                        .hint_text("Pfad oder Klick auf '+ Bild'…"),
-                );
-                let enter_pressed =
-                    text_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if btn_clicked || enter_pressed {
-                    let trimmed = self.open_file_path_input.trim().to_string();
-                    if !trimmed.is_empty() {
-                        self.open_file_path_input.clear();
-                        self.exec(EngineCommand::AddImageFile { path: trimmed });
-                    } else if btn_clicked {
-                        self.open_native_image_picker();
-                    }
-                }
-            });
-        });
+            if ui
+                .button("➕ Hinzufügen")
+                .on_hover_text(
+                    "Bilder oder Ordner auswählen und zum Bilder-Pool hinzufügen (oder per Drag&Drop hereinziehen)",
+                )
+                .clicked()
+            {
+                self.open_native_add_picker();
+            }
 
-        // Folder import with >50 confirmation guard (opens native folder picker when text field is empty, or imports typed folder)
-        ui.horizontal(|ui| {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let btn_clicked = ui
-                    .button("📁 + Ordner")
-                    .on_hover_text(
-                        "Öffnet die Ordnerauswahl zum Importieren eines Bildordners (oder lädt den eingegebenen Pfad)",
-                    )
-                    .clicked();
-                let edit_w = ui.available_width().max(60.0);
-                let text_resp = ui.add(
-                    egui::TextEdit::singleline(&mut self.open_folder_path_input)
-                        .desired_width(edit_w)
-                        .hint_text("Ordner-Pfad oder Klick auf '+ Ordner'…"),
-                );
-                let enter_pressed =
-                    text_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if btn_clicked || enter_pressed {
-                    let trimmed = self.open_folder_path_input.trim().to_string();
-                    if !trimmed.is_empty() {
-                        self.open_folder_path_input.clear();
-                        let folder = Path::new(&trimmed).to_path_buf();
-                        self.import_folder_with_guard(&folder);
-                    } else if btn_clicked {
-                        self.open_native_folder_picker();
-                    }
-                }
-            });
+            if ui
+                .button("🪄 Auf Bögen verteilen")
+                .on_hover_text(
+                    "Verteilt Bilder aus dem Pool automatisch auf freie Bildstellen und legt bei Bedarf neue Bögen an",
+                )
+                .clicked()
+            {
+                self.exec(EngineCommand::AutoDistributePoolImages {
+                    only_unassigned: true,
+                });
+            }
         });
 
         ui.add_space(2.0);
@@ -4964,17 +4929,18 @@ mod tests {
         assert_eq!(app.session.doc.images.len(), 3);
         assert_eq!(app.session.doc.page_count(), 2);
 
-        // Also test native dialog channel result polling
+        // Also test unified native dialog channel result polling (both file and folder)
         let (tx, rx) = std::sync::mpsc::channel();
         app.dialog_rx = Some(rx);
-        tx.send(NativeDialogResult::ImportFiles(vec![
-            img_path.to_string_lossy().into_owned(),
+        tx.send(NativeDialogResult::AddPaths(vec![
+            img_path,
+            dir.path().to_path_buf(),
         ]))
         .unwrap();
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             app.render_ui(ctx);
         });
-        assert_eq!(app.session.doc.images.len(), 4);
+        assert_eq!(app.session.doc.images.len(), 5);
     }
 }
 
