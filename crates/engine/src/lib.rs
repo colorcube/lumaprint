@@ -16,11 +16,12 @@ use lumaprint_codecs::{
 };
 use lumaprint_color::{AbwSettings, AbwTonePreset, ImageBuffer16, Rgb16};
 use lumaprint_cups::{
-    CupsError, CupsSpoolRequest, SystemPrinter, discover_system_printers, submit_cups_job,
+    CupsError, CupsSpoolRequest, DriverColorControl, SystemPrinter, discover_custom_media_json,
+    discover_system_printers, sn_id_to_base_media_key, submit_cups_job,
 };
 use lumaprint_doc::{
     CenteringMode, ColorManagementMode, CropSpec, CustomMediaSpec, DetailedPrinterSettings,
-    DocError, FrameLineSpec, GalleryWrapSpec, LayoutMode, OutputSharpening, PaperSource,
+    DocError, FrameLineSpec, GalleryWrapSpec, LayoutMode, OutputSharpening, PaperSource, PlatenGap,
     PrintJobDocument, PrintPreset, PrintQuality, SourceImageEntry, find_media_type,
 };
 use lumaprint_geom::{MarginsMm, Orientation, RectMm, SizeMm};
@@ -240,7 +241,10 @@ impl Session {
     pub fn new() -> Self {
         let mut icc_search_dirs = vec![
             PathBuf::from("/usr/share/color/icc"),
+            PathBuf::from("/usr/share/color/icc/epson-scp900"),
             PathBuf::from("/usr/local/share/color/icc"),
+            PathBuf::from("/home/rene/Projekte/Spielwiese/Drucker-Epson-SC-P900/Code/epson-p900-escpr-cups/profiles"),
+            PathBuf::from("../epson-p900-escpr-cups/profiles"),
             PathBuf::from("/home/rene/Projekte/Spielwiese/Drucker-Epson-SC-P900/Code/Epson-SC-P900-Treiber/extracted/icc"),
             PathBuf::from("./Code/Epson-SC-P900-Treiber/extracted/icc"),
             PathBuf::from("../Epson-SC-P900-Treiber/extracted/icc"),
@@ -279,6 +283,7 @@ impl Session {
             status_message: String::from("LumaPrint bereit."),
         };
         session.discover_icc_profiles();
+        session.discover_custom_media();
         session.seed_starter_presets();
         session.apply_media_constraints();
         session
@@ -292,9 +297,23 @@ impl Session {
             .or_else(|| self.system_printers.first())
     }
 
-    /// Scans `icc_search_dirs` for `.icc` / `.icm` profiles and caches their parsed headers/LUTs.
+    /// Loads an ICC profile from disk into `self.icc_profiles` if not yet cached, indexing both by full path and basename.
+    pub fn ensure_icc_loaded(&mut self, path_str: &str) {
+        let p = Path::new(path_str);
+        if let Ok(prof) = IccProfile::from_file(p) {
+            self.icc_profiles
+                .entry(path_str.to_string())
+                .or_insert_with(|| prof.clone());
+            if let Some(fname) = p.file_name().and_then(|n| n.to_str()) {
+                self.icc_profiles.entry(fname.to_string()).or_insert(prof);
+            }
+        }
+    }
+
+    /// Scans `icc_search_dirs` and PPD `*cupsICCProfile` entries for `.icc` / `.icm` profiles.
     pub fn discover_icc_profiles(&mut self) {
-        for dir in &self.icc_search_dirs {
+        let dirs = self.icc_search_dirs.clone();
+        for dir in &dirs {
             let Ok(entries) = std::fs::read_dir(dir) else {
                 continue;
             };
@@ -314,6 +333,60 @@ impl Session {
                 }
             }
         }
+
+        let ppd_paths: Vec<String> = self
+            .system_printers
+            .iter()
+            .flat_map(|sp| sp.capabilities.media_icc_profiles.values().cloned())
+            .collect();
+        for icc_path in ppd_paths {
+            self.ensure_icc_loaded(&icc_path);
+        }
+    }
+
+    /// Discovers external `custom_media.json` entries (from `epson-p900-escpr-cups` / Media Installer)
+    /// and merges them into `self.doc.user_backup.custom_media`.
+    pub fn discover_custom_media(&mut self) {
+        for entry in discover_custom_media_json() {
+            let base_key = if let Ok(sn) = entry.base_media.parse::<u32>() {
+                sn_id_to_base_media_key(sn)
+                    .unwrap_or("VelvetFineArt")
+                    .to_string()
+            } else {
+                entry.base_media.clone()
+            };
+            if let Some(ref icc) = entry.icc_profile {
+                self.ensure_icc_loaded(icc);
+            }
+            let exists = self.doc.user_backup.custom_media.iter().any(|cm| {
+                (!cm.key.is_empty() && cm.key.eq_ignore_ascii_case(&entry.key))
+                    || cm.name.eq_ignore_ascii_case(&entry.name)
+            });
+            if !exists {
+                self.doc.user_backup.custom_media.push(CustomMediaSpec {
+                    key: entry.key,
+                    name: entry.name,
+                    base_media_key: base_key,
+                    user_media_id: entry.user_media_id,
+                    icc_profile_path: entry.icc_profile,
+                    thickness_mm: 0.45,
+                    platen_gap: PlatenGap::Wide,
+                    drying_time_sec: f64::from(entry.drying_time),
+                    ink_duty_percent: entry.print_duty,
+                    paper_feed_offset_percent: 0.0,
+                    bottom_edge_priority: entry.bottom_edge_priority,
+                    rubbing_reduction: entry.rubbing_reduction,
+                });
+            }
+        }
+    }
+
+    /// Finds a registered `CustomMediaSpec` by its `key` or `name`.
+    pub fn find_custom_media(&self, key_or_name: &str) -> Option<&CustomMediaSpec> {
+        self.doc.user_backup.custom_media.iter().find(|cm| {
+            (!cm.key.is_empty() && cm.key.eq_ignore_ascii_case(key_or_name))
+                || cm.name.eq_ignore_ascii_case(key_or_name)
+        })
     }
 
     /// Seeds helpful starter presets for Fine-Art workflows.
@@ -367,7 +440,12 @@ impl Session {
 
     /// Enforces media constraints whenever Media Type or Quality changes.
     pub fn apply_media_constraints(&mut self) {
-        if let Some(media) = find_media_type(&self.doc.printer.media_key) {
+        let lookup_key = self
+            .find_custom_media(&self.doc.printer.media_key)
+            .map(|cm| cm.base_media_key.clone())
+            .unwrap_or_else(|| self.doc.printer.media_key.clone());
+
+        if let Some(media) = find_media_type(&lookup_key) {
             if !media.supports_carbon_black
                 && self.doc.printer.quality == PrintQuality::CarbonBlack5760x1440
             {
@@ -382,16 +460,59 @@ impl Session {
         }
     }
 
-    /// Returns the currently active `IccProfile` for the selected media or custom profile path.
+    fn resolve_icc_by_path_or_basename(&self, path_or_name: &str) -> Option<&IccProfile> {
+        if let Some(p) = self.icc_profiles.get(path_or_name) {
+            return Some(p);
+        }
+        if let Some(fname) = Path::new(path_or_name).file_name().and_then(|n| n.to_str()) {
+            if let Some(p) = self.icc_profiles.get(fname) {
+                return Some(p);
+            }
+            let prefixed = format!("mac_{fname}");
+            if let Some(p) = self.icc_profiles.get(&prefixed) {
+                return Some(p);
+            }
+        }
+        None
+    }
+
+    /// Returns the currently active `IccProfile` for the selected media, PPD `*cupsICCProfile`, or custom profile path.
     pub fn active_icc_profile(&self) -> Option<&IccProfile> {
         if !self.doc.color.auto_select_icc_for_media {
             if let Some(custom) = &self.doc.color.custom_icc_profile_path {
-                if let Some(p) = self.icc_profiles.get(custom) {
+                if let Some(p) = self.resolve_icc_by_path_or_basename(custom) {
                     return Some(p);
                 }
             }
         }
-        if let Some(media) = find_media_type(&self.doc.printer.media_key) {
+
+        // 1. If a CustomMediaSpec is selected and defines an ICC profile path, use it
+        if let Some(cm) = self.find_custom_media(&self.doc.printer.media_key) {
+            if let Some(ref icc_path) = cm.icc_profile_path {
+                if let Some(p) = self.resolve_icc_by_path_or_basename(icc_path) {
+                    return Some(p);
+                }
+            }
+        }
+
+        // 2. Check the active printer's PPD `*cupsICCProfile` table
+        if let Some(sp) = self.active_system_printer() {
+            if let Some(ppd_icc) = sp
+                .capabilities
+                .icc_profile_for_media(&self.doc.printer.media_key)
+            {
+                if let Some(p) = self.resolve_icc_by_path_or_basename(ppd_icc) {
+                    return Some(p);
+                }
+            }
+        }
+
+        // 3. Fallback to built-in media table (or base media of custom media)
+        let base_key = self
+            .find_custom_media(&self.doc.printer.media_key)
+            .map(|cm| cm.base_media_key.as_str())
+            .unwrap_or(self.doc.printer.media_key.as_str());
+        if let Some(media) = find_media_type(base_key) {
             if let Some(p) = self.icc_profiles.get(media.mac_icc_filename) {
                 return Some(p);
             }
@@ -423,6 +544,7 @@ impl Session {
             }
             EngineCommand::RefreshPrinters => {
                 self.system_printers = discover_system_printers();
+                self.discover_custom_media();
                 if !self
                     .system_printers
                     .iter()
@@ -535,12 +657,43 @@ impl Session {
                 }
             }
             EngineCommand::SetMediaKey(key) => {
-                if let Some(media) = find_media_type(&key) {
+                if let Some(cm) = self.find_custom_media(&key).cloned() {
+                    let eff_key = if cm.key.is_empty() {
+                        cm.name.clone()
+                    } else {
+                        cm.key.clone()
+                    };
+                    self.doc.printer.media_key = eff_key;
+                    if let Some(base) = find_media_type(&cm.base_media_key) {
+                        self.doc.printer.paper_source = base.default_feed;
+                        self.doc.printer.input_slot_key =
+                            base.default_feed.cups_slot_code().to_string();
+                        self.doc.printer.detailed.black_enhance_overcoat =
+                            base.supports_black_enhance_overcoat;
+                    }
+                    self.doc.printer.detailed.bottom_edge_priority = cm.bottom_edge_priority;
+                    if let Some(ref icc_path) = cm.icc_profile_path {
+                        self.ensure_icc_loaded(icc_path);
+                    }
+                    self.apply_media_constraints();
+                    self.status_message = format!(
+                        "Custom-Medium '{}' (Basis: {}, Slot: {}) gewählt.",
+                        cm.name, cm.base_media_key, cm.user_media_id
+                    );
+                } else if let Some(media) = find_media_type(&key) {
                     self.doc.printer.media_key = media.key.to_string();
                     self.doc.printer.paper_source = media.default_feed;
-                    self.doc.printer.input_slot_key = media.default_feed.cups_slot_code().to_string();
+                    self.doc.printer.input_slot_key =
+                        media.default_feed.cups_slot_code().to_string();
                     self.doc.printer.detailed.black_enhance_overcoat =
                         media.supports_black_enhance_overcoat;
+                    if let Some(ppd_icc) = self
+                        .active_system_printer()
+                        .and_then(|sp| sp.capabilities.icc_profile_for_media(media.key))
+                        .map(str::to_string)
+                    {
+                        self.ensure_icc_loaded(&ppd_icc);
+                    }
                     self.apply_media_constraints();
                     self.status_message = format!("Medium '{}' gewählt.", media.name);
                 } else {
@@ -556,6 +709,13 @@ impl Session {
                         .unwrap_or(false);
                     if !allowed_by_ppd {
                         return Err(EngineError::Doc(DocError::MediaNotFound(key)));
+                    }
+                    if let Some(ppd_icc) = self
+                        .active_system_printer()
+                        .and_then(|sp| sp.capabilities.icc_profile_for_media(&key))
+                        .map(str::to_string)
+                    {
+                        self.ensure_icc_loaded(&ppd_icc);
                     }
                     self.doc.printer.media_key = key.clone();
                     self.status_message = format!("Treiber-Medium '{key}' gewählt.");
@@ -587,8 +747,21 @@ impl Session {
             EngineCommand::SetCopies(c) => {
                 self.doc.printer.copies = c.clamp(1, 999);
             }
-            EngineCommand::AddCustomMedia(cm) => {
+            EngineCommand::AddCustomMedia(mut cm) => {
+                if cm.key.trim().is_empty() {
+                    let safe_name: String = cm
+                        .name
+                        .chars()
+                        .filter(|c| c.is_ascii_alphanumeric())
+                        .collect();
+                    cm.key = format!("Custom_{safe_name}");
+                }
+                if let Some(ref icc_path) = cm.icc_profile_path {
+                    self.ensure_icc_loaded(icc_path);
+                }
+                self.doc.printer.media_key = cm.key.clone();
                 self.doc.user_backup.custom_media.push(cm);
+                self.apply_media_constraints();
             }
             EngineCommand::SetLayoutMode(mode) => {
                 self.doc.layout = mode;
@@ -897,6 +1070,86 @@ impl Session {
         Ok(())
     }
 
+    /// Builds the `CupsSpoolRequest` for the current document state, including dynamic Custom Media
+    /// parameters (`MediaType=<base>`, `UserMediaID`, `PrintDuty`, `DryingTime`, `BottomEdgePriority`)
+    /// and auto-detected `DriverColorControl`.
+    pub fn build_cups_spool_request(&self) -> CupsSpoolRequest {
+        let app_manages_color = matches!(
+            self.doc.color.mode,
+            ColorManagementMode::UseIccProfile
+                | ColorManagementMode::AdvancedBwPhoto
+                | ColorManagementMode::NoColorAdjustment
+        );
+
+        let driver_color_control = self
+            .active_system_printer()
+            .map(|sp| sp.capabilities.driver_color_control)
+            .unwrap_or(DriverColorControl::GenericCups);
+
+        let custom_media = self.find_custom_media(&self.doc.printer.media_key);
+        let effective_media_type = custom_media
+            .map(|cm| cm.base_media_key.clone())
+            .unwrap_or_else(|| self.doc.printer.media_key.clone());
+
+        let (user_media_id, print_duty, drying_time, bottom_edge_priority, rubbing_reduction) =
+            if let Some(cm) = custom_media {
+                let dt = (cm.drying_time_sec.round().clamp(0.0, 255.0)) as u8;
+                (
+                    if cm.user_media_id > 0 {
+                        Some(cm.user_media_id)
+                    } else {
+                        None
+                    },
+                    Some(cm.ink_duty_percent.clamp(-50, 50)),
+                    Some(dt),
+                    Some(cm.bottom_edge_priority || self.doc.printer.detailed.bottom_edge_priority),
+                    if cm.rubbing_reduction > 0 {
+                        Some(cm.rubbing_reduction)
+                    } else {
+                        None
+                    },
+                )
+            } else {
+                (
+                    None,
+                    None,
+                    None,
+                    if self.doc.printer.detailed.bottom_edge_priority {
+                        Some(true)
+                    } else {
+                        None
+                    },
+                    None,
+                )
+            };
+
+        let overcoat = if self.doc.printer.detailed.black_enhance_overcoat {
+            Some(String::from("On"))
+        } else {
+            None
+        };
+
+        CupsSpoolRequest {
+            queue_name: self.doc.printer.printer_queue.clone(),
+            job_title: String::from("LumaPrint FineArt Sheet"),
+            copies: self.doc.printer.copies.max(1),
+            page_size: self.doc.printer.paper_size_key.clone(),
+            media_type: effective_media_type,
+            input_slot: self.doc.printer.input_slot_key.clone(),
+            resolution: self.doc.printer.resolution_key.clone(),
+            borderless: self.doc.printer.borderless,
+            app_manages_color,
+            driver_color_control,
+            user_media_id,
+            print_duty,
+            drying_time,
+            bottom_edge_priority,
+            rubbing_reduction,
+            overcoat,
+            extra_options: BTreeMap::new(),
+        }
+    }
+
     /// Renders the 16-bit print sheet and submits it to the selected CUPS system printer queue via `lp`.
     pub fn send_print_job_to_printer(&mut self, dpi: u32) -> Result<String, EngineError> {
         let (buf, _) = self.render_page(dpi, false)?;
@@ -912,26 +1165,7 @@ impl Session {
             })?;
         save_tiff16(&buf, tmp.path())?;
 
-        let app_manages_color = matches!(
-            self.doc.color.mode,
-            ColorManagementMode::UseIccProfile
-                | ColorManagementMode::AdvancedBwPhoto
-                | ColorManagementMode::NoColorAdjustment
-        );
-
-        let req = CupsSpoolRequest {
-            queue_name: self.doc.printer.printer_queue.clone(),
-            job_title: String::from("LumaPrint FineArt Sheet"),
-            copies: self.doc.printer.copies.max(1),
-            page_size: self.doc.printer.paper_size_key.clone(),
-            media_type: self.doc.printer.media_key.clone(),
-            input_slot: self.doc.printer.input_slot_key.clone(),
-            resolution: self.doc.printer.resolution_key.clone(),
-            borderless: self.doc.printer.borderless,
-            app_manages_color,
-            extra_options: BTreeMap::new(),
-        };
-
+        let req = self.build_cups_spool_request();
         let msg = submit_cups_job(&req, tmp.path())?;
         self.status_message = msg.clone();
         Ok(msg)
@@ -1012,5 +1246,35 @@ mod tests {
                 })
                 .is_err()
         );
+    }
+
+    #[test]
+    fn custom_media_spool_request_uses_base_media_and_user_media_id() {
+        let mut session = Session::new();
+        let cm = CustomMediaSpec {
+            key: String::from("CustomSlot01_PhotoluxBaryta"),
+            name: String::from("Photolux Studio Baryta 310 (Slot 1)"),
+            base_media_key: String::from("Baryta"),
+            user_media_id: 1901,
+            icc_profile_path: None,
+            thickness_mm: 0.35,
+            platen_gap: PlatenGap::Wide,
+            drying_time_sec: 2.0,
+            ink_duty_percent: -5,
+            paper_feed_offset_percent: 0.0,
+            bottom_edge_priority: true,
+            rubbing_reduction: 1,
+        };
+        session.execute(EngineCommand::AddCustomMedia(cm)).unwrap();
+        assert_eq!(session.doc.printer.media_key, "CustomSlot01_PhotoluxBaryta");
+
+        let req = session.build_cups_spool_request();
+        assert_eq!(req.media_type, "Baryta");
+        assert_eq!(req.user_media_id, Some(1901));
+        assert_eq!(req.print_duty, Some(-5));
+        assert_eq!(req.drying_time, Some(2));
+        assert_eq!(req.bottom_edge_priority, Some(true));
+        assert_eq!(req.rubbing_reduction, Some(1));
+        assert!(req.app_manages_color);
     }
 }

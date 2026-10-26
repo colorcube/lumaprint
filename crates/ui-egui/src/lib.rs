@@ -1120,9 +1120,14 @@ impl LumaPrintApp {
             .map(|p| p.display_name.clone())
             .unwrap_or_else(|| cur_queue.clone());
 
-        let cur_media =
-            find_media_type(&self.session.doc.printer.media_key).unwrap_or(&MEDIA_TYPES[0]);
         let cur_media_key = self.session.doc.printer.media_key.clone();
+        let active_custom = self.session.find_custom_media(&cur_media_key).cloned();
+        let base_lookup_key = active_custom
+            .as_ref()
+            .map(|cm| cm.base_media_key.as_str())
+            .unwrap_or(cur_media_key.as_str());
+        let cur_media = find_media_type(base_lookup_key).unwrap_or(&MEDIA_TYPES[0]);
+        let custom_media_list = self.session.doc.user_backup.custom_media.clone();
         let cur_size_key = self.session.doc.printer.paper_size_key.clone();
         let mut src = self.session.doc.printer.paper_source;
         let mut bl = self.session.doc.printer.borderless;
@@ -1173,20 +1178,44 @@ impl LumaPrintApp {
 
                 ui.label(RichText::new("Medientyp:").color(t.text_dim));
                 ui.horizontal(|ui| {
-                    let media_display = active_printer
-                        .as_ref()
-                        .and_then(|ap| {
-                            ap.capabilities
-                                .media_types
-                                .iter()
-                                .find(|m| m.code == cur_media_key)
-                                .map(|m| m.label.as_str())
-                        })
-                        .unwrap_or(cur_media.name);
+                    let media_display = if let Some(ref cm) = active_custom {
+                        format!("★ {}", cm.name)
+                    } else {
+                        active_printer
+                            .as_ref()
+                            .and_then(|ap| {
+                                ap.capabilities
+                                    .media_types
+                                    .iter()
+                                    .find(|m| m.code == cur_media_key)
+                                    .map(|m| m.label.clone())
+                            })
+                            .unwrap_or_else(|| cur_media.name.to_string())
+                    };
                     egui::ComboBox::from_id_salt("media_combo")
                         .selected_text(media_display)
                         .width(205.0)
                         .show_ui(ui, |ui| {
+                            if !custom_media_list.is_empty() {
+                                for cm in &custom_media_list {
+                                    let cm_key = if cm.key.is_empty() {
+                                        &cm.name
+                                    } else {
+                                        &cm.key
+                                    };
+                                    let is_sel = cm_key.eq_ignore_ascii_case(&cur_media_key)
+                                        || cm.name.eq_ignore_ascii_case(&cur_media_key);
+                                    let lbl = if cm.user_media_id > 0 {
+                                        format!("★ {} [ID {}]", cm.name, cm.user_media_id)
+                                    } else {
+                                        format!("★ {}", cm.name)
+                                    };
+                                    if ui.selectable_label(is_sel, lbl).clicked() {
+                                        self.exec(EngineCommand::SetMediaKey(cm_key.clone()));
+                                    }
+                                }
+                                ui.separator();
+                            }
                             if let Some(ref ap) = active_printer {
                                 if !ap.capabilities.media_types.is_empty() {
                                     for m in &ap.capabilities.media_types {
@@ -1901,12 +1930,37 @@ impl LumaPrintApp {
                 if matches!(
                     self.session.doc.color.mode,
                     ColorManagementMode::UseIccProfile
+                        | ColorManagementMode::AdvancedBwPhoto
+                        | ColorManagementMode::NoColorAdjustment
+                ) {
+                    let drv_ctrl = self
+                        .session
+                        .active_system_printer()
+                        .map(|sp| sp.capabilities.driver_color_control)
+                        .unwrap_or_default();
+                    ui.label(RichText::new("Treiber-Status:").color(t.text_dim));
+                    let (prefix, badge_col) = if drv_ctrl.is_known_driver_disable() {
+                        ("✓", Color32::from_rgb(80, 215, 130))
+                    } else {
+                        ("⚠", t.warning)
+                    };
+                    ui.label(
+                        RichText::new(format!("{prefix} {}", drv_ctrl.status_badge_de()))
+                            .small()
+                            .color(badge_col),
+                    );
+                    ui.end_row();
+                }
+
+                if matches!(
+                    self.session.doc.color.mode,
+                    ColorManagementMode::UseIccProfile
                 ) {
                     let active_icc_desc = self
                         .session
                         .active_icc_profile()
                         .map(|p| p.description.clone())
-                        .unwrap_or_else(|| String::from("Epson SC-P900 Standard ICC"));
+                        .unwrap_or_else(|| String::from("Automatisch (aus Druckertreiber PPD)"));
                     ui.label(RichText::new("Ausgabe-ICC:").color(t.text_dim));
                     ui.label(RichText::new(active_icc_desc).color(t.accent).strong());
                     ui.end_row();
@@ -2258,17 +2312,72 @@ impl LumaPrintApp {
             }
         }
 
-        // 3. Benutzerdefinierte Medien bearbeiten (EPL manual p. 41–42)
+        // 3. Benutzerdefinierte Medien bearbeiten (EPL manual p. 41–42 & custom_media.json / ESC q setl)
         if self.show_custom_media_modal {
             let mut open = self.show_custom_media_modal;
-            egui::Window::new("Benutzerdefinierte Medien bearbeiten (EPL S. 41)")
+            egui::Window::new("Benutzerdefinierte Medien bearbeiten (EPL S. 41 / ESC q setl)")
                 .open(&mut open)
                 .resizable(false)
                 .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Name:");
-                        ui.text_edit_singleline(&mut self.custom_media_draft.name);
-                    });
+                    egui::Grid::new("grid_custom_media_modal")
+                        .num_columns(2)
+                        .spacing([12.0, 8.0])
+                        .show(ui, |ui| {
+                            ui.label("Name:");
+                            ui.text_edit_singleline(&mut self.custom_media_draft.name);
+                            ui.end_row();
+
+                            ui.label("Basis-Medium (PK/MK):");
+                            egui::ComboBox::from_id_salt("custom_base_media_combo")
+                                .selected_text(&self.custom_media_draft.base_media_key)
+                                .width(220.0)
+                                .show_ui(ui, |ui| {
+                                    for m in MEDIA_TYPES {
+                                        let lbl = format!(
+                                            "{} ({})",
+                                            m.name,
+                                            if m.uses_matte_black { "MK" } else { "PK" }
+                                        );
+                                        if ui
+                                            .selectable_label(
+                                                m.key == self.custom_media_draft.base_media_key,
+                                                lbl,
+                                            )
+                                            .clicked()
+                                        {
+                                            self.custom_media_draft.base_media_key =
+                                                m.key.to_string();
+                                        }
+                                    }
+                                });
+                            ui.end_row();
+
+                            ui.label("NVRAM-Slot (UserMediaID):");
+                            ui.add(
+                                egui::DragValue::new(&mut self.custom_media_draft.user_media_id)
+                                    .range(0..=1930)
+                                    .suffix(" (0=On-the-fly, 1901..1930=Slot 1..30)"),
+                            );
+                            ui.end_row();
+
+                            ui.label("ICC-Profil-Pfad (.icc):");
+                            let mut icc_str = self
+                                .custom_media_draft
+                                .icc_profile_path
+                                .clone()
+                                .unwrap_or_default();
+                            if ui.text_edit_singleline(&mut icc_str).changed() {
+                                self.custom_media_draft.icc_profile_path =
+                                    if icc_str.trim().is_empty() {
+                                        None
+                                    } else {
+                                        Some(icc_str.trim().to_string())
+                                    };
+                            }
+                            ui.end_row();
+                        });
+
+                    ui.add_space(6.0);
                     ui.add(
                         egui::Slider::new(&mut self.custom_media_draft.thickness_mm, 0.08..=1.50)
                             .text("Papierdicke (mm)"),
@@ -2278,16 +2387,21 @@ impl LumaPrintApp {
                             &mut self.custom_media_draft.drying_time_sec,
                             0.0..=10.0,
                         )
-                        .text("Trocknungszeit (s)"),
+                        .text("Trocknungszeit pro Pass (s)"),
                     );
                     ui.add(
                         egui::Slider::new(
                             &mut self.custom_media_draft.ink_duty_percent,
                             -50..=50,
                         )
-                        .text("Tintenauftrag (%)"),
+                        .text("Tintenauftrag / PrintDuty (%)"),
                     );
-                    if ui.button("OK – Medium registrieren").clicked() {
+                    ui.checkbox(
+                        &mut self.custom_media_draft.bottom_edge_priority,
+                        "Priorisiert Druckqualität Unterkante (ESC m seti)",
+                    );
+                    ui.add_space(6.0);
+                    if ui.button("OK – Custom-Medium registrieren & aktivieren").clicked() {
                         let draft = self.custom_media_draft.clone();
                         self.exec(EngineCommand::AddCustomMedia(draft));
                         self.show_custom_media_modal = false;

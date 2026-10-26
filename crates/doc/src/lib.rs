@@ -304,6 +304,28 @@ pub const MEDIA_TYPES: &[MediaTypeSpec] = &[
         default_feed: PaperSource::FrontFineArt,
     },
     MediaTypeSpec {
+        key: "ValueGlossy",
+        name: "Value Glossy Photo Paper",
+        mac_icc_filename: "mac_Epson_SC-P900_700_PhotoPaperGlossy.icc",
+        win_icc_filename: "win_EE2NE_07.ICC",
+        uses_matte_black: false,
+        supports_carbon_black: true,
+        supports_black_enhance_overcoat: true,
+        supports_gloss_smoothing: true,
+        default_feed: PaperSource::RearFeed,
+    },
+    MediaTypeSpec {
+        key: "PhotoThick",
+        name: "Photo Thick / Posterboard",
+        mac_icc_filename: "mac_Epson_SC-P900_700_EpsonPremiumGlossy.icc",
+        win_icc_filename: "win_EE2NE_04.ICC",
+        uses_matte_black: false,
+        supports_carbon_black: false,
+        supports_black_enhance_overcoat: false,
+        supports_gloss_smoothing: false,
+        default_feed: PaperSource::FrontPosterBoard,
+    },
+    MediaTypeSpec {
         key: "PlainPaper",
         name: "Normalpapier (Plain Paper)",
         mac_icc_filename: "mac_Epson_SC-P900_700_Standard.icc",
@@ -332,32 +354,48 @@ pub enum PlatenGap {
     Wider,
 }
 
-/// User-defined Custom Media entry (`Benutzerdefinierte Medien bearbeiten`, EPL manual p. 41–42).
+/// User-defined Custom Media entry (`Benutzerdefinierte Medien bearbeiten`, EPL manual p. 41–42),
+/// compatible with `custom_media.json` and dynamic `lp -o` driver flags (`UserMediaID`, `PrintDuty`, `DryingTime`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CustomMediaSpec {
+    #[serde(default)]
+    pub key: String,
     pub name: String,
     pub base_media_key: String,
+    /// Optional NVRAM slot (`0` = on-the-fly without slot, `1..=30` or `1901..=1930` = printer NVRAM slot `ESC q setl`).
+    #[serde(default)]
+    pub user_media_id: u32,
     pub icc_profile_path: Option<String>,
     pub thickness_mm: f64,
     pub platen_gap: PlatenGap,
     pub drying_time_sec: f64,
-    /// Ink duty adjustment (`-50` .. `+50` %).
+    /// Ink duty adjustment (`-50` .. `+50` %, `ESC p setq`).
     pub ink_duty_percent: i32,
     /// Paper feed adjustment (`-1.0` .. `+1.0` %).
     pub paper_feed_offset_percent: f64,
+    /// Bottom edge print quality priority (`ESC m seti`).
+    #[serde(default)]
+    pub bottom_edge_priority: bool,
+    /// Rubbing reduction (`0..=65535`, `ESC m seti`).
+    #[serde(default)]
+    pub rubbing_reduction: u16,
 }
 
 impl Default for CustomMediaSpec {
     fn default() -> Self {
         Self {
+            key: String::from("CustomSlot01_HahnemuehlePhotoRag"),
             name: String::from("Hahnemühle Photo Rag 308"),
             base_media_key: String::from("VelvetFineArt"),
+            user_media_id: 1901,
             icc_profile_path: None,
             thickness_mm: 0.48,
             platen_gap: PlatenGap::Wide,
             drying_time_sec: 1.0,
             ink_duty_percent: 0,
             paper_feed_offset_percent: 0.0,
+            bottom_edge_priority: false,
+            rubbing_reduction: 0,
         }
     }
 }

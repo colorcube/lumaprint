@@ -1325,6 +1325,7 @@ version = "0.1.0"
 dependencies = [
  "lumaprint-geom",
  "serde",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 
