@@ -88,6 +88,8 @@ pub struct LumaPrintApp {
     pending_os_dropped_paths: Option<(Vec<std::path::PathBuf>, u8)>,
     dialog_rx: Option<std::sync::mpsc::Receiver<NativeDialogResult>>,
     last_rendered_preview_dpi: u32,
+    pub slot_selected: bool,
+    last_visible_pool_position: FilmstripPosition,
 }
 
 impl Default for LumaPrintApp {
@@ -134,6 +136,8 @@ impl LumaPrintApp {
             pending_os_dropped_paths: None,
             dialog_rx: None,
             last_rendered_preview_dpi: 0,
+            slot_selected: true,
+            last_visible_pool_position: FilmstripPosition::Left,
         }
     }
 
@@ -231,6 +235,26 @@ impl LumaPrintApp {
     }
 
     fn exec(&mut self, cmd: EngineCommand) {
+        match &cmd {
+            EngineCommand::AssignImageToSlot {
+                image_id: Some(_), ..
+            }
+            | EngineCommand::AssignImageToPageSlot {
+                image_id: Some(_), ..
+            }
+            | EngineCommand::PlacePoolImageOnSheet { .. }
+            | EngineCommand::ImportAndPlaceOnSheet { .. }
+            | EngineCommand::AutoDistributePoolImages { .. }
+            | EngineCommand::SelectSlot { .. } => {
+                self.slot_selected = true;
+            }
+            EngineCommand::AssignImageToSlot { image_id: None, .. }
+            | EngineCommand::AssignImageToPageSlot { image_id: None, .. }
+            | EngineCommand::ClearPageSlots { .. } => {
+                self.slot_selected = false;
+            }
+            _ => {}
+        }
         if let Err(e) = self.session.execute(cmd) {
             self.session.status_message = format!("Hinweis: {e}");
         }
@@ -963,15 +987,26 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
 
                         ui.separator();
-                        if ui
-                            .checkbox(
-                                &mut self.session.doc.show_slot_guides,
-                                "Gestrichelte Slot-Linien auf dem Papier anzeigen",
-                            )
-                            .changed()
-                        {
-                            ui.close_menu();
+                        if self.session.doc.filmstrip_position != FilmstripPosition::Hidden {
+                            self.last_visible_pool_position = self.session.doc.filmstrip_position;
                         }
+                        let mut show_pool =
+                            self.session.doc.filmstrip_position != FilmstripPosition::Hidden;
+                        if ui.checkbox(&mut show_pool, "Zeige Pool").changed() {
+                            self.session.doc.filmstrip_position = if show_pool {
+                                self.last_visible_pool_position
+                            } else {
+                                FilmstripPosition::Hidden
+                            };
+                        }
+                        let _ = ui.checkbox(
+                            &mut self.session.doc.show_settings_panel,
+                            "Zeige rechtes Dock (Druck-Setup)",
+                        );
+                        let _ = ui.checkbox(
+                            &mut self.session.doc.show_slot_guides,
+                            "Zeige Rahmen um Slots (gestrichelte Linie)",
+                        );
 
                         ui.separator();
                         let mut sp = self.session.doc.color.softproof;
@@ -1120,6 +1155,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 .radio(self.session.doc.filmstrip_position == pos, lbl)
                                 .clicked()
                             {
+                                if pos != FilmstripPosition::Hidden {
+                                    self.last_visible_pool_position = pos;
+                                }
                                 self.session.doc.filmstrip_position = pos;
                                 ui.close_menu();
                             }
@@ -1155,7 +1193,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 ui.separator();
                 ui.add_space(4.0);
 
-                // B: Strictly Global Toolbar (Undo/Redo with vector icons, View Mode, Slot Guides, Global Softproof/Gamut, Panel Toggles)
+                // B: Strictly Global Toolbar (Undo/Redo with vector icons, View Mode, Slot Frame Icon, Global Softproof/Gamut)
                 ui.horizontal_wrapped(|ui| {
                     if draw_undo_redo_button(ui, &t, true, self.session.can_undo())
                         .on_hover_text("Rückgängig (Ctrl+Z)")
@@ -1198,11 +1236,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         ));
                     }
 
-                    if ui
-                        .selectable_label(self.session.doc.show_slot_guides, "Slot-Linien")
-                        .on_hover_text(
-                            "Zeigt gestrichelte hellgraue Hilfslinien der Bildstellen (Slots) auf dem Papier",
-                        )
+                    if draw_slot_guides_toolbar_button(ui, &t, self.session.doc.show_slot_guides)
+                        .on_hover_text("Zeige Rahmen um Slots (gestrichelte Linie)")
                         .clicked()
                     {
                         self.session.doc.show_slot_guides = !self.session.doc.show_slot_guides;
@@ -1253,44 +1288,6 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     if sp_changed {
                         self.exec(EngineCommand::SetSoftproof(sp));
                     }
-
-                    // Right-aligned Panel Visibility Toggles
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let show_set = self.session.doc.show_settings_panel;
-                        if ui
-                            .selectable_label(show_set, "⚙ Einstellungen")
-                            .clicked()
-                        {
-                            self.session.doc.show_settings_panel = !show_set;
-                        }
-
-                        let cur_pos = self.session.doc.filmstrip_position;
-                        let pos_lbl = match cur_pos {
-                            FilmstripPosition::Left => "🖼 Pool: Links",
-                            FilmstripPosition::Bottom => "🖼 Pool: Unten",
-                            FilmstripPosition::Hidden => "🖼 Pool: Aus",
-                        };
-                        egui::ComboBox::from_id_salt("toolbar_pool_pos_combo")
-                            .selected_text(pos_lbl)
-                            .width(125.0)
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(
-                                    &mut self.session.doc.filmstrip_position,
-                                    FilmstripPosition::Left,
-                                    "🖼 Pool: Links",
-                                );
-                                ui.selectable_value(
-                                    &mut self.session.doc.filmstrip_position,
-                                    FilmstripPosition::Bottom,
-                                    "🖼 Pool: Unten",
-                                );
-                                ui.selectable_value(
-                                    &mut self.session.doc.filmstrip_position,
-                                    FilmstripPosition::Hidden,
-                                    "🖼 Pool: Ausblenden",
-                                );
-                            });
-                    });
                 });
             });
     }
@@ -1691,23 +1688,18 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         let active_page = self.session.doc.active_page_index;
         let active_slot = self.session.doc.active_slot_index;
 
-        // Target the image in the active slot (or first occupied slot on the active sheet)
-        let target_slot_and_img: Option<(usize, u64)> = self
-            .session
-            .doc
-            .slot_assignments
-            .get(active_slot)
-            .copied()
-            .flatten()
-            .map(|id| (active_slot, id))
-            .or_else(|| {
-                self.session
-                    .doc
-                    .slot_assignments
-                    .iter()
-                    .enumerate()
-                    .find_map(|(si, opt)| opt.map(|id| (si, id)))
-            });
+        // Target the image in the active slot only when a slot is currently selected
+        let target_slot_and_img: Option<(usize, u64)> = if self.slot_selected {
+            self.session
+                .doc
+                .slot_assignments
+                .get(active_slot)
+                .copied()
+                .flatten()
+                .map(|id| (active_slot, id))
+        } else {
+            None
+        };
 
         let active_crop = target_slot_and_img
             .and_then(|(_, id)| self.session.doc.images.iter().find(|i| i.id == id))
@@ -1851,6 +1843,13 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         let sheet_h = ph_mm * scale;
         let sheet_rect = Rect::from_center_size(avail.center(), Vec2::new(sheet_w, sheet_h));
 
+        // Background click on the Bogen / Canvas (outside any occupied image) deselects the current image
+        let bg_resp = ui.interact(
+            avail,
+            egui::Id::new("single_page_canvas_bg_click"),
+            Sense::click(),
+        );
+
         {
             let painter = ui.painter();
             let shadow_rect = sheet_rect.translate(Vec2::new(5.0, 6.0));
@@ -1892,7 +1891,21 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         }
 
         // Draw & interact with all page slots (empty drop zones + occupied image slots)
-        self.draw_interactive_sheet_slots(ui, active_page, &solved, sheet_rect, scale, true);
+        self.draw_interactive_sheet_slots(ui, active_page, &solved, sheet_rect, scale);
+
+        if bg_resp.clicked() {
+            let click_pos = bg_resp.interact_pointer_pos().or(self.last_drag_pos);
+            let hit_occupied = click_pos.is_some_and(|p| {
+                solved.slots.iter().any(|slot| {
+                    slot.assigned_image_id.is_some()
+                        && mm_rect_to_screen(slot.image_draw_rect_mm, sheet_rect.min, scale)
+                            .contains(p)
+                })
+            });
+            if !hit_occupied {
+                self.slot_selected = false;
+            }
+        }
 
         // Draw Test-Strip overlay rectangle if enabled
         if self.session.doc.test_strip.enabled {
@@ -2053,12 +2066,12 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                         &solved,
                                         sheet_rect,
                                         scale,
-                                        false,
                                     );
                                 }
 
                                 if card_resp.clicked() {
                                     self.exec(EngineCommand::SelectPage { page_index: pi });
+                                    self.slot_selected = false;
                                 }
                                 if card_resp.double_clicked() {
                                     self.exec(EngineCommand::SelectPage { page_index: pi });
@@ -2083,7 +2096,6 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         solved: &SolvedPageLayout,
         sheet_rect: Rect,
         scale: f32,
-        show_corner_handles: bool,
     ) {
         let is_active_page = page_index == self.session.doc.active_page_index;
         let active_slot = self.session.doc.active_slot_index;
@@ -2100,11 +2112,12 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
             // Draw dashed light-gray slot boundary lines on the paper when show_slot_guides is active
             if show_guides {
-                let guide_col = if is_active_slot && slot.assigned_image_id.is_none() {
-                    Color32::from_rgb(0, 130, 230)
-                } else {
-                    Color32::from_rgb(180, 185, 192)
-                };
+                let guide_col =
+                    if is_active_slot && self.slot_selected && slot.assigned_image_id.is_none() {
+                        Color32::from_rgb(0, 130, 230)
+                    } else {
+                        Color32::from_rgb(180, 185, 192)
+                    };
                 draw_dashed_rect(
                     ui.painter(),
                     slot_r.shrink(1.0),
@@ -2115,16 +2128,18 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             }
 
             if let Some(img_id) = slot.assigned_image_id {
-                let stroke = if is_active_slot {
-                    Stroke::new(2.0_f32, Color32::from_rgb(0, 145, 255))
-                } else {
-                    Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(80, 120, 170, 140))
-                };
-                ui.painter()
-                    .rect_stroke(img_r, CornerRadius::ZERO, stroke, StrokeKind::Middle);
+                // Only draw a subtle thin selection line (without corner handles) when explicitly selected
+                if is_active_slot && self.slot_selected {
+                    ui.painter().rect_stroke(
+                        img_r,
+                        CornerRadius::ZERO,
+                        Stroke::new(1.5_f32, Color32::from_rgb(0, 145, 255)),
+                        StrokeKind::Middle,
+                    );
+                }
 
                 let resp = ui.interact(
-                    slot_r,
+                    img_r,
                     egui::Id::new(("sheet_slot_interact", page_index, slot.slot_index)),
                     Sense::click_and_drag(),
                 );
@@ -2133,8 +2148,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         pending_cmd = Some(EngineCommand::SelectPage { page_index });
                     }
                     self.session.doc.active_slot_index = slot.slot_index;
+                    self.slot_selected = true;
                 }
                 if resp.double_clicked() {
+                    self.slot_selected = true;
                     open_crop_for_id = Some(img_id);
                 }
 
@@ -2168,6 +2185,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 crop.pan_x = 0.0;
                                 crop.pan_y = 0.0;
                             }
+                            self.slot_selected = true;
                             pending_cmd =
                                 Some(EngineCommand::SetImageCrop { image_id: img_id, crop });
                         }
@@ -2177,6 +2195,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 // Shift + Left-Click Drag -> pan image inside slot (`pan_x`, `pan_y`) when zoomed or Fill
                 let shift_held = ui.ctx().input(|i| i.modifiers.shift);
                 if resp.drag_started() || resp.dragged() {
+                    self.session.doc.active_slot_index = slot.slot_index;
+                    self.slot_selected = true;
                     if shift_held {
                         let delta = resp.drag_delta();
                         if delta.length_sq() > 0.01
@@ -2213,6 +2233,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 }
 
                 resp.context_menu(|ui| {
+                    self.session.doc.active_slot_index = slot.slot_index;
+                    self.slot_selected = true;
                     if ui.button("📐 Bild einpassen (Standard)").clicked() {
                         self.set_image_fit_mode(img_id, false);
                         ui.close_menu();
@@ -2285,6 +2307,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         pending_cmd = Some(EngineCommand::SelectPage { page_index });
                     }
                     self.session.doc.active_slot_index = slot.slot_index;
+                    self.slot_selected = false;
                 }
                 resp.context_menu(|ui| {
                     if let Some(pool_img) = self
@@ -2357,54 +2380,6 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             );
                         }
                         _ => {}
-                    }
-                }
-            }
-
-            // Optional 4 corner margin drag handles on the active slot in SinglePage Standard mode
-            if show_corner_handles && is_active_slot && slot.assigned_image_id.is_some() {
-                for (ci, corner_pos) in [
-                    img_r.left_top(),
-                    img_r.right_top(),
-                    img_r.left_bottom(),
-                    img_r.right_bottom(),
-                ]
-                .into_iter()
-                .enumerate()
-                {
-                    let h_rect = Rect::from_center_size(corner_pos, Vec2::splat(8.0));
-                    ui.painter().rect_filled(
-                        h_rect,
-                        CornerRadius::ZERO,
-                        Color32::from_rgb(0, 130, 240),
-                    );
-                    ui.painter().rect_stroke(
-                        h_rect,
-                        CornerRadius::ZERO,
-                        Stroke::new(1.0_f32, Color32::WHITE),
-                        StrokeKind::Middle,
-                    );
-                    let h_resp = ui.interact(
-                        h_rect,
-                        egui::Id::new(("corner_handle", page_index, slot.slot_index, ci)),
-                        Sense::drag(),
-                    );
-                    if h_resp.dragged() {
-                        let delta_mm = f64::from(h_resp.drag_delta().x / scale);
-                        if let LayoutMode::Standard(std_spec) = &self.session.doc.layout {
-                            let mut m = std_spec.margins_mm;
-                            let adjust = if ci == 0 || ci == 2 {
-                                delta_mm
-                            } else {
-                                -delta_mm
-                            };
-                            let new_m = (m.left_mm + adjust).clamp(0.0, 80.0);
-                            m.left_mm = new_m;
-                            m.right_mm = new_m;
-                            m.top_mm = new_m;
-                            m.bottom_mm = new_m;
-                            pending_cmd = Some(EngineCommand::SetStandardMargins(m));
-                        }
                     }
                 }
             }
@@ -4554,6 +4529,53 @@ fn draw_undo_redo_button(
     resp
 }
 
+/// Paints a toolbar toggle icon button for dashed slot frames (`Zeige Rahmen um Slots (gestrichelte Linie)`).
+fn draw_slot_guides_toolbar_button(
+    ui: &mut Ui,
+    tokens: &Tokens,
+    active: bool,
+) -> egui::Response {
+    let size = Vec2::new(28.0, 24.0);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+
+    let bg = if resp.is_pointer_button_down_on() {
+        tokens.accent.gamma_multiply(0.38)
+    } else if active {
+        tokens.accent.gamma_multiply(0.24)
+    } else if resp.hovered() {
+        tokens.hover
+    } else {
+        tokens.field
+    };
+    let border_col = if active || resp.hovered() {
+        tokens.accent
+    } else {
+        tokens.field_border
+    };
+    let fg = if active {
+        tokens.accent
+    } else if resp.hovered() {
+        tokens.text
+    } else {
+        tokens.text_dim
+    };
+
+    let p = ui.painter();
+    p.rect_filled(rect, CornerRadius::same(4), bg);
+    p.rect_stroke(
+        rect,
+        CornerRadius::same(4),
+        Stroke::new(1.0_f32, border_col),
+        StrokeKind::Middle,
+    );
+
+    let inner = Rect::from_center_size(rect.center(), Vec2::new(16.0, 12.0));
+    draw_dashed_rect(p, inner, Stroke::new(1.5_f32, fg), 3.0, 2.0);
+
+    resp
+}
+
 /// Paints the primary `"Drucken"` action button with a crisp vector printer icon and
 /// vertically centered label so there is no emoji font baseline shift.
 fn draw_print_button(ui: &mut Ui) -> egui::Response {
@@ -4993,5 +5015,63 @@ mod tests {
         });
         assert_eq!(app.session.doc.images.len(), 5);
     }
-}
 
+    #[test]
+    fn clicking_sheet_outside_image_deselects_slot_and_clicking_image_reselects_it() {
+        let ctx = Context::default();
+        let mut app = LumaPrintApp::new();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            app.render_ui(ctx);
+        });
+        assert!(app.slot_selected);
+        assert!(!app.last_slot_screen_rects.is_empty());
+
+        // Click on the top-left corner of the canvas backdrop (outside the image slot)
+        let bg_pos = app.last_canvas_rect.left_top() + Vec2::new(6.0, 6.0);
+        let mut click_bg = egui::RawInput::default();
+        click_bg.events.push(egui::Event::PointerMoved(bg_pos));
+        click_bg.events.push(egui::Event::PointerButton {
+            pos: bg_pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        click_bg.events.push(egui::Event::PointerButton {
+            pos: bg_pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let _ = ctx.run(click_bg, |ctx| {
+            app.render_ui(ctx);
+        });
+        assert!(
+            !app.slot_selected,
+            "Clicking on Bogen outside the image should deselect the slot"
+        );
+
+        // Now click in the center of the occupied image slot to re-select it
+        let img_center = app.last_slot_screen_rects[0].2.center();
+        let mut click_img = egui::RawInput::default();
+        click_img.events.push(egui::Event::PointerMoved(img_center));
+        click_img.events.push(egui::Event::PointerButton {
+            pos: img_center,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        click_img.events.push(egui::Event::PointerButton {
+            pos: img_center,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let _ = ctx.run(click_img, |ctx| {
+            app.render_ui(ctx);
+        });
+        assert!(
+            app.slot_selected,
+            "Clicking on the occupied image should re-select the slot"
+        );
+    }
+}
