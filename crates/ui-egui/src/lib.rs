@@ -380,6 +380,7 @@ pub struct LumaPrintApp {
     pub pending_folder_import: Option<Vec<String>>,
     pub export_path_input: String,
     active_drag: Option<DragPayload>,
+    active_std_drag: Option<FreeSlotDragState>,
     last_drag_pos: Option<Pos2>,
     last_pool_rect: Rect,
     last_canvas_rect: Rect,
@@ -429,6 +430,7 @@ impl LumaPrintApp {
             pending_folder_import: None,
             export_path_input: String::from("/tmp/lumaprint_sheet.tif"),
             active_drag: None,
+            active_std_drag: None,
             last_drag_pos: None,
             last_pool_rect: Rect::NOTHING,
             last_canvas_rect: Rect::NOTHING,
@@ -2295,6 +2297,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 solved.slots.iter().any(|slot| {
                     slot.assigned_image_id.is_some()
                         && mm_rect_to_screen(slot.image_draw_rect_mm, sheet_rect.min, scale)
+                            .expand(14.0)
                             .contains(p)
                 })
             });
@@ -2552,18 +2555,23 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             }
 
             if let Some(img_id) = slot.assigned_image_id {
-                // Only draw a subtle thin selection line (without corner handles) when explicitly selected
-                if is_active_slot && self.slot_selected {
-                    ui.painter().rect_stroke(
-                        img_r,
-                        CornerRadius::ZERO,
-                        Stroke::new(1.5_f32, Color32::from_rgb(0, 145, 255)),
-                        StrokeKind::Middle,
-                    );
-                }
+                // Check if this page is in Standard layout with free/axis-free movement enabled
+                let std_free_move = match self.session.doc.page_layout(page_index) {
+                    LayoutMode::Standard(std_spec) => {
+                        !(self.session.doc.printer.borderless && std_spec.fit_to_scale)
+                            && std_spec.centering != CenteringMode::Center
+                            && self.session.doc.canvas_view_mode == CanvasViewMode::SinglePage
+                    }
+                    _ => false,
+                };
 
+                let interact_r = if std_free_move {
+                    img_r.expand(14.0)
+                } else {
+                    img_r
+                };
                 let resp = ui.interact(
-                    img_r,
+                    interact_r,
                     egui::Id::new(("sheet_slot_interact", page_index, slot.slot_index)),
                     Sense::click_and_drag(),
                 );
@@ -2577,6 +2585,21 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 if resp.double_clicked() {
                     self.slot_selected = true;
                     open_crop_for_id = Some(img_id);
+                }
+
+                // Draw selection frame (+ 8 resize handles when Standard free-move is active)
+                if is_active_slot && self.slot_selected {
+                    let accent_col = Color32::from_rgb(0, 145, 255);
+                    ui.painter().rect_stroke(
+                        img_r,
+                        CornerRadius::ZERO,
+                        Stroke::new(if std_free_move { 1.8_f32 } else { 1.5_f32 }, accent_col),
+                        StrokeKind::Middle,
+                    );
+                    if std_free_move {
+                        let hover_pos = ui.ctx().input(|i| i.pointer.hover_pos());
+                        draw_resize_handles(ui.painter(), img_r, hover_pos, accent_col);
+                    }
                 }
 
                 // Shift + Mouse Wheel over occupied slot -> zoom image inside slot (`slot_zoom`)
@@ -2616,23 +2639,48 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     }
                 }
 
-                // Check if this page is in Standard layout with free/axis-free movement enabled
-                let std_free_move = match self.session.doc.page_layout(page_index) {
-                    LayoutMode::Standard(std_spec) => {
-                        !(self.session.doc.printer.borderless && std_spec.fit_to_scale)
-                            && std_spec.centering != CenteringMode::Center
-                            && self.session.doc.canvas_view_mode == CanvasViewMode::SinglePage
-                    }
-                    _ => false,
-                };
-
                 // Shift + Left-Click Drag -> pan image inside slot (`pan_x`, `pan_y`) when zoomed or Fill
                 let shift_held = ui.ctx().input(|i| i.modifiers.shift);
                 if std_free_move && !shift_held {
-                    if resp.dragged() {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                    } else if resp.hovered() {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                    let hover_pos = ui.ctx().input(|i| i.pointer.hover_pos());
+                    let active_or_hover_kind = if let Some(drag) = self.active_std_drag {
+                        Some(drag.kind)
+                    } else if let Some(hpos) = hover_pos
+                        && interact_r.contains(hpos)
+                    {
+                        hit_test_resize_handles(img_r, hpos).or_else(|| {
+                            if img_r.contains(hpos) {
+                                Some(FreeSlotDragKind::Move)
+                            } else {
+                                None
+                            }
+                        })
+                    } else {
+                        None
+                    };
+                    if let Some(kind) = active_or_hover_kind {
+                        let icon = match kind {
+                            FreeSlotDragKind::Move => {
+                                if self.active_std_drag.is_some() {
+                                    egui::CursorIcon::Grabbing
+                                } else {
+                                    egui::CursorIcon::Grab
+                                }
+                            }
+                            FreeSlotDragKind::ResizeN | FreeSlotDragKind::ResizeS => {
+                                egui::CursorIcon::ResizeVertical
+                            }
+                            FreeSlotDragKind::ResizeE | FreeSlotDragKind::ResizeW => {
+                                egui::CursorIcon::ResizeHorizontal
+                            }
+                            FreeSlotDragKind::ResizeNW | FreeSlotDragKind::ResizeSE => {
+                                egui::CursorIcon::ResizeNwSe
+                            }
+                            FreeSlotDragKind::ResizeNE | FreeSlotDragKind::ResizeSW => {
+                                egui::CursorIcon::ResizeNeSw
+                            }
+                        };
+                        ui.ctx().set_cursor_icon(icon);
                     }
                 }
 
@@ -2663,64 +2711,64 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                     Some(EngineCommand::SetImageCrop { image_id: img_id, crop });
                             }
                         }
-                    } else if std_free_move {
-                        let delta = resp.drag_delta();
-                        if delta.length_sq() > 0.01 && scale > 0.01 {
-                            if let LayoutMode::Standard(mut std_spec) =
-                                self.session.doc.page_layout(page_index).clone()
-                            {
-                                let dx_mm = f64::from(delta.x / scale);
-                                let dy_mm = f64::from(delta.y / scale);
-                                let cur_r = slot.image_draw_rect_mm;
-                                let pw = solved.paper_size_mm.width_mm;
-                                let ph = solved.paper_size_mm.height_mm;
-                                let max_x = (pw - cur_r.width_mm).max(0.0);
-                                let max_y = (ph - cur_r.height_mm).max(0.0);
-
-                                let new_x = match std_spec.centering {
-                                    CenteringMode::None | CenteringMode::Vertical => {
-                                        (cur_r.x_mm + dx_mm).clamp(0.0, max_x)
-                                    }
-                                    CenteringMode::Center | CenteringMode::Horizontal => cur_r.x_mm,
-                                };
-                                let new_y = match std_spec.centering {
-                                    CenteringMode::None | CenteringMode::Horizontal => {
-                                        (cur_r.y_mm + dy_mm).clamp(0.0, max_y)
-                                    }
-                                    CenteringMode::Center | CenteringMode::Vertical => cur_r.y_mm,
-                                };
-
-                                std_spec.manual_rect_mm.x_mm = new_x;
-                                std_spec.manual_rect_mm.y_mm = new_y;
-                                std_spec.manual_rect_mm.width_mm = cur_r.width_mm;
-                                std_spec.manual_rect_mm.height_mm = cur_r.height_mm;
-
-                                if std_spec.criterion == SizingCriterion::Margin {
-                                    if matches!(
-                                        std_spec.centering,
-                                        CenteringMode::None | CenteringMode::Vertical
-                                    ) {
-                                        std_spec.margins_mm.left_mm = new_x;
-                                        std_spec.margins_mm.right_mm =
-                                            (pw - new_x - cur_r.width_mm).max(0.0);
-                                    }
-                                    if matches!(
-                                        std_spec.centering,
-                                        CenteringMode::None | CenteringMode::Horizontal
-                                    ) {
-                                        std_spec.margins_mm.top_mm = new_y;
-                                        std_spec.margins_mm.bottom_mm =
-                                            (ph - new_y - cur_r.height_mm).max(0.0);
-                                    }
-                                }
-
-                                if !is_active_page {
-                                    self.exec(EngineCommand::SelectPage { page_index });
-                                }
-                                pending_cmd = Some(EngineCommand::SetLayoutMode(
-                                    LayoutMode::Standard(std_spec),
-                                ));
+                    } else if std_free_move && scale > 0.01 {
+                        if resp.drag_started() || self.active_std_drag.is_none() {
+                            let origin = ui
+                                .ctx()
+                                .input(|i| i.pointer.press_origin())
+                                .or_else(|| resp.interact_pointer_pos());
+                            if let Some(orig) = origin {
+                                let kind = hit_test_resize_handles(img_r, orig)
+                                    .unwrap_or(FreeSlotDragKind::Move);
+                                let start_mm = (
+                                    f64::from((orig.x - sheet_rect.min.x) / scale),
+                                    f64::from((orig.y - sheet_rect.min.y) / scale),
+                                );
+                                self.active_std_drag = Some(FreeSlotDragState {
+                                    slot_index: slot.slot_index,
+                                    kind,
+                                    start_pointer_mm: start_mm,
+                                    initial_rect_mm: slot.image_draw_rect_mm,
+                                });
                             }
+                        }
+
+                        if resp.dragged()
+                            && let Some(drag) = self.active_std_drag
+                            && let Some(cur_pos) = resp.interact_pointer_pos()
+                            && let LayoutMode::Standard(mut std_spec) =
+                                self.session.doc.page_layout(page_index).clone()
+                        {
+                            let cur_x_mm = f64::from((cur_pos.x - sheet_rect.min.x) / scale);
+                            let cur_y_mm = f64::from((cur_pos.y - sheet_rect.min.y) / scale);
+                            let dx = cur_x_mm - drag.start_pointer_mm.0;
+                            let dy = cur_y_mm - drag.start_pointer_mm.1;
+                            let pw = solved.paper_size_mm.width_mm;
+                            let ph = solved.paper_size_mm.height_mm;
+
+                            let next = compute_std_free_drag_rect(
+                                drag.initial_rect_mm,
+                                drag.kind,
+                                dx,
+                                dy,
+                                pw,
+                                ph,
+                                std_spec.keep_aspect_ratio,
+                                std_spec.centering,
+                            );
+
+                            std_spec.manual_rect_mm = next;
+                            std_spec.margins_mm.left_mm = next.x_mm;
+                            std_spec.margins_mm.top_mm = next.y_mm;
+                            std_spec.margins_mm.right_mm = (pw - next.right_mm()).max(0.0);
+                            std_spec.margins_mm.bottom_mm = (ph - next.bottom_mm()).max(0.0);
+
+                            if !is_active_page {
+                                self.exec(EngineCommand::SelectPage { page_index });
+                            }
+                            pending_cmd = Some(EngineCommand::SetLayoutMode(
+                                LayoutMode::Standard(std_spec),
+                            ));
                         }
                     } else {
                         let payload = DragPayload::PageSlot {
@@ -2731,6 +2779,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         self.active_drag = Some(payload);
                         egui::DragAndDrop::set_payload(ui.ctx(), payload);
                     }
+                }
+                if resp.drag_stopped() {
+                    self.active_std_drag = None;
                 }
 
                 resp.context_menu(|ui| {
@@ -3793,21 +3844,31 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     .show(ui, |ui| {
                         ui.label(RichText::new("Ausrichtung:").color(t.text_dim));
                         ui.horizontal(|ui| {
-                            if ui
-                                .selectable_value(
-                                    &mut std_spec.orientation,
-                                    Orientation::Portrait,
-                                    "Hochformat",
-                                )
-                                .changed()
-                                || ui
-                                    .selectable_value(
-                                        &mut std_spec.orientation,
-                                        Orientation::Landscape,
-                                        "Querformat",
-                                    )
-                                    .changed()
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            if draw_orientation_tile(
+                                ui,
+                                &t,
+                                Orientation::Portrait,
+                                std_spec.orientation == Orientation::Portrait,
+                            )
+                            .on_hover_text("Hochformat (Portrait)")
+                            .clicked()
+                                && std_spec.orientation != Orientation::Portrait
                             {
+                                std_spec.orientation = Orientation::Portrait;
+                                changed = true;
+                            }
+                            if draw_orientation_tile(
+                                ui,
+                                &t,
+                                Orientation::Landscape,
+                                std_spec.orientation == Orientation::Landscape,
+                            )
+                            .on_hover_text("Querformat (Landscape)")
+                            .clicked()
+                                && std_spec.orientation != Orientation::Landscape
+                            {
+                                std_spec.orientation = Orientation::Landscape;
                                 changed = true;
                             }
                         });
@@ -3843,35 +3904,41 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
 
                         ui.label(RichText::new("Zentrieren:").color(t.text_dim));
-                        egui::ComboBox::from_id_salt("std_centering")
-                            .selected_text(std_spec.centering.label_de())
-                            .width(245.0)
-                            .show_ui(ui, |ui| {
-                                for c in CenteringMode::ALL {
-                                    if ui
-                                        .selectable_value(&mut std_spec.centering, c, c.label_de())
-                                        .changed()
-                                    {
-                                        if c != CenteringMode::Center {
-                                            if let Some(ref solved) = self.cached_solved {
-                                                if let Some(slot) = solved.slots.first() {
-                                                    let cur_r = slot.image_draw_rect_mm;
-                                                    let pw = solved.paper_size_mm.width_mm;
-                                                    let ph = solved.paper_size_mm.height_mm;
-                                                    std_spec.manual_rect_mm = cur_r;
-                                                    std_spec.margins_mm.left_mm = cur_r.x_mm;
-                                                    std_spec.margins_mm.top_mm = cur_r.y_mm;
-                                                    std_spec.margins_mm.right_mm =
-                                                        (pw - cur_r.right_mm()).max(0.0);
-                                                    std_spec.margins_mm.bottom_mm =
-                                                        (ph - cur_r.bottom_mm()).max(0.0);
-                                                }
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            for c in [
+                                CenteringMode::Center,
+                                CenteringMode::Horizontal,
+                                CenteringMode::Vertical,
+                                CenteringMode::None,
+                            ] {
+                                let is_sel = std_spec.centering == c;
+                                if draw_centering_tile(ui, &t, c, is_sel)
+                                    .on_hover_text(c.label_de())
+                                    .clicked()
+                                    && !is_sel
+                                {
+                                    std_spec.centering = c;
+                                    if c != CenteringMode::Center {
+                                        if let Some(ref solved) = self.cached_solved {
+                                            if let Some(slot) = solved.slots.first() {
+                                                let cur_r = slot.image_draw_rect_mm;
+                                                let pw = solved.paper_size_mm.width_mm;
+                                                let ph = solved.paper_size_mm.height_mm;
+                                                std_spec.manual_rect_mm = cur_r;
+                                                std_spec.margins_mm.left_mm = cur_r.x_mm;
+                                                std_spec.margins_mm.top_mm = cur_r.y_mm;
+                                                std_spec.margins_mm.right_mm =
+                                                    (pw - cur_r.right_mm()).max(0.0);
+                                                std_spec.margins_mm.bottom_mm =
+                                                    (ph - cur_r.bottom_mm()).max(0.0);
                                             }
                                         }
-                                        changed = true;
                                     }
+                                    changed = true;
                                 }
-                            });
+                            }
+                        });
                         ui.end_row();
 
                         ui.label(RichText::new("Kriterium:").color(t.text_dim));
@@ -4232,21 +4299,31 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
                         ui.label(RichText::new("Ausrichtung:").color(t.text_dim));
                         ui.horizontal(|ui| {
-                            if ui
-                                .selectable_value(
-                                    &mut tpl_spec.orientation,
-                                    Orientation::Portrait,
-                                    "Hochformat",
-                                )
-                                .changed()
-                                || ui
-                                    .selectable_value(
-                                        &mut tpl_spec.orientation,
-                                        Orientation::Landscape,
-                                        "Querformat",
-                                    )
-                                    .changed()
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            if draw_orientation_tile(
+                                ui,
+                                &t,
+                                Orientation::Portrait,
+                                tpl_spec.orientation == Orientation::Portrait,
+                            )
+                            .on_hover_text("Hochformat (Portrait)")
+                            .clicked()
+                                && tpl_spec.orientation != Orientation::Portrait
                             {
+                                tpl_spec.orientation = Orientation::Portrait;
+                                changed = true;
+                            }
+                            if draw_orientation_tile(
+                                ui,
+                                &t,
+                                Orientation::Landscape,
+                                tpl_spec.orientation == Orientation::Landscape,
+                            )
+                            .on_hover_text("Querformat (Landscape)")
+                            .clicked()
+                                && tpl_spec.orientation != Orientation::Landscape
+                            {
+                                tpl_spec.orientation = Orientation::Landscape;
                                 changed = true;
                             }
                         });
@@ -6909,6 +6986,514 @@ fn draw_layout_type_tile(
     );
 
     resp
+}
+
+/// Paints a visual icon tile button for selecting `Orientation` (`Hochformat` vs `Querformat`).
+fn draw_orientation_tile(
+    ui: &mut Ui,
+    tokens: &Tokens,
+    orientation: Orientation,
+    active: bool,
+) -> egui::Response {
+    let size = Vec2::new(118.0, 32.0);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+
+    let bg = if resp.is_pointer_button_down_on() {
+        tokens.accent.gamma_multiply(0.36)
+    } else if active {
+        tokens.accent.gamma_multiply(0.22)
+    } else if resp.hovered() {
+        tokens.hover
+    } else {
+        tokens.field
+    };
+    let border_stroke = if active {
+        Stroke::new(1.6_f32, tokens.accent)
+    } else if resp.hovered() {
+        Stroke::new(1.2_f32, tokens.accent.gamma_multiply(0.75))
+    } else {
+        Stroke::new(1.0_f32, tokens.field_border)
+    };
+    let fg = if active {
+        tokens.accent
+    } else if resp.hovered() {
+        tokens.text
+    } else {
+        tokens.text_dim
+    };
+    let inner_fill = if active {
+        tokens.accent.gamma_multiply(0.35)
+    } else {
+        fg.gamma_multiply(0.22)
+    };
+
+    let p = ui.painter();
+    p.rect_filled(rect, CornerRadius::same(5), bg);
+    p.rect_stroke(rect, CornerRadius::same(5), border_stroke, StrokeKind::Middle);
+
+    let icon_c = Pos2::new(rect.min.x + 18.0, rect.center().y);
+    let sheet_stroke = Stroke::new(1.2_f32, fg.gamma_multiply(0.85));
+    let inner_stroke = Stroke::new(1.2_f32, fg);
+
+    let label = match orientation {
+        Orientation::Portrait => {
+            let sheet = Rect::from_center_size(icon_c, Vec2::new(13.0, 19.0));
+            let photo = Rect::from_center_size(icon_c, Vec2::new(8.0, 13.0));
+            p.rect_stroke(sheet, CornerRadius::same(2), sheet_stroke, StrokeKind::Middle);
+            p.rect_filled(photo, CornerRadius::same(1), inner_fill);
+            p.rect_stroke(photo, CornerRadius::same(1), inner_stroke, StrokeKind::Middle);
+            "Hochformat"
+        }
+        Orientation::Landscape => {
+            let sheet = Rect::from_center_size(icon_c, Vec2::new(19.0, 13.0));
+            let photo = Rect::from_center_size(icon_c, Vec2::new(13.0, 8.0));
+            p.rect_stroke(sheet, CornerRadius::same(2), sheet_stroke, StrokeKind::Middle);
+            p.rect_filled(photo, CornerRadius::same(1), inner_fill);
+            p.rect_stroke(photo, CornerRadius::same(1), inner_stroke, StrokeKind::Middle);
+            "Querformat"
+        }
+    };
+
+    p.text(
+        Pos2::new(rect.min.x + 34.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        FontId::proportional(11.5),
+        if active { tokens.text } else { fg },
+    );
+
+    resp
+}
+
+/// Paints a visual icon tile button for selecting `CenteringMode` (`Mitte`, `Horiz.`, `Vert.`, `Frei`).
+fn draw_centering_tile(
+    ui: &mut Ui,
+    tokens: &Tokens,
+    mode: CenteringMode,
+    active: bool,
+) -> egui::Response {
+    let size = Vec2::new(56.5, 48.0);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+
+    let bg = if resp.is_pointer_button_down_on() {
+        tokens.accent.gamma_multiply(0.36)
+    } else if active {
+        tokens.accent.gamma_multiply(0.22)
+    } else if resp.hovered() {
+        tokens.hover
+    } else {
+        tokens.field
+    };
+    let border_stroke = if active {
+        Stroke::new(1.6_f32, tokens.accent)
+    } else if resp.hovered() {
+        Stroke::new(1.2_f32, tokens.accent.gamma_multiply(0.75))
+    } else {
+        Stroke::new(1.0_f32, tokens.field_border)
+    };
+    let fg = if active {
+        tokens.accent
+    } else if resp.hovered() {
+        tokens.text
+    } else {
+        tokens.text_dim
+    };
+    let slot_fill = if active {
+        tokens.accent.gamma_multiply(0.38)
+    } else {
+        fg.gamma_multiply(0.24)
+    };
+
+    let p = ui.painter();
+    p.rect_filled(rect, CornerRadius::same(5), bg);
+    p.rect_stroke(rect, CornerRadius::same(5), border_stroke, StrokeKind::Middle);
+
+    let icon_c = Pos2::new(rect.center().x, rect.min.y + 17.0);
+    let sheet = Rect::from_center_size(icon_c, Vec2::new(20.0, 22.0));
+    let sheet_stroke = Stroke::new(1.15_f32, fg.gamma_multiply(0.8));
+    let axis_stroke = Stroke::new(1.0_f32, fg.gamma_multiply(0.65));
+    let slot_stroke = Stroke::new(1.25_f32, fg);
+    p.rect_stroke(sheet, CornerRadius::same(2), sheet_stroke, StrokeKind::Middle);
+
+    let short_lbl = match mode {
+        CenteringMode::Center => {
+            p.line_segment(
+                [
+                    Pos2::new(sheet.min.x + 2.0, icon_c.y),
+                    Pos2::new(sheet.max.x - 2.0, icon_c.y),
+                ],
+                axis_stroke,
+            );
+            p.line_segment(
+                [
+                    Pos2::new(icon_c.x, sheet.min.y + 2.0),
+                    Pos2::new(icon_c.x, sheet.max.y - 2.0),
+                ],
+                axis_stroke,
+            );
+            let photo = Rect::from_center_size(icon_c, Vec2::new(10.0, 11.0));
+            p.rect_filled(photo, CornerRadius::same(1), slot_fill);
+            p.rect_stroke(photo, CornerRadius::same(1), slot_stroke, StrokeKind::Middle);
+            "Mitte"
+        }
+        CenteringMode::Horizontal => {
+            // Vertical center axis + horizontally centered photo + up/down freedom arrows
+            p.line_segment(
+                [
+                    Pos2::new(icon_c.x, sheet.min.y + 1.5),
+                    Pos2::new(icon_c.x, sheet.max.y - 1.5),
+                ],
+                axis_stroke,
+            );
+            let photo = Rect::from_center_size(icon_c, Vec2::new(11.0, 8.5));
+            p.rect_filled(photo, CornerRadius::same(1), slot_fill);
+            p.rect_stroke(photo, CornerRadius::same(1), slot_stroke, StrokeKind::Middle);
+            let top_tip = Pos2::new(icon_c.x, sheet.min.y + 2.2);
+            p.line_segment([top_tip, Pos2::new(top_tip.x - 2.2, top_tip.y + 2.2)], slot_stroke);
+            p.line_segment([top_tip, Pos2::new(top_tip.x + 2.2, top_tip.y + 2.2)], slot_stroke);
+            let bot_tip = Pos2::new(icon_c.x, sheet.max.y - 2.2);
+            p.line_segment([bot_tip, Pos2::new(bot_tip.x - 2.2, bot_tip.y - 2.2)], slot_stroke);
+            p.line_segment([bot_tip, Pos2::new(bot_tip.x + 2.2, bot_tip.y - 2.2)], slot_stroke);
+            "Horiz."
+        }
+        CenteringMode::Vertical => {
+            // Horizontal center axis + vertically centered photo + left/right freedom arrows
+            p.line_segment(
+                [
+                    Pos2::new(sheet.min.x + 1.5, icon_c.y),
+                    Pos2::new(sheet.max.x - 1.5, icon_c.y),
+                ],
+                axis_stroke,
+            );
+            let photo = Rect::from_center_size(icon_c, Vec2::new(8.5, 11.0));
+            p.rect_filled(photo, CornerRadius::same(1), slot_fill);
+            p.rect_stroke(photo, CornerRadius::same(1), slot_stroke, StrokeKind::Middle);
+            let l_tip = Pos2::new(sheet.min.x + 2.2, icon_c.y);
+            p.line_segment([l_tip, Pos2::new(l_tip.x + 2.2, l_tip.y - 2.2)], slot_stroke);
+            p.line_segment([l_tip, Pos2::new(l_tip.x + 2.2, l_tip.y + 2.2)], slot_stroke);
+            let r_tip = Pos2::new(sheet.max.x - 2.2, icon_c.y);
+            p.line_segment([r_tip, Pos2::new(r_tip.x - 2.2, r_tip.y - 2.2)], slot_stroke);
+            p.line_segment([r_tip, Pos2::new(r_tip.x - 2.2, r_tip.y + 2.2)], slot_stroke);
+            "Vert."
+        }
+        CenteringMode::None => {
+            // Offset photo with 4 corner resize handles + 4-way move cross
+            let photo_c = icon_c + Vec2::new(-1.2, -1.0);
+            let photo = Rect::from_center_size(photo_c, Vec2::new(11.0, 12.0));
+            p.rect_filled(photo, CornerRadius::same(1), slot_fill);
+            p.rect_stroke(photo, CornerRadius::same(1), slot_stroke, StrokeKind::Middle);
+            for hp in [
+                photo.left_top(),
+                photo.right_top(),
+                photo.left_bottom(),
+                photo.right_bottom(),
+            ] {
+                p.rect_filled(Rect::from_center_size(hp, Vec2::splat(2.6)), CornerRadius::ZERO, fg);
+            }
+            p.line_segment(
+                [
+                    Pos2::new(photo_c.x - 3.2, photo_c.y),
+                    Pos2::new(photo_c.x + 3.2, photo_c.y),
+                ],
+                slot_stroke,
+            );
+            p.line_segment(
+                [
+                    Pos2::new(photo_c.x, photo_c.y - 3.2),
+                    Pos2::new(photo_c.x, photo_c.y + 3.2),
+                ],
+                slot_stroke,
+            );
+            "Frei"
+        }
+    };
+
+    p.text(
+        Pos2::new(rect.center().x, rect.max.y - 8.5),
+        egui::Align2::CENTER_CENTER,
+        short_lbl,
+        FontId::proportional(10.5),
+        if active { tokens.text } else { fg },
+    );
+
+    resp
+}
+
+/// Hit-tests the 8 resize handles (`14.0 px` catch radius) and 4 border edges (`±7.0 px` band)
+/// of `r_scr`, returning the matching `FreeSlotDragKind`.
+fn hit_test_resize_handles(r_scr: Rect, pos: Pos2) -> Option<FreeSlotDragKind> {
+    let handle_hit = 14.0_f32;
+    let handles = [
+        (r_scr.left_top(), FreeSlotDragKind::ResizeNW),
+        (r_scr.right_top(), FreeSlotDragKind::ResizeNE),
+        (r_scr.left_bottom(), FreeSlotDragKind::ResizeSW),
+        (r_scr.right_bottom(), FreeSlotDragKind::ResizeSE),
+        (
+            Pos2::new(r_scr.center().x, r_scr.min.y),
+            FreeSlotDragKind::ResizeN,
+        ),
+        (
+            Pos2::new(r_scr.center().x, r_scr.max.y),
+            FreeSlotDragKind::ResizeS,
+        ),
+        (
+            Pos2::new(r_scr.min.x, r_scr.center().y),
+            FreeSlotDragKind::ResizeW,
+        ),
+        (
+            Pos2::new(r_scr.max.x, r_scr.center().y),
+            FreeSlotDragKind::ResizeE,
+        ),
+    ];
+    let mut best: Option<(f32, FreeSlotDragKind)> = None;
+    for (h_pos, kind) in handles {
+        let d = pos.distance(h_pos);
+        if d <= handle_hit && best.is_none_or(|(best_d, _)| d < best_d) {
+            best = Some((d, kind));
+        }
+    }
+    if let Some((_, kind)) = best {
+        return Some(kind);
+    }
+
+    let edge_hit = 7.0_f32;
+    let expanded = r_scr.expand(edge_hit);
+    if expanded.contains(pos) {
+        let near_left = (pos.x - r_scr.min.x).abs() <= edge_hit;
+        let near_right = (pos.x - r_scr.max.x).abs() <= edge_hit;
+        let near_top = (pos.y - r_scr.min.y).abs() <= edge_hit;
+        let near_bottom = (pos.y - r_scr.max.y).abs() <= edge_hit;
+        match (near_left, near_right, near_top, near_bottom) {
+            (true, _, true, _) => return Some(FreeSlotDragKind::ResizeNW),
+            (_, true, true, _) => return Some(FreeSlotDragKind::ResizeNE),
+            (true, _, _, true) => return Some(FreeSlotDragKind::ResizeSW),
+            (_, true, _, true) => return Some(FreeSlotDragKind::ResizeSE),
+            (true, _, _, _) => return Some(FreeSlotDragKind::ResizeW),
+            (_, true, _, _) => return Some(FreeSlotDragKind::ResizeE),
+            (_, _, true, _) => return Some(FreeSlotDragKind::ResizeN),
+            (_, _, _, true) => return Some(FreeSlotDragKind::ResizeS),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Paints the 8 resize handle squares around `r_scr` (`9×9 px`, expanding to `11×11 px` within the `14 px` catch radius).
+fn draw_resize_handles(
+    p: &egui::Painter,
+    r_scr: Rect,
+    hover_pos: Option<Pos2>,
+    accent: Color32,
+) {
+    let handle_pts = [
+        r_scr.left_top(),
+        r_scr.right_top(),
+        r_scr.left_bottom(),
+        r_scr.right_bottom(),
+        Pos2::new(r_scr.center().x, r_scr.min.y),
+        Pos2::new(r_scr.center().x, r_scr.max.y),
+        Pos2::new(r_scr.min.x, r_scr.center().y),
+        Pos2::new(r_scr.max.x, r_scr.center().y),
+    ];
+    for hp in handle_pts {
+        let is_hovered = hover_pos.is_some_and(|h| h.distance(hp) <= 14.0);
+        let sz = if is_hovered { 11.0 } else { 9.0 };
+        let hr = Rect::from_center_size(hp, Vec2::splat(sz));
+        p.rect_filled(
+            hr,
+            CornerRadius::same(2),
+            if is_hovered { accent } else { Color32::WHITE },
+        );
+        p.rect_stroke(
+            hr,
+            CornerRadius::same(2),
+            Stroke::new(
+                1.8_f32,
+                if is_hovered { Color32::WHITE } else { accent },
+            ),
+            StrokeKind::Middle,
+        );
+    }
+}
+
+/// Computes the updated image `RectMm` in `LayoutMode::Standard` during a free Move or Resize handle drag.
+#[allow(clippy::too_many_arguments)]
+fn compute_std_free_drag_rect(
+    init: RectMm,
+    kind: FreeSlotDragKind,
+    dx: f64,
+    dy: f64,
+    pw: f64,
+    ph: f64,
+    keep_aspect: bool,
+    centering: CenteringMode,
+) -> RectMm {
+    let mut next = init;
+    match kind {
+        FreeSlotDragKind::Move => {
+            let max_x = (pw - init.width_mm).max(0.0);
+            let max_y = (ph - init.height_mm).max(0.0);
+            next.x_mm = match centering {
+                CenteringMode::None | CenteringMode::Vertical => (init.x_mm + dx).clamp(0.0, max_x),
+                CenteringMode::Center | CenteringMode::Horizontal => (pw - init.width_mm) * 0.5,
+            };
+            next.y_mm = match centering {
+                CenteringMode::None | CenteringMode::Horizontal => {
+                    (init.y_mm + dy).clamp(0.0, max_y)
+                }
+                CenteringMode::Center | CenteringMode::Vertical => (ph - init.height_mm) * 0.5,
+            };
+            return next;
+        }
+        _ if !keep_aspect => match kind {
+            FreeSlotDragKind::ResizeE => {
+                next.width_mm = (init.width_mm + dx).clamp(12.0, (pw - init.x_mm).max(12.0));
+            }
+            FreeSlotDragKind::ResizeS => {
+                next.height_mm = (init.height_mm + dy).clamp(12.0, (ph - init.y_mm).max(12.0));
+            }
+            FreeSlotDragKind::ResizeW => {
+                let new_x = (init.x_mm + dx).clamp(0.0, (init.right_mm() - 12.0).max(0.0));
+                next.width_mm = init.right_mm() - new_x;
+                next.x_mm = new_x;
+            }
+            FreeSlotDragKind::ResizeN => {
+                let new_y = (init.y_mm + dy).clamp(0.0, (init.bottom_mm() - 12.0).max(0.0));
+                next.height_mm = init.bottom_mm() - new_y;
+                next.y_mm = new_y;
+            }
+            FreeSlotDragKind::ResizeSE => {
+                next.width_mm = (init.width_mm + dx).clamp(12.0, (pw - init.x_mm).max(12.0));
+                next.height_mm = (init.height_mm + dy).clamp(12.0, (ph - init.y_mm).max(12.0));
+            }
+            FreeSlotDragKind::ResizeNW => {
+                let new_x = (init.x_mm + dx).clamp(0.0, (init.right_mm() - 12.0).max(0.0));
+                let new_y = (init.y_mm + dy).clamp(0.0, (init.bottom_mm() - 12.0).max(0.0));
+                next.width_mm = init.right_mm() - new_x;
+                next.height_mm = init.bottom_mm() - new_y;
+                next.x_mm = new_x;
+                next.y_mm = new_y;
+            }
+            FreeSlotDragKind::ResizeNE => {
+                let new_y = (init.y_mm + dy).clamp(0.0, (init.bottom_mm() - 12.0).max(0.0));
+                next.width_mm = (init.width_mm + dx).clamp(12.0, (pw - init.x_mm).max(12.0));
+                next.height_mm = init.bottom_mm() - new_y;
+                next.y_mm = new_y;
+            }
+            FreeSlotDragKind::ResizeSW => {
+                let new_x = (init.x_mm + dx).clamp(0.0, (init.right_mm() - 12.0).max(0.0));
+                next.height_mm = (init.height_mm + dy).clamp(12.0, (ph - init.y_mm).max(12.0));
+                next.width_mm = init.right_mm() - new_x;
+                next.x_mm = new_x;
+            }
+            FreeSlotDragKind::Move => {}
+        },
+        _ => {
+            let aspect = (init.width_mm / init.height_mm.max(1.0)).max(0.05);
+            match kind {
+                FreeSlotDragKind::ResizeSE => {
+                    let max_w = (pw - init.x_mm).min((ph - init.y_mm) * aspect).max(12.0);
+                    let raw_w = if dx.abs() >= (dy * aspect).abs() {
+                        init.width_mm + dx
+                    } else {
+                        (init.height_mm + dy) * aspect
+                    };
+                    let w = raw_w.clamp(12.0, max_w);
+                    let h = w / aspect;
+                    next = RectMm::new(init.x_mm, init.y_mm, w, h);
+                }
+                FreeSlotDragKind::ResizeNW => {
+                    let x1 = init.right_mm();
+                    let y1 = init.bottom_mm();
+                    let max_w = x1.min(y1 * aspect).max(12.0);
+                    let raw_w = if dx.abs() >= (dy * aspect).abs() {
+                        init.width_mm - dx
+                    } else {
+                        (init.height_mm - dy) * aspect
+                    };
+                    let w = raw_w.clamp(12.0, max_w);
+                    let h = w / aspect;
+                    next = RectMm::new(x1 - w, y1 - h, w, h);
+                }
+                FreeSlotDragKind::ResizeNE => {
+                    let x0 = init.x_mm;
+                    let y1 = init.bottom_mm();
+                    let max_w = (pw - x0).min(y1 * aspect).max(12.0);
+                    let raw_w = if dx.abs() >= (dy * aspect).abs() {
+                        init.width_mm + dx
+                    } else {
+                        (init.height_mm - dy) * aspect
+                    };
+                    let w = raw_w.clamp(12.0, max_w);
+                    let h = w / aspect;
+                    next = RectMm::new(x0, y1 - h, w, h);
+                }
+                FreeSlotDragKind::ResizeSW => {
+                    let x1 = init.right_mm();
+                    let y0 = init.y_mm;
+                    let max_w = x1.min((ph - y0) * aspect).max(12.0);
+                    let raw_w = if dx.abs() >= (dy * aspect).abs() {
+                        init.width_mm - dx
+                    } else {
+                        (init.height_mm + dy) * aspect
+                    };
+                    let w = raw_w.clamp(12.0, max_w);
+                    let h = w / aspect;
+                    next = RectMm::new(x1 - w, y0, w, h);
+                }
+                FreeSlotDragKind::ResizeE => {
+                    let x0 = init.x_mm;
+                    let cy = init.y_mm + init.height_mm * 0.5;
+                    let max_w = (pw - x0).min(ph * aspect).max(12.0);
+                    let w = (init.width_mm + dx).clamp(12.0, max_w);
+                    let h = w / aspect;
+                    let y = (cy - h * 0.5).clamp(0.0, (ph - h).max(0.0));
+                    next = RectMm::new(x0, y, w, h);
+                }
+                FreeSlotDragKind::ResizeW => {
+                    let x1 = init.right_mm();
+                    let cy = init.y_mm + init.height_mm * 0.5;
+                    let max_w = x1.min(ph * aspect).max(12.0);
+                    let w = (init.width_mm - dx).clamp(12.0, max_w);
+                    let h = w / aspect;
+                    let y = (cy - h * 0.5).clamp(0.0, (ph - h).max(0.0));
+                    next = RectMm::new(x1 - w, y, w, h);
+                }
+                FreeSlotDragKind::ResizeS => {
+                    let cx = init.x_mm + init.width_mm * 0.5;
+                    let y0 = init.y_mm;
+                    let max_h = (ph - y0).min(pw / aspect).max(12.0);
+                    let h = (init.height_mm + dy).clamp(12.0, max_h);
+                    let w = h * aspect;
+                    let x = (cx - w * 0.5).clamp(0.0, (pw - w).max(0.0));
+                    next = RectMm::new(x, y0, w, h);
+                }
+                FreeSlotDragKind::ResizeN => {
+                    let cx = init.x_mm + init.width_mm * 0.5;
+                    let y1 = init.bottom_mm();
+                    let max_h = y1.min(pw / aspect).max(12.0);
+                    let h = (init.height_mm - dy).clamp(12.0, max_h);
+                    let w = h * aspect;
+                    let x = (cx - w * 0.5).clamp(0.0, (pw - w).max(0.0));
+                    next = RectMm::new(x, y1 - h, w, h);
+                }
+                FreeSlotDragKind::Move => {}
+            }
+        }
+    }
+
+    match centering {
+        CenteringMode::Horizontal => {
+            next.x_mm = (pw - next.width_mm) * 0.5;
+        }
+        CenteringMode::Vertical => {
+            next.y_mm = (ph - next.height_mm) * 0.5;
+        }
+        CenteringMode::None | CenteringMode::Center => {}
+    }
+    next
 }
 
 /// Paints the primary `"Drucken"` action button with a crisp vector printer icon and
