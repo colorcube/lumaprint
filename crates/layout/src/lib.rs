@@ -255,7 +255,7 @@ pub fn slots_capacity_for_layout(doc: &PrintJobDocument, layout: &LayoutMode) ->
                 })
                 .unwrap_or(4)
         }
-        LayoutMode::FreeComposer(_) => 25,
+        LayoutMode::FreeComposer(_) => 64,
     }
 }
 
@@ -776,6 +776,8 @@ pub fn pack_sammel_rects(
             let base_h = sz.height_mm.max(10.0);
             let mut rotated_90 = if i < k_bits {
                 ((mask >> i) & 1) != 0
+            } else if k_bits > 0 {
+                ((mask >> (k_bits - 1)) & 1) != 0
             } else {
                 false
             };

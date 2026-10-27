@@ -41,6 +41,27 @@ pub use theme::{
 /// Standard photo & Fine-Art print size presets (`mm`) selectable per image in `"Sammel"` and `"Standard"` modes.
 const PHOTO_SIZE_PRESETS_MM: &[(&str, SizeMm)] = &[
     (
+        "Kontaktbogen (30 × 45 mm)",
+        SizeMm {
+            width_mm: 30.0,
+            height_mm: 45.0,
+        },
+    ),
+    (
+        "6 × 9 cm (60 × 90 mm)",
+        SizeMm {
+            width_mm: 60.0,
+            height_mm: 90.0,
+        },
+    ),
+    (
+        "7 × 10 cm (70 × 100 mm)",
+        SizeMm {
+            width_mm: 70.0,
+            height_mm: 100.0,
+        },
+    ),
+    (
         "9 × 13 cm (89 × 127 mm)",
         SizeMm {
             width_mm: 89.0,

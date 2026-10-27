@@ -1696,7 +1696,7 @@ impl Session {
                 let fits = items.is_empty()
                     || count_fitting_sammel_items(&self.doc, &comp_spec, &test_sizes)
                         >= test_sizes.len();
-                if fits && items.len() < 25 {
+                if fits && items.len() < 64 {
                     next_items.remove(0);
                     items.push((cand_id, cand_sz));
                     self.write_sammel_page_items(p_idx + 1, &next_items);
@@ -1931,7 +1931,7 @@ impl Session {
             let cap = slots_capacity_for_layout(&self.doc, &self.doc.pages[p_idx].layout);
             if let Some(page) = self.doc.pages.get_mut(p_idx) {
                 if page.slot_assignments.len() < cap {
-                    page.slot_assignments.resize(25, None);
+                    page.slot_assignments.resize(cap.max(25), None);
                 }
                 if let Some((si, empty_slot)) = page
                     .slot_assignments
