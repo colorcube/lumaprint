@@ -923,11 +923,15 @@ pub fn build_lp_command_args(req: &CupsSpoolRequest, file_path: &Path) -> Vec<St
         args.push(format!("Resolution={}", req.resolution));
         if matches!(req.driver_color_control, DriverColorControl::EpsonEscpr { .. }) {
             let pq = match req.resolution.to_ascii_lowercase().as_str() {
-                "normal" | "360x360dpi" | "720x720dpi" => "Normal",
+                "normal" | "360dpi" | "360x360dpi" | "720dpi" | "720x360dpi" | "720x720dpi" => {
+                    "Normal"
+                }
                 "fine" | "720x1440dpi" | "1440x720dpi" => "Fine",
-                "high" | "1440x1440dpi" => "High",
-                "max" | "2880x1440dpi" | "5760x1440dpi" => "Max",
-                "carbonblack" | "carbonblack5760x1440" => "CarbonBlack",
+                "high" | "1440dpi" | "1440x1440dpi" => "High",
+                "max" | "2880x1440dpi" => "Max",
+                "carbonblack" | "5760dpi" | "5760x1440dpi" | "carbonblack5760x1440" => {
+                    "CarbonBlack"
+                }
                 _ => req.resolution.as_str(),
             };
             args.push(String::from("-o"));

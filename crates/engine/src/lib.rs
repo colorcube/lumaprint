@@ -2311,13 +2311,11 @@ impl Session {
                 )
             };
 
-        let overcoat = if self.doc.printer.detailed.black_enhance_overcoat {
-            Some(String::from("On"))
-        } else if matches!(driver_color_control, DriverColorControl::EpsonEscpr { .. }) {
-            Some(String::from("Off"))
+        let overcoat = Some(if self.doc.printer.detailed.black_enhance_overcoat {
+            String::from("On")
         } else {
-            None
-        };
+            String::from("Off")
+        });
 
         CupsSpoolRequest {
             queue_name: self.doc.printer.printer_queue.clone(),
