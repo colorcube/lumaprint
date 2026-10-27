@@ -322,8 +322,6 @@ struct DockDropZone {
     target: DockDropTarget,
     hit_rect: Rect,
     preview_rect: Rect,
-    label: &'static str,
-    is_current: bool,
 }
 
 /// Drag & Drop payload shared between the Image Pool, Page Slots, Page Navigator, and movable Docks.
@@ -778,6 +776,16 @@ impl LumaPrintApp {
             FilmstripPosition::Bottom => {
                 self.session.doc.bottom_dock_collapsed = false;
                 self.bottom_dock_tab = SharedDockTab::Pool;
+                if self.session.doc.page_list_position == PageListPosition::BottomFullWidth {
+                    self.session.doc.page_list_position = PageListPosition::BottomInCanvas;
+                }
+            }
+            FilmstripPosition::BottomFullWidth => {
+                self.session.doc.bottom_dock_collapsed = false;
+                self.bottom_dock_tab = SharedDockTab::Pool;
+                if self.session.doc.page_list_position == PageListPosition::BottomInCanvas {
+                    self.session.doc.page_list_position = PageListPosition::BottomFullWidth;
+                }
             }
             FilmstripPosition::Hidden => {}
         }
@@ -790,9 +798,19 @@ impl LumaPrintApp {
                 self.session.doc.left_dock_collapsed = false;
                 self.left_dock_tab = SharedDockTab::PageList;
             }
-            PageListPosition::BottomInCanvas | PageListPosition::BottomFullWidth => {
+            PageListPosition::BottomInCanvas => {
                 self.session.doc.bottom_dock_collapsed = false;
                 self.bottom_dock_tab = SharedDockTab::PageList;
+                if self.session.doc.filmstrip_position == FilmstripPosition::BottomFullWidth {
+                    self.session.doc.filmstrip_position = FilmstripPosition::Bottom;
+                }
+            }
+            PageListPosition::BottomFullWidth => {
+                self.session.doc.bottom_dock_collapsed = false;
+                self.bottom_dock_tab = SharedDockTab::PageList;
+                if self.session.doc.filmstrip_position == FilmstripPosition::Bottom {
+                    self.session.doc.filmstrip_position = FilmstripPosition::BottomFullWidth;
+                }
             }
         }
     }
@@ -803,6 +821,7 @@ impl LumaPrintApp {
             FilmstripPosition::Left,
             FilmstripPosition::RightTabbed,
             FilmstripPosition::Bottom,
+            FilmstripPosition::BottomFullWidth,
         ] {
             let is_sel = self.session.doc.filmstrip_position == pos;
             if ui.radio(is_sel, pos.label_de()).clicked() {
@@ -904,63 +923,62 @@ impl LumaPrintApp {
             (screen.max.x - right_w).max(screen.center().x)
         };
 
+        let split_y = (screen.max.y - 72.0).max(top_y + 40.0);
+        let inner_top_y = (screen.max.y - 150.0).max(top_y);
+
         let left_preview = Rect::from_min_max(
             Pos2::new(screen.min.x, top_y),
             Pos2::new(screen.min.x + left_w, screen.max.y),
         );
         let left_hit = Rect::from_min_max(
             Pos2::new(screen.min.x, top_y),
-            Pos2::new(
-                screen.min.x + left_w,
-                (screen.max.y - 150.0).max(top_y + 60.0),
-            ),
+            Pos2::new(screen.min.x + left_w, inner_top_y.max(top_y + 60.0)),
         );
 
         match item {
             DockDragItem::Pool => {
-                let cur = self.session.doc.filmstrip_position;
                 let right_preview =
                     Rect::from_min_max(Pos2::new(screen.max.x - right_w, top_y), screen.max);
                 let right_hit = Rect::from_min_max(
                     Pos2::new(screen.max.x - right_w, top_y),
-                    Pos2::new(screen.max.x, (screen.max.y - 150.0).max(top_y + 60.0)),
+                    Pos2::new(screen.max.x, inner_top_y.max(top_y + 60.0)),
                 );
-                let bottom_preview = Rect::from_min_max(
+                let in_canvas_preview = Rect::from_min_max(
+                    Pos2::new(cx_min, (screen.max.y - 165.0).max(top_y)),
+                    Pos2::new(cx_max, screen.max.y),
+                );
+                let in_canvas_hit =
+                    Rect::from_min_max(Pos2::new(cx_min, inner_top_y), Pos2::new(cx_max, split_y));
+                let full_bottom_preview = Rect::from_min_max(
                     Pos2::new(screen.min.x, (screen.max.y - 165.0).max(top_y)),
                     screen.max,
                 );
-                let bottom_hit = Rect::from_min_max(
-                    Pos2::new(screen.min.x, (screen.max.y - 150.0).max(top_y)),
-                    screen.max,
-                );
+                let full_bottom_hit =
+                    Rect::from_min_max(Pos2::new(screen.min.x, split_y), screen.max);
                 vec![
                     DockDropZone {
                         target: DockDropTarget::PoolPos(FilmstripPosition::Left),
                         hit_rect: left_hit,
                         preview_rect: left_preview,
-                        label: "⬅ Links am Rand",
-                        is_current: cur == FilmstripPosition::Left,
                     },
                     DockDropZone {
                         target: DockDropTarget::PoolPos(FilmstripPosition::RightTabbed),
                         hit_rect: right_hit,
                         preview_rect: right_preview,
-                        label: "➡ Rechts als Tab (Druck-Einstellungen)",
-                        is_current: cur == FilmstripPosition::RightTabbed,
                     },
                     DockDropZone {
                         target: DockDropTarget::PoolPos(FilmstripPosition::Bottom),
-                        hit_rect: bottom_hit,
-                        preview_rect: bottom_preview,
-                        label: "⬇ Unten",
-                        is_current: cur == FilmstripPosition::Bottom,
+                        hit_rect: in_canvas_hit,
+                        preview_rect: in_canvas_preview,
+                    },
+                    DockDropZone {
+                        target: DockDropTarget::PoolPos(FilmstripPosition::BottomFullWidth),
+                        hit_rect: full_bottom_hit,
+                        preview_rect: full_bottom_preview,
                     },
                 ]
             }
             DockDragItem::PageList => {
-                let cur = self.session.doc.page_list_position;
-                let split_y = (screen.max.y - 72.0).max(top_y + 40.0);
-                let inner_top_y = (screen.max.y - 150.0).max(top_y);
                 let in_canvas_preview = Rect::from_min_max(
                     Pos2::new(cx_min, (screen.max.y - 114.0).max(top_y)),
                     Pos2::new(cx_max, screen.max.y),
@@ -978,22 +996,16 @@ impl LumaPrintApp {
                         target: DockDropTarget::PageListPos(PageListPosition::Left),
                         hit_rect: left_hit,
                         preview_rect: left_preview,
-                        label: "⬅ Links am Rand",
-                        is_current: cur == PageListPosition::Left,
                     },
                     DockDropZone {
                         target: DockDropTarget::PageListPos(PageListPosition::BottomInCanvas),
                         hit_rect: in_canvas_hit,
                         preview_rect: in_canvas_preview,
-                        label: "⬇ Nur im Bogen unten",
-                        is_current: cur == PageListPosition::BottomInCanvas,
                     },
                     DockDropZone {
                         target: DockDropTarget::PageListPos(PageListPosition::BottomFullWidth),
                         hit_rect: full_bottom_hit,
                         preview_rect: full_bottom_preview,
-                        label: "⬇ Auf volle Breite unten",
-                        is_current: cur == PageListPosition::BottomFullWidth,
                     },
                 ]
             }
@@ -1008,7 +1020,6 @@ impl LumaPrintApp {
             egui::Id::new("lumaprint_dock_drop_zones_layer"),
         ));
 
-        // 1. Paint full target footprint preview for the hovered drop zone (KDE / IDEA live dock preview)
         for z in &zones {
             if z.hit_rect.contains(pos) {
                 painter.rect_filled(
@@ -1023,41 +1034,6 @@ impl LumaPrintApp {
                     StrokeKind::Middle,
                 );
             }
-        }
-
-        // 2. Paint labeled drop-zone indicator pills in each zone
-        for z in &zones {
-            let hovered = z.hit_rect.contains(pos);
-            let pill_size = Vec2::new(250.0_f32.min(z.hit_rect.width() - 16.0).max(130.0), 36.0);
-            let pill_rect = Rect::from_center_size(z.hit_rect.center(), pill_size);
-
-            let bg = if hovered {
-                t.accent
-            } else {
-                t.chrome.gamma_multiply(0.94)
-            };
-            let fg = if hovered {
-                Color32::WHITE
-            } else if z.is_current {
-                t.accent
-            } else {
-                t.text
-            };
-            let border = if hovered {
-                Stroke::new(2.0_f32, Color32::WHITE)
-            } else {
-                Stroke::new(1.5_f32, t.accent)
-            };
-
-            painter.rect_filled(pill_rect, CornerRadius::same(6), bg);
-            painter.rect_stroke(pill_rect, CornerRadius::same(6), border, StrokeKind::Middle);
-            painter.text(
-                pill_rect.center(),
-                egui::Align2::CENTER_CENTER,
-                z.label,
-                FontId::proportional(12.5),
-                fg,
-            );
         }
     }
 
@@ -1716,14 +1692,12 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         let pool_pos = self.session.doc.filmstrip_position;
         let page_pos = self.session.doc.page_list_position;
 
-        // 1. Full-width Bottom Dock (when Bogenliste is set to BottomFullWidth)
-        if page_pos == PageListPosition::BottomFullWidth {
-            self.draw_bottom_dock_panel(
-                ctx,
-                None,
-                true,
-                pool_pos == FilmstripPosition::Bottom,
-            );
+        // 1. Full-width Bottom Dock (when Bogenliste or Bilder-Pool is set to BottomFullWidth)
+        let full_bottom_pages = page_pos == PageListPosition::BottomFullWidth;
+        let full_bottom_pool = pool_pos == FilmstripPosition::BottomFullWidth
+            || (pool_pos == FilmstripPosition::Bottom && full_bottom_pages);
+        if full_bottom_pages || full_bottom_pool {
+            self.draw_bottom_dock_panel(ctx, None, full_bottom_pages, full_bottom_pool);
         }
 
         // 2. Right Dock (Druck-Einstellungen + optional Bilder-Pool Tab, or slim expand strip when collapsed)
@@ -1925,6 +1899,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         };
         if let DragPayload::DockPanel(item) = payload {
             self.draw_dock_drop_zones_overlay(ctx, item, pos);
+            return;
         }
         let label = match payload {
             DragPayload::PoolImage(id) => {
@@ -1948,12 +1923,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 slot_index + 1
             ),
             DragPayload::ReorderPage(pi) => format!("📄 Bogen {} verschieben", pi + 1),
-            DragPayload::DockPanel(DockDragItem::Pool) => {
-                String::from("🖼 Bilder-Pool verschieben → Auf gewünschte Andock-Zone ziehen")
-            }
-            DragPayload::DockPanel(DockDragItem::PageList) => {
-                String::from("📄 Bogenliste verschieben → Auf gewünschte Andock-Zone ziehen")
-            }
+            DragPayload::DockPanel(_) => String::new(),
         };
         egui::Area::new(egui::Id::new("lumaprint_dnd_floating_badge"))
             .order(egui::Order::Tooltip)
@@ -10029,5 +9999,34 @@ mod tests {
             app.session.doc.page_list_position,
             PageListPosition::Left
         );
+
+        // 7. When Bogenliste is Left, dragging Pool to BottomFullWidth docks Pool across full width
+        let full_bottom_pool_center = app
+            .compute_dock_drop_zones(&ctx, DockDragItem::Pool)
+            .into_iter()
+            .find(|z| z.target == DockDropTarget::PoolPos(FilmstripPosition::BottomFullWidth))
+            .map(|z| z.hit_rect.center())
+            .unwrap_or(Pos2::new(500.0, 740.0));
+
+        app.active_drag = Some(DragPayload::DockPanel(DockDragItem::Pool));
+        app.last_drag_pos = Some(full_bottom_pool_center);
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            app.render_ui(ctx);
+        });
+        assert_eq!(
+            app.session.doc.filmstrip_position,
+            FilmstripPosition::BottomFullWidth
+        );
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            app.render_ui(ctx);
+            assert!(
+                egui::containers::panel::PanelState::load(
+                    ctx,
+                    egui::Id::new("full_bottom_dock_panel")
+                )
+                .is_some()
+            );
+        });
     }
 }
+

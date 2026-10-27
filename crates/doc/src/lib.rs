@@ -978,15 +978,21 @@ pub enum FilmstripPosition {
     Left,
     RightTabbed,
     Bottom,
+    BottomFullWidth,
     Hidden,
 }
 
 impl FilmstripPosition {
+    pub fn is_bottom(self) -> bool {
+        matches!(self, Self::Bottom | Self::BottomFullWidth)
+    }
+
     pub fn label_de(self) -> &'static str {
         match self {
             Self::Left => "Links am Rand",
             Self::RightTabbed => "Rechts (Tab bei Druck-Einstellungen)",
-            Self::Bottom => "Unten",
+            Self::Bottom => "Nur im Bogen unten",
+            Self::BottomFullWidth => "Auf volle Breite unten",
             Self::Hidden => "Ausgeblendet",
         }
     }
