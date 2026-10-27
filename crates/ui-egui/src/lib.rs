@@ -2555,17 +2555,19 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             }
 
             if let Some(img_id) = slot.assigned_image_id {
-                // Check if this page is in Standard layout with free/axis-free movement enabled
-                let std_free_move = match self.session.doc.page_layout(page_index) {
+                // Check if this page is in Standard layout (resize handles active in all CenteringModes, Move active when not Center)
+                let (std_can_resize, std_can_move) = match self.session.doc.page_layout(page_index) {
                     LayoutMode::Standard(std_spec) => {
-                        !(self.session.doc.printer.borderless && std_spec.fit_to_scale)
-                            && std_spec.centering != CenteringMode::Center
-                            && self.session.doc.canvas_view_mode == CanvasViewMode::SinglePage
+                        let can_resize = !(self.session.doc.printer.borderless
+                            && std_spec.fit_to_scale)
+                            && self.session.doc.canvas_view_mode == CanvasViewMode::SinglePage;
+                        let can_move = can_resize && std_spec.centering != CenteringMode::Center;
+                        (can_resize, can_move)
                     }
-                    _ => false,
+                    _ => (false, false),
                 };
 
-                let interact_r = if std_free_move {
+                let interact_r = if std_can_resize {
                     img_r.expand(14.0)
                 } else {
                     img_r
@@ -2587,16 +2589,16 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     open_crop_for_id = Some(img_id);
                 }
 
-                // Draw selection frame (+ 8 resize handles when Standard free-move is active)
+                // Draw selection frame (+ 8 resize handles in Standard layout)
                 if is_active_slot && self.slot_selected {
                     let accent_col = Color32::from_rgb(0, 145, 255);
                     ui.painter().rect_stroke(
                         img_r,
                         CornerRadius::ZERO,
-                        Stroke::new(if std_free_move { 1.8_f32 } else { 1.5_f32 }, accent_col),
+                        Stroke::new(if std_can_resize { 1.8_f32 } else { 1.5_f32 }, accent_col),
                         StrokeKind::Middle,
                     );
-                    if std_free_move {
+                    if std_can_resize {
                         let hover_pos = ui.ctx().input(|i| i.pointer.hover_pos());
                         draw_resize_handles(ui.painter(), img_r, hover_pos, accent_col);
                     }
@@ -2641,7 +2643,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
                 // Shift + Left-Click Drag -> pan image inside slot (`pan_x`, `pan_y`) when zoomed or Fill
                 let shift_held = ui.ctx().input(|i| i.modifiers.shift);
-                if std_free_move && !shift_held {
+                if std_can_resize && !shift_held {
                     let hover_pos = ui.ctx().input(|i| i.pointer.hover_pos());
                     let active_or_hover_kind = if let Some(drag) = self.active_std_drag {
                         Some(drag.kind)
@@ -2649,7 +2651,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         && interact_r.contains(hpos)
                     {
                         hit_test_resize_handles(img_r, hpos).or_else(|| {
-                            if img_r.contains(hpos) {
+                            if std_can_move && img_r.contains(hpos) {
                                 Some(FreeSlotDragKind::Move)
                             } else {
                                 None
@@ -2711,25 +2713,27 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                     Some(EngineCommand::SetImageCrop { image_id: img_id, crop });
                             }
                         }
-                    } else if std_free_move && scale > 0.01 {
+                    } else if std_can_resize && scale > 0.01 {
                         if resp.drag_started() || self.active_std_drag.is_none() {
                             let origin = ui
                                 .ctx()
                                 .input(|i| i.pointer.press_origin())
                                 .or_else(|| resp.interact_pointer_pos());
                             if let Some(orig) = origin {
-                                let kind = hit_test_resize_handles(img_r, orig)
-                                    .unwrap_or(FreeSlotDragKind::Move);
-                                let start_mm = (
-                                    f64::from((orig.x - sheet_rect.min.x) / scale),
-                                    f64::from((orig.y - sheet_rect.min.y) / scale),
-                                );
-                                self.active_std_drag = Some(FreeSlotDragState {
-                                    slot_index: slot.slot_index,
-                                    kind,
-                                    start_pointer_mm: start_mm,
-                                    initial_rect_mm: slot.image_draw_rect_mm,
-                                });
+                                let maybe_kind = hit_test_resize_handles(img_r, orig)
+                                    .or(std_can_move.then_some(FreeSlotDragKind::Move));
+                                if let Some(kind) = maybe_kind {
+                                    let start_mm = (
+                                        f64::from((orig.x - sheet_rect.min.x) / scale),
+                                        f64::from((orig.y - sheet_rect.min.y) / scale),
+                                    );
+                                    self.active_std_drag = Some(FreeSlotDragState {
+                                        slot_index: slot.slot_index,
+                                        kind,
+                                        start_pointer_mm: start_mm,
+                                        initial_rect_mm: slot.image_draw_rect_mm,
+                                    });
+                                }
                             }
                         }
 
@@ -4256,6 +4260,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         format!("{} ({} Slots)", tpl.name, count)
                     })
                     .unwrap_or_else(|| tpl_spec.template_id.clone());
+                let short_tpl_label = truncate_combo_label(&current_tpl_label, 28);
 
                 egui::Grid::new("grid_layout_template")
                     .num_columns(2)
@@ -4263,9 +4268,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     .min_col_width(130.0)
                     .show(ui, |ui| {
                         ui.label(RichText::new("Vorlage:").color(t.text_dim));
-                        egui::ComboBox::from_id_salt("tpl_selector")
-                            .selected_text(current_tpl_label)
+                        let combo_resp = egui::ComboBox::from_id_salt("tpl_selector")
+                            .selected_text(short_tpl_label)
                             .width(245.0)
+                            .truncate()
                             .show_ui(ui, |ui| {
                                 for tpl in self
                                     .session
@@ -4295,6 +4301,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                     }
                                 }
                             });
+                        combo_resp.response.on_hover_text(&current_tpl_label);
                         ui.end_row();
 
                         ui.label(RichText::new("Ausrichtung:").color(t.text_dim));
@@ -4351,6 +4358,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         egui::ComboBox::from_id_salt("tpl_caption_mode_combo")
                             .selected_text(tpl_spec.caption_mode.label_de())
                             .width(245.0)
+                            .truncate()
                             .show_ui(ui, |ui| {
                                 for cm in SlotCaptionMode::ALL {
                                     if ui
@@ -4391,7 +4399,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     }
 
                     if ui
-                        .button("✎ Aktuelle im freien Editor anpassen…")
+                        .button("✎ Aktuelle anpassen…")
                         .on_hover_text(
                             "Lädt die aktuell gewählte Vorlage direkt in den freien Millimeter-Slot-Editor des Vorlagen-Studios",
                         )
@@ -7318,7 +7326,17 @@ fn draw_resize_handles(
     }
 }
 
-/// Computes the updated image `RectMm` in `LayoutMode::Standard` during a free Move or Resize handle drag.
+fn truncate_combo_label(input: &str, max_chars: usize) -> String {
+    if input.chars().count() <= max_chars {
+        input.to_string()
+    } else {
+        let mut s: String = input.chars().take(max_chars.saturating_sub(1)).collect();
+        s.push('…');
+        s
+    }
+}
+
+/// Computes the updated image `RectMm` in `LayoutMode::Standard` during a Move or Resize handle drag.
 #[allow(clippy::too_many_arguments)]
 fn compute_std_free_drag_rect(
     init: RectMm,
@@ -7331,74 +7349,114 @@ fn compute_std_free_drag_rect(
     centering: CenteringMode,
 ) -> RectMm {
     let mut next = init;
+    let x_centered = matches!(centering, CenteringMode::Center | CenteringMode::Horizontal);
+    let y_centered = matches!(centering, CenteringMode::Center | CenteringMode::Vertical);
+    let sx = if x_centered { 2.0 } else { 1.0 };
+    let sy = if y_centered { 2.0 } else { 1.0 };
+
     match kind {
         FreeSlotDragKind::Move => {
             let max_x = (pw - init.width_mm).max(0.0);
             let max_y = (ph - init.height_mm).max(0.0);
-            next.x_mm = match centering {
-                CenteringMode::None | CenteringMode::Vertical => (init.x_mm + dx).clamp(0.0, max_x),
-                CenteringMode::Center | CenteringMode::Horizontal => (pw - init.width_mm) * 0.5,
+            next.x_mm = if x_centered {
+                (pw - init.width_mm) * 0.5
+            } else {
+                (init.x_mm + dx).clamp(0.0, max_x)
             };
-            next.y_mm = match centering {
-                CenteringMode::None | CenteringMode::Horizontal => {
-                    (init.y_mm + dy).clamp(0.0, max_y)
-                }
-                CenteringMode::Center | CenteringMode::Vertical => (ph - init.height_mm) * 0.5,
+            next.y_mm = if y_centered {
+                (ph - init.height_mm) * 0.5
+            } else {
+                (init.y_mm + dy).clamp(0.0, max_y)
             };
             return next;
         }
         _ if !keep_aspect => match kind {
             FreeSlotDragKind::ResizeE => {
-                next.width_mm = (init.width_mm + dx).clamp(12.0, (pw - init.x_mm).max(12.0));
+                let lim_w = if x_centered { pw } else { pw - init.x_mm }.max(12.0);
+                next.width_mm = (init.width_mm + dx * sx).clamp(12.0, lim_w);
             }
             FreeSlotDragKind::ResizeS => {
-                next.height_mm = (init.height_mm + dy).clamp(12.0, (ph - init.y_mm).max(12.0));
+                let lim_h = if y_centered { ph } else { ph - init.y_mm }.max(12.0);
+                next.height_mm = (init.height_mm + dy * sy).clamp(12.0, lim_h);
             }
             FreeSlotDragKind::ResizeW => {
-                let new_x = (init.x_mm + dx).clamp(0.0, (init.right_mm() - 12.0).max(0.0));
-                next.width_mm = init.right_mm() - new_x;
-                next.x_mm = new_x;
+                if x_centered {
+                    next.width_mm = (init.width_mm - dx * sx).clamp(12.0, pw.max(12.0));
+                } else {
+                    let new_x = (init.x_mm + dx).clamp(0.0, (init.right_mm() - 12.0).max(0.0));
+                    next.width_mm = init.right_mm() - new_x;
+                    next.x_mm = new_x;
+                }
             }
             FreeSlotDragKind::ResizeN => {
-                let new_y = (init.y_mm + dy).clamp(0.0, (init.bottom_mm() - 12.0).max(0.0));
-                next.height_mm = init.bottom_mm() - new_y;
-                next.y_mm = new_y;
+                if y_centered {
+                    next.height_mm = (init.height_mm - dy * sy).clamp(12.0, ph.max(12.0));
+                } else {
+                    let new_y = (init.y_mm + dy).clamp(0.0, (init.bottom_mm() - 12.0).max(0.0));
+                    next.height_mm = init.bottom_mm() - new_y;
+                    next.y_mm = new_y;
+                }
             }
             FreeSlotDragKind::ResizeSE => {
-                next.width_mm = (init.width_mm + dx).clamp(12.0, (pw - init.x_mm).max(12.0));
-                next.height_mm = (init.height_mm + dy).clamp(12.0, (ph - init.y_mm).max(12.0));
+                let lim_w = if x_centered { pw } else { pw - init.x_mm }.max(12.0);
+                let lim_h = if y_centered { ph } else { ph - init.y_mm }.max(12.0);
+                next.width_mm = (init.width_mm + dx * sx).clamp(12.0, lim_w);
+                next.height_mm = (init.height_mm + dy * sy).clamp(12.0, lim_h);
             }
             FreeSlotDragKind::ResizeNW => {
-                let new_x = (init.x_mm + dx).clamp(0.0, (init.right_mm() - 12.0).max(0.0));
-                let new_y = (init.y_mm + dy).clamp(0.0, (init.bottom_mm() - 12.0).max(0.0));
-                next.width_mm = init.right_mm() - new_x;
-                next.height_mm = init.bottom_mm() - new_y;
-                next.x_mm = new_x;
-                next.y_mm = new_y;
+                if x_centered {
+                    next.width_mm = (init.width_mm - dx * sx).clamp(12.0, pw.max(12.0));
+                } else {
+                    let new_x = (init.x_mm + dx).clamp(0.0, (init.right_mm() - 12.0).max(0.0));
+                    next.width_mm = init.right_mm() - new_x;
+                    next.x_mm = new_x;
+                }
+                if y_centered {
+                    next.height_mm = (init.height_mm - dy * sy).clamp(12.0, ph.max(12.0));
+                } else {
+                    let new_y = (init.y_mm + dy).clamp(0.0, (init.bottom_mm() - 12.0).max(0.0));
+                    next.height_mm = init.bottom_mm() - new_y;
+                    next.y_mm = new_y;
+                }
             }
             FreeSlotDragKind::ResizeNE => {
-                let new_y = (init.y_mm + dy).clamp(0.0, (init.bottom_mm() - 12.0).max(0.0));
-                next.width_mm = (init.width_mm + dx).clamp(12.0, (pw - init.x_mm).max(12.0));
-                next.height_mm = init.bottom_mm() - new_y;
-                next.y_mm = new_y;
+                let lim_w = if x_centered { pw } else { pw - init.x_mm }.max(12.0);
+                next.width_mm = (init.width_mm + dx * sx).clamp(12.0, lim_w);
+                if y_centered {
+                    next.height_mm = (init.height_mm - dy * sy).clamp(12.0, ph.max(12.0));
+                } else {
+                    let new_y = (init.y_mm + dy).clamp(0.0, (init.bottom_mm() - 12.0).max(0.0));
+                    next.height_mm = init.bottom_mm() - new_y;
+                    next.y_mm = new_y;
+                }
             }
             FreeSlotDragKind::ResizeSW => {
-                let new_x = (init.x_mm + dx).clamp(0.0, (init.right_mm() - 12.0).max(0.0));
-                next.height_mm = (init.height_mm + dy).clamp(12.0, (ph - init.y_mm).max(12.0));
-                next.width_mm = init.right_mm() - new_x;
-                next.x_mm = new_x;
+                if x_centered {
+                    next.width_mm = (init.width_mm - dx * sx).clamp(12.0, pw.max(12.0));
+                } else {
+                    let new_x = (init.x_mm + dx).clamp(0.0, (init.right_mm() - 12.0).max(0.0));
+                    next.width_mm = init.right_mm() - new_x;
+                    next.x_mm = new_x;
+                }
+                let lim_h = if y_centered { ph } else { ph - init.y_mm }.max(12.0);
+                next.height_mm = (init.height_mm + dy * sy).clamp(12.0, lim_h);
             }
             FreeSlotDragKind::Move => {}
         },
         _ => {
             let aspect = (init.width_mm / init.height_mm.max(1.0)).max(0.05);
+            let lim_x_right = if x_centered { pw } else { pw - init.x_mm };
+            let lim_x_left = if x_centered { pw } else { init.right_mm() };
+            let lim_y_bot = if y_centered { ph } else { ph - init.y_mm };
+            let lim_y_top = if y_centered { ph } else { init.bottom_mm() };
+
             match kind {
                 FreeSlotDragKind::ResizeSE => {
-                    let max_w = (pw - init.x_mm).min((ph - init.y_mm) * aspect).max(12.0);
-                    let raw_w = if dx.abs() >= (dy * aspect).abs() {
-                        init.width_mm + dx
+                    let max_w = lim_x_right.min(lim_y_bot * aspect).max(12.0);
+                    let raw_w = if (dx * sx).abs() >= (dy * sy * aspect).abs() {
+                        init.width_mm + dx * sx
                     } else {
-                        (init.height_mm + dy) * aspect
+                        (init.height_mm + dy * sy) * aspect
                     };
                     let w = raw_w.clamp(12.0, max_w);
                     let h = w / aspect;
@@ -7407,11 +7465,11 @@ fn compute_std_free_drag_rect(
                 FreeSlotDragKind::ResizeNW => {
                     let x1 = init.right_mm();
                     let y1 = init.bottom_mm();
-                    let max_w = x1.min(y1 * aspect).max(12.0);
-                    let raw_w = if dx.abs() >= (dy * aspect).abs() {
-                        init.width_mm - dx
+                    let max_w = lim_x_left.min(lim_y_top * aspect).max(12.0);
+                    let raw_w = if (dx * sx).abs() >= (dy * sy * aspect).abs() {
+                        init.width_mm - dx * sx
                     } else {
-                        (init.height_mm - dy) * aspect
+                        (init.height_mm - dy * sy) * aspect
                     };
                     let w = raw_w.clamp(12.0, max_w);
                     let h = w / aspect;
@@ -7420,11 +7478,11 @@ fn compute_std_free_drag_rect(
                 FreeSlotDragKind::ResizeNE => {
                     let x0 = init.x_mm;
                     let y1 = init.bottom_mm();
-                    let max_w = (pw - x0).min(y1 * aspect).max(12.0);
-                    let raw_w = if dx.abs() >= (dy * aspect).abs() {
-                        init.width_mm + dx
+                    let max_w = lim_x_right.min(lim_y_top * aspect).max(12.0);
+                    let raw_w = if (dx * sx).abs() >= (dy * sy * aspect).abs() {
+                        init.width_mm + dx * sx
                     } else {
-                        (init.height_mm - dy) * aspect
+                        (init.height_mm - dy * sy) * aspect
                     };
                     let w = raw_w.clamp(12.0, max_w);
                     let h = w / aspect;
@@ -7433,11 +7491,11 @@ fn compute_std_free_drag_rect(
                 FreeSlotDragKind::ResizeSW => {
                     let x1 = init.right_mm();
                     let y0 = init.y_mm;
-                    let max_w = x1.min((ph - y0) * aspect).max(12.0);
-                    let raw_w = if dx.abs() >= (dy * aspect).abs() {
-                        init.width_mm - dx
+                    let max_w = lim_x_left.min(lim_y_bot * aspect).max(12.0);
+                    let raw_w = if (dx * sx).abs() >= (dy * sy * aspect).abs() {
+                        init.width_mm - dx * sx
                     } else {
-                        (init.height_mm + dy) * aspect
+                        (init.height_mm + dy * sy) * aspect
                     };
                     let w = raw_w.clamp(12.0, max_w);
                     let h = w / aspect;
@@ -7446,8 +7504,8 @@ fn compute_std_free_drag_rect(
                 FreeSlotDragKind::ResizeE => {
                     let x0 = init.x_mm;
                     let cy = init.y_mm + init.height_mm * 0.5;
-                    let max_w = (pw - x0).min(ph * aspect).max(12.0);
-                    let w = (init.width_mm + dx).clamp(12.0, max_w);
+                    let max_w = lim_x_right.min(ph * aspect).max(12.0);
+                    let w = (init.width_mm + dx * sx).clamp(12.0, max_w);
                     let h = w / aspect;
                     let y = (cy - h * 0.5).clamp(0.0, (ph - h).max(0.0));
                     next = RectMm::new(x0, y, w, h);
@@ -7455,8 +7513,8 @@ fn compute_std_free_drag_rect(
                 FreeSlotDragKind::ResizeW => {
                     let x1 = init.right_mm();
                     let cy = init.y_mm + init.height_mm * 0.5;
-                    let max_w = x1.min(ph * aspect).max(12.0);
-                    let w = (init.width_mm - dx).clamp(12.0, max_w);
+                    let max_w = lim_x_left.min(ph * aspect).max(12.0);
+                    let w = (init.width_mm - dx * sx).clamp(12.0, max_w);
                     let h = w / aspect;
                     let y = (cy - h * 0.5).clamp(0.0, (ph - h).max(0.0));
                     next = RectMm::new(x1 - w, y, w, h);
@@ -7464,8 +7522,8 @@ fn compute_std_free_drag_rect(
                 FreeSlotDragKind::ResizeS => {
                     let cx = init.x_mm + init.width_mm * 0.5;
                     let y0 = init.y_mm;
-                    let max_h = (ph - y0).min(pw / aspect).max(12.0);
-                    let h = (init.height_mm + dy).clamp(12.0, max_h);
+                    let max_h = lim_y_bot.min(pw / aspect).max(12.0);
+                    let h = (init.height_mm + dy * sy).clamp(12.0, max_h);
                     let w = h * aspect;
                     let x = (cx - w * 0.5).clamp(0.0, (pw - w).max(0.0));
                     next = RectMm::new(x, y0, w, h);
@@ -7473,8 +7531,8 @@ fn compute_std_free_drag_rect(
                 FreeSlotDragKind::ResizeN => {
                     let cx = init.x_mm + init.width_mm * 0.5;
                     let y1 = init.bottom_mm();
-                    let max_h = y1.min(pw / aspect).max(12.0);
-                    let h = (init.height_mm - dy).clamp(12.0, max_h);
+                    let max_h = lim_y_top.min(pw / aspect).max(12.0);
+                    let h = (init.height_mm - dy * sy).clamp(12.0, max_h);
                     let w = h * aspect;
                     let x = (cx - w * 0.5).clamp(0.0, (pw - w).max(0.0));
                     next = RectMm::new(x, y1 - h, w, h);
@@ -7484,14 +7542,11 @@ fn compute_std_free_drag_rect(
         }
     }
 
-    match centering {
-        CenteringMode::Horizontal => {
-            next.x_mm = (pw - next.width_mm) * 0.5;
-        }
-        CenteringMode::Vertical => {
-            next.y_mm = (ph - next.height_mm) * 0.5;
-        }
-        CenteringMode::None | CenteringMode::Center => {}
+    if x_centered {
+        next.x_mm = ((pw - next.width_mm) * 0.5).max(0.0);
+    }
+    if y_centered {
+        next.y_mm = ((ph - next.height_mm) * 0.5).max(0.0);
     }
     next
 }
