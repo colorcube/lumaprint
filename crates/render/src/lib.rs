@@ -206,6 +206,67 @@ pub fn render_page_at_16bit(
     Ok((page_buf, solved))
 }
 
+/// Renders a sheet (`page_index`) specifically formatted for the CUPS `imagetoraster` -> `rastertop900escpr`
+/// pipeline:
+/// 1. If `test_strip.enabled` is active, keeps the full sheet geometry and masks pixels outside the
+///    test-strip rectangle to pure white (`Rgb16::WHITE`) so CUPS prints the strip at exact 1:1 scale
+///    and exact millimeter coordinates on the sheet (while `rastertop900escpr` drops trailing white bands).
+/// 2. If `!doc.printer.borderless`, trims the `8.40 pt` (`84 px` at `720 dpi` = `2.9633 mm`) CUPS PPD
+///    `ImageableArea` hardware margin from all 4 sides so `cfFilterImageToRaster` receives the exact
+///    `ImageableArea` pixel dimensions and formats 1 single page without multi-page tiling or double-margin scaling.
+pub fn render_cups_spool_page_at_16bit(
+    doc: &PrintJobDocument,
+    page_index: usize,
+    image_buffers: &HashMap<u64, (ImageBuffer16, WorkingColorSpace)>,
+    icc_profile: Option<&IccProfile>,
+    target_dpi: u32,
+) -> Result<(ImageBuffer16, SolvedPageLayout), RenderError> {
+    let mut full_doc = doc.clone();
+    full_doc.test_strip.enabled = false;
+    let (mut page_buf, solved) = render_page_at_16bit(
+        &full_doc,
+        page_index,
+        image_buffers,
+        icc_profile,
+        target_dpi,
+        false,
+    )?;
+
+    let full_w = page_buf.width;
+    let full_h = page_buf.height;
+
+    if doc.test_strip.enabled {
+        let [nx, ny, nw, nh] = doc.test_strip.norm_rect;
+        let x0 = ((nx.clamp(0.0, 0.95) * f64::from(full_w)).round() as u32).min(full_w - 1);
+        let y0 = ((ny.clamp(0.0, 0.95) * f64::from(full_h)).round() as u32).min(full_h - 1);
+        let w = ((nw.clamp(0.05, 1.0) * f64::from(full_w)).round() as u32)
+            .clamp(1, full_w - x0);
+        let h = ((nh.clamp(0.05, 1.0) * f64::from(full_h)).round() as u32)
+            .clamp(1, full_h - y0);
+        let x1 = x0.saturating_add(w);
+        let y1 = y0.saturating_add(h);
+        for y in 0..full_h {
+            for x in 0..full_w {
+                if x < x0 || x >= x1 || y < y0 || y >= y1 {
+                    page_buf.set_pixel(x, y, Rgb16::WHITE);
+                }
+            }
+        }
+    }
+
+    if !doc.printer.borderless {
+        // CUPS PPD ImageableArea margin is 8.40 pt = 84 dots at 720 dpi on all 4 sides.
+        let m_px = ((84u64 * u64::from(target_dpi) + 360) / 720) as u32;
+        if full_w > 2 * m_px + 16 && full_h > 2 * m_px + 16 {
+            let crop_w = full_w - 2 * m_px;
+            let crop_h = full_h - 2 * m_px;
+            page_buf = extract_subrect(&page_buf, m_px, m_px, crop_w, crop_h)?;
+        }
+    }
+
+    Ok((page_buf, solved))
+}
+
 fn apply_color_pipeline(
     doc: &PrintJobDocument,
     buf: &mut ImageBuffer16,
@@ -855,12 +916,19 @@ mod tests {
         assert!(full_buf.width > 400 && full_buf.height > 550);
         assert_eq!(solved.slots.len(), 1);
 
-        // Enable Test-Strip mode -> output buffer must be the smaller sub-rectangle
+        // Enable Test-Strip mode -> export buffer is the smaller sub-rectangle,
+        // while CUPS spool buffer keeps exact ImageableArea dimensions with white masking outside the strip.
         doc.test_strip.enabled = true;
         doc.test_strip.norm_rect = [0.25, 0.25, 0.5, 0.2];
         let (strip_buf, _) = render_page_16bit(&doc, &map, None, 50, false).unwrap();
         assert!(strip_buf.width < full_buf.width);
         assert!(strip_buf.height < full_buf.height);
+
+        let (spool_buf, _) = render_cups_spool_page_at_16bit(&doc, 0, &map, None, 50).unwrap();
+        let m_px = ((84u64 * 50 + 360) / 720) as u32;
+        assert_eq!(spool_buf.width, full_buf.width - 2 * m_px);
+        assert_eq!(spool_buf.height, full_buf.height - 2 * m_px);
+        assert_eq!(spool_buf.get_pixel(0, 0), Some(Rgb16::WHITE));
     }
 
     #[test]

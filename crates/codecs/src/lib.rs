@@ -178,16 +178,64 @@ pub fn encode_png16_bytes(buf: &ImageBuffer16) -> Result<Vec<u8>, CodecError> {
 
 /// Saves an 8-bit RGB snapshot PNG (used for UI snapshot verification and quick previews).
 pub fn save_png8(width: u32, height: u32, rgb8: &[u8], path: impl AsRef<Path>) -> Result<(), CodecError> {
+    save_png8_with_dpi(width, height, rgb8, 300, path)
+}
+
+/// Saves an 8-bit RGB PNG with an embedded `pHYs` resolution chunk (`dpi` pixels per inch),
+/// ensuring CUPS `imagetoraster` (`cfFilterImageToRaster`) opens the print file cleanly and
+/// honors its exact physical dimensions without 16-bit TIFF rejection or fallback scaling.
+pub fn save_png8_with_dpi(
+    width: u32,
+    height: u32,
+    rgb8: &[u8],
+    dpi: u32,
+    path: impl AsRef<Path>,
+) -> Result<(), CodecError> {
     let p = path.as_ref();
     let mut out = Cursor::new(Vec::new());
     let encoder = image::codecs::png::PngEncoder::new(&mut out);
     encoder
         .write_image(rgb8, width, height, image::ExtendedColorType::Rgb8)
         .map_err(|e| CodecError::Encode(e.to_string()))?;
-    std::fs::write(p, out.into_inner()).map_err(|e| CodecError::Io {
+    let mut png_bytes = out.into_inner();
+    inject_png_phys_chunk(&mut png_bytes, dpi.max(72));
+    std::fs::write(p, png_bytes).map_err(|e| CodecError::Io {
         path: p.display().to_string(),
         reason: e.to_string(),
     })
+}
+
+/// Splices a standard 21-byte PNG `pHYs` chunk immediately after the `IHDR` chunk (offset 33).
+fn inject_png_phys_chunk(png_bytes: &mut Vec<u8>, dpi: u32) {
+    // 8-byte PNG signature + 25-byte IHDR chunk = 33 bytes
+    if png_bytes.len() < 33 || &png_bytes[12..16] != b"IHDR" {
+        return;
+    }
+    let ppm = ((f64::from(dpi) / 0.0254).round() as u32).max(1);
+    let mut chunk = Vec::with_capacity(21);
+    chunk.extend_from_slice(&9u32.to_be_bytes());
+    chunk.extend_from_slice(b"pHYs");
+    chunk.extend_from_slice(&ppm.to_be_bytes());
+    chunk.extend_from_slice(&ppm.to_be_bytes());
+    chunk.push(1u8); // Unit = meter
+    let crc = png_crc32(&chunk[4..17]);
+    chunk.extend_from_slice(&crc.to_be_bytes());
+    png_bytes.splice(33..33, chunk);
+}
+
+fn png_crc32(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &b in data {
+        crc ^= u32::from(b);
+        for _ in 0..8 {
+            if (crc & 1) != 0 {
+                crc = (crc >> 1) ^ 0xEDB8_8320;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+    !crc
 }
 
 /// Saves a 16-bit uncompressed TIFF file (ideal for calibration targets and 16-bit print export).

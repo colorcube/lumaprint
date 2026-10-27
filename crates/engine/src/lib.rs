@@ -12,7 +12,8 @@
 
 use lumaprint_cms::{IccProfile, RenderingIntent, SoftproofConfig, WorkingColorSpace};
 use lumaprint_codecs::{
-    CodecError, generate_test_chart_16bit, load_image_file, save_png16, save_tiff16,
+    CodecError, generate_test_chart_16bit, load_image_file, save_png8_with_dpi, save_png16,
+    save_tiff16,
 };
 use lumaprint_color::{AbwSettings, AbwTonePreset, ImageBuffer16, Rgb8, Rgb16};
 use lumaprint_cups::{
@@ -32,7 +33,9 @@ use lumaprint_layout::{
     SolvedPageLayout, build_grid_template, count_fitting_sammel_items, orient_size_for_image,
     slots_capacity_for_layout, solve_page_layout, solve_page_layout_at,
 };
-use lumaprint_render::{RenderError, render_page_16bit, render_page_at_16bit};
+use lumaprint_render::{
+    RenderError, render_cups_spool_page_at_16bit, render_page_16bit, render_page_at_16bit,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -2348,10 +2351,18 @@ impl Session {
 
         let mut last_msg = String::new();
         for &pi in &page_indices {
-            let (buf, _) = self.render_page_at(pi, dpi, false)?;
+            let icc = self.active_icc_profile();
+            let (buf, _) = render_cups_spool_page_at_16bit(
+                &self.doc,
+                pi,
+                &self.image_buffers,
+                icc,
+                dpi,
+            )?;
+            let dithered_rgb8 = buf.to_rgb8_dithered_vec();
             let tmp = tempfile::Builder::new()
                 .prefix(&format!("lumaprint_p{}_", pi + 1))
-                .suffix(".tif")
+                .suffix(".png")
                 .tempfile()
                 .map_err(|e| {
                     EngineError::Codec(CodecError::Io {
@@ -2359,9 +2370,11 @@ impl Session {
                         reason: e.to_string(),
                     })
                 })?;
-            save_tiff16(&buf, tmp.path())?;
+            save_png8_with_dpi(buf.width, buf.height, &dithered_rgb8, dpi, tmp.path())?;
 
             let mut req = self.build_cups_spool_request();
+            req.extra_options
+                .insert(String::from("ppi"), dpi.max(72).to_string());
             if page_indices.len() > 1 {
                 req.job_title = format!("LumaPrint FineArt Sheet (Bogen {})", pi + 1);
             }
