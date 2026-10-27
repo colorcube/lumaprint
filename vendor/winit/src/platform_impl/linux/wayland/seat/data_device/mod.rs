@@ -118,6 +118,11 @@ impl Dispatch<WlDataDevice, DataDeviceData, WinitState> for DataDeviceState {
                         None
                     },
                 }) else {
+                    if wl_data_offer.version() >= 3 {
+                        wl_data_offer.set_actions(DndAction::None, DndAction::None);
+                    }
+                    wl_data_offer.accept(serial, None);
+                    let _ = conn.flush();
                     return;
                 };
 
@@ -140,10 +145,11 @@ impl Dispatch<WlDataDevice, DataDeviceData, WinitState> for DataDeviceState {
                     window_id,
                 );
 
+                // Start unaccepted (forbidden cursor) until the URI list pipe is read and verified
                 if wl_data_offer.version() >= 3 {
-                    wl_data_offer.set_actions(DndAction::Copy | DndAction::Move, DndAction::Copy);
+                    wl_data_offer.set_actions(DndAction::None, DndAction::None);
                 }
-                wl_data_offer.accept(serial, Some(mime_type.clone()));
+                wl_data_offer.accept(serial, None);
 
                 let (read_fd, write_fd) = match pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK)
                 {
@@ -170,9 +176,11 @@ impl Dispatch<WlDataDevice, DataDeviceData, WinitState> for DataDeviceState {
                 data_device_state.offer = Some(wl_data_offer);
                 data_device_state.read_buffer.clear();
                 data_device_state.read_completed = false;
+                data_device_state.offer_accepted = false;
                 data_device_state.drop_pending = false;
 
                 let wl_data_device = wl_data_device.clone();
+                let conn_clone = conn.clone();
                 data_device_state.read_token = data_device_state
                     .loop_handle
                     .insert_source(read_pipe, move |_, f, state| {
@@ -198,23 +206,50 @@ impl Dispatch<WlDataDevice, DataDeviceData, WinitState> for DataDeviceState {
                                     data_device_state.read_completed = true;
                                     if let Some(hovered) = data_device_state.hovered_window {
                                         let drop_pending = data_device_state.drop_pending;
-                                        data_device_state.with_file_paths(|paths| {
-                                            for path in paths {
-                                                if drop_pending {
-                                                    state.events_sink.push_window_event(
-                                                        WindowEvent::DroppedFile(path),
-                                                        hovered,
-                                                    );
-                                                } else {
-                                                    state.events_sink.push_window_event(
-                                                        WindowEvent::HoveredFile(path),
-                                                        hovered,
+                                        let accepted_paths = data_device_state.accepted_file_paths();
+                                        let is_accepted = !accepted_paths.is_empty();
+                                        data_device_state.offer_accepted = is_accepted;
+
+                                        if let (Some(offer), Some(serial), Some(mime)) = (
+                                            &data_device_state.offer,
+                                            data_device_state.serial,
+                                            &data_device_state.mime_type,
+                                        ) {
+                                            if is_accepted {
+                                                if offer.version() >= 3 {
+                                                    offer.set_actions(
+                                                        DndAction::Copy | DndAction::Move,
+                                                        DndAction::Copy,
                                                     );
                                                 }
+                                                offer.accept(serial, Some(mime.clone()));
+                                            } else {
+                                                if offer.version() >= 3 {
+                                                    offer.set_actions(
+                                                        DndAction::None,
+                                                        DndAction::None,
+                                                    );
+                                                }
+                                                offer.accept(serial, None);
                                             }
-                                        });
+                                            let _ = conn_clone.flush();
+                                        }
+
+                                        for path in accepted_paths {
+                                            if drop_pending {
+                                                state.events_sink.push_window_event(
+                                                    WindowEvent::DroppedFile(path),
+                                                    hovered,
+                                                );
+                                            } else {
+                                                state.events_sink.push_window_event(
+                                                    WindowEvent::HoveredFile(path),
+                                                    hovered,
+                                                );
+                                            }
+                                        }
                                         if drop_pending {
-                                            data_device_state.finish_offer();
+                                            data_device_state.finish_offer(true);
                                         }
                                     }
                                     return PostAction::Remove;
@@ -243,13 +278,28 @@ impl Dispatch<WlDataDevice, DataDeviceData, WinitState> for DataDeviceState {
                     .ok();
             },
             WlDataDeviceEvent::Motion { time: _, x, y } => {
-                if let (Some(offer), Some(serial), Some(mime)) = (
-                    &data_device_state.offer,
-                    data_device_state.serial,
-                    &data_device_state.mime_type,
-                ) {
-                    offer.accept(serial, Some(mime.clone()));
-                    let _ = conn.flush();
+                if data_device_state.read_completed {
+                    if let (Some(offer), Some(serial), Some(mime)) = (
+                        &data_device_state.offer,
+                        data_device_state.serial,
+                        &data_device_state.mime_type,
+                    ) {
+                        if data_device_state.offer_accepted {
+                            if offer.version() >= 3 {
+                                offer.set_actions(
+                                    DndAction::Copy | DndAction::Move,
+                                    DndAction::Copy,
+                                );
+                            }
+                            offer.accept(serial, Some(mime.clone()));
+                        } else {
+                            if offer.version() >= 3 {
+                                offer.set_actions(DndAction::None, DndAction::None);
+                            }
+                            offer.accept(serial, None);
+                        }
+                        let _ = conn.flush();
+                    }
                 }
 
                 if let Some(window_id) = data_device_state.hovered_window {
@@ -270,15 +320,13 @@ impl Dispatch<WlDataDevice, DataDeviceData, WinitState> for DataDeviceState {
             WlDataDeviceEvent::Drop => {
                 if data_device_state.read_completed {
                     if let Some(hovered_window) = data_device_state.hovered_window {
-                        data_device_state.with_file_paths(|paths| {
-                            for path in paths {
-                                state.events_sink.push_window_event(
-                                    WindowEvent::DroppedFile(path),
-                                    hovered_window,
-                                );
-                            }
-                        });
-                        data_device_state.finish_offer();
+                        for path in data_device_state.accepted_file_paths() {
+                            state.events_sink.push_window_event(
+                                WindowEvent::DroppedFile(path),
+                                hovered_window,
+                            );
+                        }
+                        data_device_state.finish_offer(true);
                     }
                 } else {
                     data_device_state.drop_pending = true;
@@ -287,10 +335,13 @@ impl Dispatch<WlDataDevice, DataDeviceData, WinitState> for DataDeviceState {
             WlDataDeviceEvent::Leave => {
                 if !data_device_state.drop_pending {
                     if let Some(hovered_window) = data_device_state.hovered_window {
-                        state
-                            .events_sink
-                            .push_window_event(WindowEvent::HoveredFileCancelled, hovered_window);
-                        data_device_state.finish_offer();
+                        if data_device_state.offer_accepted {
+                            state.events_sink.push_window_event(
+                                WindowEvent::HoveredFileCancelled,
+                                hovered_window,
+                            );
+                        }
+                        data_device_state.finish_offer(false);
                     }
                 }
             },
@@ -353,6 +404,7 @@ pub struct DataDeviceState {
     pub read_token: Option<RegistrationToken>,
     pub read_buffer: Vec<u8>,
     pub read_completed: bool,
+    pub offer_accepted: bool,
     pub drop_pending: bool,
 }
 
@@ -367,11 +419,12 @@ impl DataDeviceState {
             read_token: None,
             read_buffer: Vec::new(),
             read_completed: false,
+            offer_accepted: false,
             drop_pending: false,
         }
     }
 
-    fn with_file_paths(&mut self, mut callback: impl FnMut(Vec<PathBuf>)) {
+    fn accepted_file_paths(&self) -> Vec<PathBuf> {
         let mut paths = Vec::new();
         if let Ok(uri_list) = String::from_utf8(self.read_buffer.clone()) {
             for line in uri_list.lines() {
@@ -384,7 +437,10 @@ impl DataDeviceState {
                     .strip_prefix("file://localhost")
                     .or_else(|| line.strip_prefix("file://"))
                 {
-                    paths.push(PathBuf::from(percent_decode_str(raw_path)));
+                    let p = PathBuf::from(percent_decode_str(raw_path));
+                    if is_accepted_drop_path(&p) {
+                        paths.push(p);
+                    }
                 } else {
                     warn!("Non-comment line in URI list missing prefix: '{line}'");
                 }
@@ -392,17 +448,19 @@ impl DataDeviceState {
         } else {
             warn!("Failed to parse URI list from hovered file");
         }
-        callback(paths);
+        paths
     }
 
-    fn finish_offer(&mut self) {
+    fn finish_offer(&mut self, is_drop: bool) {
+        let was_accepted = self.offer_accepted;
         self.hovered_window = None;
         self.serial = None;
         self.mime_type = None;
         self.read_completed = false;
+        self.offer_accepted = false;
         self.drop_pending = false;
         if let Some(offer) = self.offer.take() {
-            if offer.version() >= 3 {
+            if is_drop && was_accepted && offer.version() >= 3 {
                 offer.finish();
             }
             offer.destroy();
@@ -411,6 +469,21 @@ impl DataDeviceState {
             self.loop_handle.remove(token);
         }
     }
+}
+
+fn is_accepted_drop_path(path: &std::path::Path) -> bool {
+    if path.is_dir() {
+        return true;
+    }
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "tif" | "tiff" | "png" | "jpg" | "jpeg"
+            )
+        })
+        .unwrap_or(false)
 }
 
 fn percent_decode_str(input: &str) -> String {

@@ -1471,16 +1471,15 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         if !dropped.is_empty() {
             let mut paths = Vec::new();
             for df in dropped {
-                if let Some(p) = df.path {
-                    if let Some(clean) = parse_dropped_or_pasted_path(&p.to_string_lossy()) {
-                        paths.push(clean);
-                    } else {
-                        paths.push(p);
-                    }
+                let candidate = if let Some(p) = df.path {
+                    parse_dropped_or_pasted_path(&p.to_string_lossy()).or(Some(p))
                 } else if !df.name.is_empty() {
-                    if let Some(clean) = parse_dropped_or_pasted_path(&df.name) {
-                        paths.push(clean);
-                    }
+                    parse_dropped_or_pasted_path(&df.name)
+                } else {
+                    None
+                };
+                if let Some(p) = candidate.filter(|p| is_supported_drop_path(p)) {
+                    paths.push(p);
                 }
             }
             if !paths.is_empty() {
@@ -1529,7 +1528,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         collected_files.extend(folder_imgs);
                     }
                 }
-            } else {
+            } else if is_supported_drop_path(&path) {
                 collected_files.push(path.to_string_lossy().into_owned());
             }
         }
@@ -1862,7 +1861,13 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
     }
 
     fn draw_drag_tooltip(&self, ctx: &Context) {
-        let os_hovered_count = ctx.input(|i| i.raw.hovered_files.len());
+        let os_hovered_count = ctx.input(|i| {
+            i.raw
+                .hovered_files
+                .iter()
+                .filter(|hf| hf.path.as_deref().is_some_and(is_supported_drop_path))
+                .count()
+        });
         if os_hovered_count > 0 {
             egui::Area::new(egui::Id::new("lumaprint_os_dnd_banner"))
                 .order(egui::Order::Tooltip)
@@ -9448,6 +9453,20 @@ fn default_dialog_start_dir() -> String {
         return home;
     }
     String::from(".")
+}
+
+fn is_supported_drop_path(path: &Path) -> bool {
+    if path.is_dir() {
+        return true;
+    }
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "tif" | "tiff" | "png" | "jpg" | "jpeg"
+            )
+        })
 }
 
 fn parse_dropped_or_pasted_path(raw: &str) -> Option<std::path::PathBuf> {
