@@ -65,7 +65,7 @@ zune-jpeg = "0.5"
 rayon = "1"
 log = "0.4"
 egui = { version = "0.31.1", default-features = false, features = ["default_fonts"] }
-eframe = { version = "0.31.1", default-features = false, features = ["glow", "default_fonts", "x11"] }
+eframe = { version = "0.31.1", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
 tempfile = "3"
 
 [workspace.lints.rust]
@@ -85,3 +85,7 @@ debug = "line-tables-only"
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+[patch.crates-io]
+winit = { path = "vendor/winit" }
+
