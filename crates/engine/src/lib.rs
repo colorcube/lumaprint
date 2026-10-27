@@ -21,9 +21,9 @@ use lumaprint_cups::{
 };
 use lumaprint_doc::{
     CanvasViewMode, CenteringMode, ColorManagementMode, CropSpec, CustomMediaSpec,
-    DetailedPrinterSettings, DocError, FrameLineSpec, GalleryWrapSpec, LayoutMode,
-    LayoutTemplate, OutputSharpening, PaperSource, PlatenGap, PrintJobDocument, PrintPreset,
-    PrintQuality, PrintScope, PrintSheetPage, SizingCriterion, SourceImageEntry,
+    DetailedPrinterSettings, DisplayColorSpaceMode, DocError, FrameLineSpec, GalleryWrapSpec,
+    LayoutMode, LayoutTemplate, OutputSharpening, PaperSource, PlatenGap, PrintJobDocument,
+    PrintPreset, PrintQuality, PrintScope, PrintSheetPage, SizingCriterion, SourceImageEntry,
     TemplateLayoutSpec, find_media_type,
 };
 use lumaprint_geom::{MarginsMm, Orientation, RectMm, SizeMm};
@@ -326,6 +326,7 @@ pub enum EngineCommand {
     SetAbwSettings(AbwSettings),
     SetSoftproof(SoftproofConfig),
     SetOutputSharpening(OutputSharpening),
+    SetDisplayColorSpace(DisplayColorSpaceMode),
     SavePreset { name: String },
     LoadPreset { name: String },
     DeletePreset { name: String },
@@ -1630,6 +1631,16 @@ impl Session {
             }
             EngineCommand::SetOutputSharpening(sh) => {
                 self.doc.color.output_sharpening = sh;
+            }
+            EngineCommand::SetDisplayColorSpace(mode) => {
+                self.doc.color.display_color_space = mode;
+                self.doc.color.resolved_display_space = match mode {
+                    DisplayColorSpaceMode::AutoWayland | DisplayColorSpaceMode::Srgb => {
+                        WorkingColorSpace::Srgb
+                    }
+                    DisplayColorSpaceMode::DisplayP3 => WorkingColorSpace::DisplayP3,
+                    DisplayColorSpaceMode::AdobeRgb1998 => WorkingColorSpace::AdobeRgb1998,
+                };
             }
             EngineCommand::SavePreset { name } => {
                 let clean = name.trim().to_string();

@@ -12,17 +12,23 @@
 
 pub mod theme;
 
+#[cfg(target_os = "linux")]
+use winit::platform::wayland::{
+    resolve_surface_color_space, set_wayland_surface_color_space, wayland_color_management_status,
+    WaylandDetectedGamut, WaylandSurfaceColorSpace,
+};
 use egui::{
     Color32, ColorImage, Context, CornerRadius, FontId, Pos2, Rect, RichText, Sense, Stroke,
     StrokeKind, TextureHandle, TextureOptions, Ui, Vec2,
 };
-use lumaprint_cms::{RenderingIntent, ViewingLight};
+use lumaprint_cms::{RenderingIntent, ViewingLight, WorkingColorSpace};
 use lumaprint_color::{AbwHighlightShift, AbwMidtone, AbwTonePreset, ImageBuffer16, Rgb8};
 use lumaprint_doc::{
-    CanvasBackdropTone, CanvasViewMode, CenteringMode, ColorManagementMode, FilmstripPosition,
-    FrameLineSpec, GalleryWrapEffect, GalleryWrapSpec, LayoutMode, LayoutTemplate, MEDIA_TYPES,
-    OutputSharpening, PageListPosition, PaperSource, PrintQuality, PrintScope, SizingCriterion,
-    SlotCaptionMode, StandardLayoutSpec, TemplateLayoutSpec, find_media_type,
+    CanvasBackdropTone, CanvasViewMode, CenteringMode, ColorManagementMode, DisplayColorSpaceMode,
+    FilmstripPosition, FrameLineSpec, GalleryWrapEffect, GalleryWrapSpec, LayoutMode,
+    LayoutTemplate, MEDIA_TYPES, OutputSharpening, PageListPosition, PaperSource, PrintQuality,
+    PrintScope, SizingCriterion, SlotCaptionMode, StandardLayoutSpec, TemplateLayoutSpec,
+    find_media_type,
 };
 use lumaprint_engine::{EngineCommand, Session, scan_folder_for_images};
 use lumaprint_geom::{
@@ -1576,6 +1582,42 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         }
     }
 
+    fn sync_wayland_color_management(&mut self) {
+        #[cfg(target_os = "linux")]
+        {
+            let mode = self.session.doc.color.display_color_space;
+            let wayland_mode = match mode {
+                DisplayColorSpaceMode::AutoWayland => WaylandSurfaceColorSpace::Auto,
+                DisplayColorSpaceMode::DisplayP3 => WaylandSurfaceColorSpace::DisplayP3,
+                DisplayColorSpaceMode::AdobeRgb1998 => WaylandSurfaceColorSpace::AdobeRgb,
+                DisplayColorSpaceMode::Srgb => WaylandSurfaceColorSpace::Srgb,
+            };
+            set_wayland_surface_color_space(wayland_mode);
+            let status = wayland_color_management_status();
+            let resolved = if status.protocol_supported {
+                match resolve_surface_color_space(wayland_mode) {
+                    WaylandSurfaceColorSpace::DisplayP3 => WorkingColorSpace::DisplayP3,
+                    WaylandSurfaceColorSpace::AdobeRgb => WorkingColorSpace::AdobeRgb1998,
+                    WaylandSurfaceColorSpace::Srgb | WaylandSurfaceColorSpace::Auto => {
+                        WorkingColorSpace::Srgb
+                    }
+                }
+            } else {
+                match mode {
+                    DisplayColorSpaceMode::AutoWayland | DisplayColorSpaceMode::Srgb => {
+                        WorkingColorSpace::Srgb
+                    }
+                    DisplayColorSpaceMode::DisplayP3 => WorkingColorSpace::DisplayP3,
+                    DisplayColorSpaceMode::AdobeRgb1998 => WorkingColorSpace::AdobeRgb1998,
+                }
+            };
+            if self.session.doc.color.resolved_display_space != resolved {
+                self.session.doc.color.resolved_display_space = resolved;
+                self.dirty_preview = true;
+            }
+        }
+    }
+
     fn refresh_preview_if_needed(&mut self, ctx: &Context) {
         let solved_geom = self.session.solve_layout();
         let long_mm = solved_geom
@@ -1599,7 +1641,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
         // Render active page at high screen resolution (~1800..2500 px long edge) with live Softproof / ABW / ICC
         if let Ok((buf16, solved)) = self.session.render_page(preview_dpi, true) {
-            let rgb8 = buf16.to_rgb8_vec();
+            let rgb8 = buf16.to_rgb8_dithered_vec();
             let img = ColorImage::from_rgb([buf16.width as usize, buf16.height as usize], &rgb8);
             self.page_texture =
                 Some(ctx.load_texture("page_preview", img, TextureOptions::LINEAR));
@@ -1619,7 +1661,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             let total_pages = self.session.doc.page_count();
             for pi in 0..total_pages {
                 if let Ok((buf16, solved)) = self.session.render_page_at(pi, thumb_dpi, true) {
-                    let rgb8 = buf16.to_rgb8_vec();
+                    let rgb8 = buf16.to_rgb8_dithered_vec();
                     let img =
                         ColorImage::from_rgb([buf16.width as usize, buf16.height as usize], &rgb8);
                     let tex =
@@ -1679,6 +1721,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         self.poll_native_dialog(ctx);
         self.handle_os_dropped_files(ctx);
         self.ensure_thumbnails(ctx);
+        self.sync_wayland_color_management();
         self.refresh_preview_if_needed(ctx);
 
         self.last_slot_screen_rects.clear();
@@ -6297,6 +6340,58 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
                     });
                 ui.end_row();
+
+                let mut disp_mode = self.session.doc.color.display_color_space;
+                ui.label(RichText::new("Monitor-Farbraum:").color(t.text_dim));
+                egui::ComboBox::from_id_salt("display_color_space_combo")
+                    .selected_text(disp_mode.label_de())
+                    .width(245.0)
+                    .show_ui(ui, |ui| {
+                        for dm in DisplayColorSpaceMode::ALL {
+                            if ui
+                                .selectable_value(&mut disp_mode, dm, dm.label_de())
+                                .changed()
+                            {
+                                self.exec(EngineCommand::SetDisplayColorSpace(disp_mode));
+                                self.sync_wayland_color_management();
+                            }
+                        }
+                    });
+                ui.end_row();
+
+                #[cfg(target_os = "linux")]
+                {
+                    let wl_status = wayland_color_management_status();
+                    ui.label(RichText::new("Wayland / KWin:").color(t.text_dim));
+                    let (badge_text, badge_col, tooltip) = if wl_status.protocol_supported {
+                        let mon_str = match wl_status.monitor_detected_gamut {
+                            WaylandDetectedGamut::AdobeRgb => "Adobe RGB Monitor erkannt",
+                            WaylandDetectedGamut::DisplayP3 => "Wide-Gamut (Display P3) erkannt",
+                            WaylandDetectedGamut::Srgb => "Standard sRGB erkannt",
+                            WaylandDetectedGamut::Unknown => "wp_color_manager_v1 aktiv",
+                        };
+                        let icc_str = if wl_status.monitor_has_icc_profile {
+                            " + ICC"
+                        } else {
+                            ""
+                        };
+                        let active_str = self.session.doc.color.resolved_display_space.name();
+                        (
+                            format!("✓ {mon_str}{icc_str} → {active_str}"),
+                            Color32::from_rgb(80, 215, 130),
+                            "KWin wp_color_manager_v1 ist aktiv: Die Fenster-Oberfläche wird von KWin direkt in das kalibrierte Monitor-Farbprofil überführt.",
+                        )
+                    } else {
+                        (
+                            String::from("sRGB (Standard-Oberfläche)"),
+                            t.text_dim,
+                            "Wayland wp_color_manager_v1 wurde vom Compositor nicht gemeldet (Fallback auf sRGB).",
+                        )
+                    };
+                    ui.label(RichText::new(badge_text).small().color(badge_col))
+                        .on_hover_text(tooltip);
+                    ui.end_row();
+                }
             });
 
         if matches!(

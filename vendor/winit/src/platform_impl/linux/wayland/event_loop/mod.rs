@@ -18,6 +18,7 @@ use rustix::pipe::{self, PipeFlags};
 use sctk::reexports::calloop::Error as CalloopError;
 use sctk::reexports::calloop_wayland_source::WaylandSource;
 use sctk::reexports::client::{globals, Connection, QueueHandle};
+use sctk::shell::WaylandSurface;
 use tracing::warn;
 
 use crate::cursor::OnlyCursorImage;
@@ -519,7 +520,16 @@ impl<T: 'static> EventLoop<T> {
         for window_id in window_ids.drain(..) {
             wake_up |= self.with_state(|state| match state.windows.get_mut().get_mut(&window_id) {
                 Some(window) => {
-                    let refresh = window.lock().unwrap().refresh_frame();
+                    let mut win = window.lock().unwrap();
+                    let surface = win.window.wl_surface().clone();
+                    let qh = win.queue_handle.clone();
+                    if let (Some(cm), Some(win_cm)) =
+                        (state.color_management.as_ref(), win.color_management.as_mut())
+                    {
+                        cm.sync_window_color_space(&surface, win_cm, &qh);
+                    }
+                    let refresh = win.refresh_frame();
+                    drop(win);
                     if refresh {
                         state
                             .window_requests

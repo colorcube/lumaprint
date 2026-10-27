@@ -129,3 +129,8 @@ impl MonitorHandleExtWayland for MonitorHandle {
         self.inner.native_identifier()
     }
 }
+
+pub use crate::platform_impl::wayland::types::wp_color_management::{
+    resolve_surface_color_space, set_wayland_surface_color_space, wayland_color_management_status,
+    WaylandColorManagementStatus, WaylandDetectedGamut, WaylandSurfaceColorSpace,
+};

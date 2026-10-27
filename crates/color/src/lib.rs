@@ -179,6 +179,28 @@ impl ImageBuffer16 {
             .map(|&v| ((u32::from(v) + 128) / 257) as u8)
             .collect()
     }
+
+    /// Converts the 16-bit buffer to 8-bit `R, G, B` bytes (`width * height * 3`) using
+    /// 4x4 ordered Bayer dithering on the fractional 16-bit remainder to eliminate gradient banding.
+    pub fn to_rgb8_dithered_vec(&self) -> Vec<u8> {
+        const BAYER_4X4: [[u32; 4]; 4] = [
+            [0, 8, 2, 10],
+            [12, 4, 14, 6],
+            [3, 11, 1, 9],
+            [15, 7, 13, 5],
+        ];
+        let w = self.width.max(1) as usize;
+        let mut out = Vec::with_capacity(self.data.len());
+        for (px_idx, rgb) in self.data.chunks_exact(3).enumerate() {
+            let x = px_idx % w;
+            let y = px_idx / w;
+            let offset = 8 + BAYER_4X4[y & 3][x & 3] * 16;
+            out.push(((u32::from(rgb[0]) + offset) / 257).min(255) as u8);
+            out.push(((u32::from(rgb[1]) + offset) / 257).min(255) as u8);
+            out.push(((u32::from(rgb[2]) + offset) / 257).min(255) as u8);
+        }
+        out
+    }
 }
 
 /// Epson Print Layout ABW Color Toning Preset (`Farbton`, EPL manual p. 30).
@@ -479,5 +501,23 @@ mod tests {
         abw.max_optical_density = -30;
         let lut_od = abw.build_lut16();
         assert!(lut_od[0].r > 0, "Negative max OD lifts black point");
+    }
+
+    #[test]
+    fn bayer_dithering_preserves_intermediate_16bit_values_across_4x4_tile() {
+        // 128.5 in 8-bit corresponds to 128.5 * 257 = 33024.5 in 16-bit
+        let mid_half = Rgb16::new(33025, 33025, 33025);
+        let Ok(buf) = ImageBuffer16::new_solid(4, 4, mid_half) else {
+            return;
+        };
+        let dithered = buf.to_rgb8_dithered_vec();
+        assert_eq!(dithered.len(), 16 * 3);
+        let count_128 = dithered.chunks_exact(3).filter(|px| px[0] == 128).count();
+        let count_129 = dithered.chunks_exact(3).filter(|px| px[0] == 129).count();
+        assert_eq!(count_128 + count_129, 16);
+        assert!(
+            count_128 >= 6 && count_129 >= 6,
+            "4x4 Bayer dithering should split a .5 value evenly between 128 and 129 (got {count_128} vs {count_129})"
+        );
     }
 }

@@ -215,6 +215,7 @@ fn apply_color_pipeline(
 ) {
     let vibrant = matches!(doc.color.mode, ColorManagementMode::Vibrant);
     doc.color.adjustments.apply_to_buffer(buf, vibrant);
+    let dst_display_space = doc.color.resolved_display_space;
 
     match &doc.color.mode {
         ColorManagementMode::AdvancedBwPhoto | ColorManagementMode::Grayscale => {
@@ -223,8 +224,9 @@ fn apply_color_pipeline(
         ColorManagementMode::UseIccProfile => {
             if let Some(prof) = icc_profile {
                 if for_screen_preview {
-                    prof.apply_softproof(
+                    prof.apply_softproof_to_display(
                         src_space,
+                        dst_display_space,
                         buf,
                         doc.color.rendering_intent,
                         doc.color.black_point_compensation,
@@ -238,11 +240,17 @@ fn apply_color_pipeline(
                         doc.color.black_point_compensation,
                     );
                 }
+            } else if for_screen_preview {
+                src_space.convert_buffer_to(buf, dst_display_space);
             }
         }
         ColorManagementMode::PrinterManagesColor { .. }
         | ColorManagementMode::Vibrant
-        | ColorManagementMode::NoColorAdjustment => {}
+        | ColorManagementMode::NoColorAdjustment => {
+            if for_screen_preview {
+                src_space.convert_buffer_to(buf, dst_display_space);
+            }
+        }
     }
 }
 
@@ -853,5 +861,26 @@ mod tests {
         let (strip_buf, _) = render_page_16bit(&doc, &map, None, 50, false).unwrap();
         assert!(strip_buf.width < full_buf.width);
         assert!(strip_buf.height < full_buf.height);
+    }
+
+    #[test]
+    fn screen_preview_outputs_in_resolved_wide_gamut_display_space() {
+        let mut doc = PrintJobDocument::default();
+        // Saturated Display P3 green that exceeds sRGB gamut
+        let Ok(p3_green) = ImageBuffer16::new_solid(4, 4, Rgb16::new(0, 62000, 12000)) else {
+            return;
+        };
+
+        doc.color.resolved_display_space = WorkingColorSpace::Srgb;
+        let mut srgb_out = p3_green.clone();
+        apply_color_pipeline(&doc, &mut srgb_out, WorkingColorSpace::DisplayP3, None, true);
+
+        doc.color.resolved_display_space = WorkingColorSpace::DisplayP3;
+        let mut p3_out = p3_green;
+        apply_color_pipeline(&doc, &mut p3_out, WorkingColorSpace::DisplayP3, None, true);
+
+        // In native Display P3 preview, the pixel stays unclipped; in sRGB it gets clamped
+        assert_eq!(p3_out.get_pixel(0, 0), Some(Rgb16::new(0, 62000, 12000)));
+        assert_ne!(srgb_out.get_pixel(0, 0), p3_out.get_pixel(0, 0));
     }
 }

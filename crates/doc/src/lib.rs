@@ -923,6 +923,38 @@ impl OutputSharpening {
     }
 }
 
+/// Target monitor color space mode for Wayland / KWin 6.x Wide-Gamut output (`wp_color_manager_v1`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum DisplayColorSpaceMode {
+    /// Automatically match the monitor's preferred color gamut via Wayland `wp_color_manager_v1`.
+    #[default]
+    AutoWayland,
+    /// Standard sRGB (IEC 61966-2-1).
+    Srgb,
+    /// Display P3 (Wide Gamut, SMPTE EG 432-1).
+    DisplayP3,
+    /// Adobe RGB (1998) (Wide Gamut Photo Monitor, ISO 12640-4).
+    AdobeRgb1998,
+}
+
+impl DisplayColorSpaceMode {
+    pub const ALL: [Self; 4] = [
+        Self::AutoWayland,
+        Self::DisplayP3,
+        Self::AdobeRgb1998,
+        Self::Srgb,
+    ];
+
+    pub fn label_de(self) -> &'static str {
+        match self {
+            Self::AutoWayland => "Automatisch (Wayland / KWin)",
+            Self::DisplayP3 => "Display P3 (Wide Gamut)",
+            Self::AdobeRgb1998 => "Adobe RGB (1998) (Wide Gamut)",
+            Self::Srgb => "sRGB (Standard)",
+        }
+    }
+}
+
 /// Complete Color & Output Processing configuration (`Farbeinstellungen`, EPL manual p. 29–31).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ColorSettings {
@@ -936,6 +968,12 @@ pub struct ColorSettings {
     pub adjustments: ColorAdjustments,
     pub output_sharpening: OutputSharpening,
     pub softproof: SoftproofConfig,
+    /// User-selected monitor color space mode (`AutoWayland`, `DisplayP3`, `AdobeRgb1998`, `Srgb`).
+    #[serde(default)]
+    pub display_color_space: DisplayColorSpaceMode,
+    /// Concrete display color space (`Srgb`, `DisplayP3`, or `AdobeRgb1998`) active for screen preview.
+    #[serde(default)]
+    pub resolved_display_space: WorkingColorSpace,
 }
 
 impl Default for ColorSettings {
@@ -950,6 +988,8 @@ impl Default for ColorSettings {
             adjustments: ColorAdjustments::default(),
             output_sharpening: OutputSharpening::Standard,
             softproof: SoftproofConfig::default(),
+            display_color_space: DisplayColorSpaceMode::AutoWayland,
+            resolved_display_space: WorkingColorSpace::Srgb,
         }
     }
 }

@@ -36,6 +36,7 @@ use crate::error::{ExternalError, NotSupportedError};
 use crate::platform_impl::wayland::logical_to_physical_rounded;
 use crate::platform_impl::wayland::types::cursor::{CustomCursor, SelectedCursor};
 use crate::platform_impl::wayland::types::kwin_blur::KWinBlurManager;
+use crate::platform_impl::wayland::types::wp_color_management::WindowColorManagement;
 use crate::platform_impl::{PlatformCustomCursor, WindowId};
 use crate::window::{CursorGrabMode, CursorIcon, ImePurpose, ResizeDirection, Theme};
 
@@ -145,6 +146,7 @@ pub struct WindowState {
     fractional_scale: Option<WpFractionalScaleV1>,
     blur: Option<OrgKdeKwinBlur>,
     blur_manager: Option<KWinBlurManager>,
+    pub color_management: Option<WindowColorManagement>,
 
     /// Whether the client side decorations have pending move operations.
     ///
@@ -182,10 +184,20 @@ impl WindowState {
             .fractional_scaling_manager
             .as_ref()
             .map(|fsm| fsm.fractional_scaling(window.wl_surface(), queue_handle));
+        let mut color_management = winit_state
+            .color_management
+            .as_ref()
+            .map(|cm| cm.create_surface(window.wl_surface(), queue_handle));
+        if let (Some(cm), Some(win_cm)) =
+            (winit_state.color_management.as_ref(), color_management.as_mut())
+        {
+            cm.sync_window_color_space(window.wl_surface(), win_cm, queue_handle);
+        }
 
         Self {
             blur: None,
             blur_manager: winit_state.kwin_blur_manager.clone(),
+            color_management,
             compositor,
             connection,
             csd_fails: false,
@@ -1149,6 +1161,10 @@ impl WindowState {
 
 impl Drop for WindowState {
     fn drop(&mut self) {
+        if let Some(cm) = self.color_management.take() {
+            cm.destroy();
+        }
+
         if let Some(blur) = self.blur.take() {
             blur.release();
         }

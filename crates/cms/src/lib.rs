@@ -173,12 +173,92 @@ impl WorkingColorSpace {
         }
     }
 
+    /// Encodes linear light (`0.0..=1.0`) into this color space's transfer curve (`0.0..=1.0`).
+    pub fn from_linear(self, c: f32) -> f32 {
+        let c = c.clamp(0.0, 1.0);
+        match self {
+            Self::Srgb | Self::DisplayP3 => Self::linear_to_srgb(c),
+            Self::AdobeRgb1998 => c.powf(256.0 / 563.0),
+            Self::ProPhotoRgb => {
+                if c <= 0.001_953_125 {
+                    c * 16.0
+                } else {
+                    c.powf(1.0 / 1.8)
+                }
+            }
+        }
+    }
+
+    /// Converts CIE XYZ (D50 PCS) to normalized linear `[r, g, b]` in this color space.
+    pub fn xyz_d50_to_linear_rgb(self, xyz: [f32; 3]) -> [f32; 3] {
+        // Exact inverse 3x3 matrices of `linear_rgb_to_xyz_d50`
+        let inv: [[f32; 3]; 3] = match self {
+            Self::Srgb => [
+                [3.133_856, -1.616_866_7, -0.490_614_6],
+                [-0.978_768_4, 1.916_141_5, 0.033_454],
+                [0.071_945_3, -0.228_991_4, 1.405_242_7],
+            ],
+            Self::AdobeRgb1998 => [
+                [1.962_427_4, -0.610_534_3, -0.341_340_4],
+                [-0.978_768_4, 1.916_141_5, 0.033_454],
+                [0.028_686_9, -0.140_675_2, 1.348_765_5],
+            ],
+            Self::ProPhotoRgb => [
+                [1.345_943_3, -0.255_607_5, -0.051_111_8],
+                [-0.544_598_9, 1.508_167_3, 0.020_535_1],
+                [0.0, 0.0, 1.211_812_8],
+            ],
+            Self::DisplayP3 => [
+                [2.404_147_7, -0.989_898_7, -0.397_631_7],
+                [-0.842_228_4, 1.798_850_5, 0.016_048_2],
+                [0.048_187_1, -0.097_373_9, 1.273_506_6],
+            ],
+        };
+        [
+            inv[0][0] * xyz[0] + inv[0][1] * xyz[1] + inv[0][2] * xyz[2],
+            inv[1][0] * xyz[0] + inv[1][1] * xyz[1] + inv[1][2] * xyz[2],
+            inv[2][0] * xyz[0] + inv[2][1] * xyz[1] + inv[2][2] * xyz[2],
+        ]
+    }
+
+    /// Converts CIE XYZ (D50 PCS) to 16-bit `Rgb16` encoded in this color space.
+    pub fn xyz_d50_to_rgb16(self, xyz: [f32; 3]) -> Rgb16 {
+        let [rl, gl, bl] = self.xyz_d50_to_linear_rgb(xyz);
+        let r = (self.from_linear(rl) * 65535.0).round() as u16;
+        let g = (self.from_linear(gl) * 65535.0).round() as u16;
+        let b = (self.from_linear(bl) * 65535.0).round() as u16;
+        Rgb16 { r, g, b }
+    }
+
     /// Converts `[r, g, b]` (`0..=65535`) to CIE XYZ (D50 PCS).
     pub fn rgb16_to_xyz_d50(self, r: u16, g: u16, b: u16) -> [f32; 3] {
         let rl = self.to_linear(f32::from(r) / 65535.0);
         let gl = self.to_linear(f32::from(g) / 65535.0);
         let bl = self.to_linear(f32::from(b) / 65535.0);
         self.linear_rgb_to_xyz_d50(rl, gl, bl)
+    }
+
+    /// Converts a single 16-bit pixel from `self` into `dst_space` via CIE XYZ (D50).
+    pub fn convert_pixel_to(self, px: Rgb16, dst_space: Self) -> Rgb16 {
+        if self == dst_space {
+            return px;
+        }
+        let xyz = self.rgb16_to_xyz_d50(px.r, px.g, px.b);
+        dst_space.xyz_d50_to_rgb16(xyz)
+    }
+
+    /// Converts a 16-bit image buffer in-place from `self` into `dst_space`.
+    pub fn convert_buffer_to(self, buf: &mut ImageBuffer16, dst_space: Self) {
+        if self == dst_space {
+            return;
+        }
+        buf.data.par_chunks_exact_mut(3).for_each(|px| {
+            let xyz = self.rgb16_to_xyz_d50(px[0], px[1], px[2]);
+            let out = dst_space.xyz_d50_to_rgb16(xyz);
+            px[0] = out.r;
+            px[1] = out.g;
+            px[2] = out.b;
+        });
     }
 }
 
@@ -227,14 +307,7 @@ pub fn lab_to_xyz_d50(lab: [f32; 3]) -> [f32; 3] {
 
 /// Converts CIE XYZ (D50) to sRGB `[u16; 3]`.
 pub fn xyz_d50_to_srgb16(xyz: [f32; 3]) -> Rgb16 {
-    // Inverse of sRGB -> XYZ D50 matrix
-    let rl = 3.133_856 * xyz[0] - 1.616_866_7 * xyz[1] - 0.490_614_6 * xyz[2];
-    let gl = -0.978_768_4 * xyz[0] + 1.916_141_5 * xyz[1] + 0.033_454 * xyz[2];
-    let bl = 0.071_945_3 * xyz[0] - 0.228_991_4 * xyz[1] + 1.405_242_7 * xyz[2];
-    let r = (WorkingColorSpace::linear_to_srgb(rl) * 65535.0).round() as u16;
-    let g = (WorkingColorSpace::linear_to_srgb(gl) * 65535.0).round() as u16;
-    let b = (WorkingColorSpace::linear_to_srgb(bl) * 65535.0).round() as u16;
-    Rgb16 { r, g, b }
+    WorkingColorSpace::Srgb.xyz_d50_to_rgb16(xyz)
 }
 
 /// 3D Lookup Table (`mft1` 8-bit or `mft2` 16-bit) from an ICC v2/v4 profile.
@@ -697,7 +770,8 @@ impl Default for SoftproofConfig {
 }
 
 impl IccProfile {
-    /// Applies a softproof simulation (and optional Out-of-Gamut warning overlay) to `buf`.
+    /// Applies a softproof simulation (and optional Out-of-Gamut warning overlay) to `buf`,
+    /// targeting standard `sRGB` display encoding.
     pub fn apply_softproof(
         &self,
         src_space: WorkingColorSpace,
@@ -706,10 +780,34 @@ impl IccProfile {
         bpc: bool,
         proof: SoftproofConfig,
     ) {
+        self.apply_softproof_to_display(
+            src_space,
+            WorkingColorSpace::Srgb,
+            buf,
+            intent,
+            bpc,
+            proof,
+        );
+    }
+
+    /// Applies a softproof simulation (and optional Out-of-Gamut warning overlay) to `buf`,
+    /// encoding the final simulated print appearance into `dst_display_space`
+    /// (e.g. `DisplayP3`, `AdobeRgb1998`, or `Srgb`).
+    pub fn apply_softproof_to_display(
+        &self,
+        src_space: WorkingColorSpace,
+        dst_display_space: WorkingColorSpace,
+        buf: &mut ImageBuffer16,
+        intent: RenderingIntent,
+        bpc: bool,
+        proof: SoftproofConfig,
+    ) {
         if !proof.enabled && !proof.gamut_warning {
+            src_space.convert_buffer_to(buf, dst_display_space);
             return;
         }
-        let warn_rgb16 = proof.gamut_warning_color.to_rgb16();
+        let warn_rgb16 =
+            WorkingColorSpace::Srgb.convert_pixel_to(proof.gamut_warning_color.to_rgb16(), dst_display_space);
         let light_mult = proof.viewing_light.white_tint_multipliers();
 
         buf.data.par_chunks_exact_mut(3).for_each(|px| {
@@ -721,6 +819,10 @@ impl IccProfile {
                 return;
             }
             if !proof.enabled {
+                let out = src_space.convert_pixel_to(src_px, dst_display_space);
+                px[0] = out.r;
+                px[1] = out.g;
+                px[2] = out.b;
                 return;
             }
             let dev_rgb = self.transform_pixel(src_space, src_px, intent, bpc);
@@ -745,7 +847,7 @@ impl IccProfile {
                 xyz[0] *= light_mult[0];
                 xyz[1] *= light_mult[1];
                 xyz[2] *= light_mult[2];
-                let disp = xyz_d50_to_srgb16(xyz);
+                let disp = dst_display_space.xyz_d50_to_rgb16(xyz);
                 px[0] = disp.r;
                 px[1] = disp.g;
                 px[2] = disp.b;
@@ -837,6 +939,54 @@ mod tests {
     }
 
     #[test]
+    fn working_color_spaces_roundtrip_xyz_d50_and_preserve_wide_gamut() {
+        let sample = Rgb16::new(12_345, 45_678, 34_567);
+        for space in WorkingColorSpace::ALL {
+            let xyz = space.rgb16_to_xyz_d50(sample.r, sample.g, sample.b);
+            let back = space.xyz_d50_to_rgb16(xyz);
+            assert!(
+                (i32::from(back.r) - i32::from(sample.r)).abs() <= 10,
+                "{space:?} R mismatch: {} vs {}",
+                back.r,
+                sample.r
+            );
+            assert!(
+                (i32::from(back.g) - i32::from(sample.g)).abs() <= 10,
+                "{space:?} G mismatch: {} vs {}",
+                back.g,
+                sample.g
+            );
+            assert!(
+                (i32::from(back.b) - i32::from(sample.b)).abs() <= 10,
+                "{space:?} B mismatch: {} vs {}",
+                back.b,
+                sample.b
+            );
+        }
+
+        // Saturated emerald/cyan inside AdobeRGB (R=4000, G=58000, B=50000) exceeds sRGB (linear R < 0 in sRGB)
+        let wide_emerald_adobe = Rgb16::new(4_000, 58_000, 50_000);
+        let xyz_emerald = WorkingColorSpace::AdobeRgb1998.rgb16_to_xyz_d50(
+            wide_emerald_adobe.r,
+            wide_emerald_adobe.g,
+            wide_emerald_adobe.b,
+        );
+        // In sRGB, linear R is negative and gets clipped to 0:
+        let srgb_linear = WorkingColorSpace::Srgb.xyz_d50_to_linear_rgb(xyz_emerald);
+        assert!(
+            srgb_linear[0] < 0.0,
+            "Expected wide emerald to be outside sRGB (linear R = {})",
+            srgb_linear[0]
+        );
+        let srgb_clipped = WorkingColorSpace::Srgb.xyz_d50_to_rgb16(xyz_emerald);
+        assert_eq!(srgb_clipped.r, 0);
+
+        // In AdobeRGB1998, it stays unclipped at R ~ 4000:
+        let adobe_unclipped = WorkingColorSpace::AdobeRgb1998.xyz_d50_to_rgb16(xyz_emerald);
+        assert!((i32::from(adobe_unclipped.r) - 4_000).abs() <= 10);
+    }
+
+    #[test]
     fn parses_real_epson_sc_p900_icc_profiles_and_transforms_16bit() {
         let icc_path = Path::new(
             "/home/rene/Projekte/Spielwiese/Drucker-Epson-SC-P900/Code/Epson-SC-P900-Treiber/extracted/icc/mac_Epson_SC-P900_700_EpsonPremiumGlossy.icc",
@@ -874,8 +1024,9 @@ mod tests {
 
         // Softproof test on a 2x2 16-bit buffer
         let mut buf = ImageBuffer16::new_solid(2, 2, Rgb16::new(32768, 16000, 48000)).unwrap();
-        prof.apply_softproof(
+        prof.apply_softproof_to_display(
             WorkingColorSpace::Srgb,
+            WorkingColorSpace::DisplayP3,
             &mut buf,
             RenderingIntent::Perceptual,
             true,
