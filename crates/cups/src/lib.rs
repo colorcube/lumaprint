@@ -190,6 +190,10 @@ pub struct PrinterOptionChoice {
     pub is_default: bool,
 }
 
+fn default_resolution_option_key() -> String {
+    String::from("Resolution")
+}
+
 /// Capabilities reported by a printer's CUPS PPD / `lpoptions -l`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PrinterCapabilities {
@@ -197,6 +201,9 @@ pub struct PrinterCapabilities {
     pub media_types: Vec<PrinterOptionChoice>,
     pub input_slots: Vec<PrinterOptionChoice>,
     pub resolutions: Vec<PrinterOptionChoice>,
+    /// Exact PPD option keyword for quality/resolution (e.g. `"PrintQuality"`, `"Resolution"`, `"StpQuality"`, `"cupsPrintQuality"`).
+    #[serde(default = "default_resolution_option_key")]
+    pub resolution_option_key: String,
     pub color_models: Vec<PrinterOptionChoice>,
     /// Physical sheet dimensions in `mm` keyed by `page_size.code`.
     pub page_dimensions_mm: HashMap<String, SizeMm>,
@@ -349,6 +356,7 @@ impl PrinterCapabilities {
             media_types,
             input_slots,
             resolutions,
+            resolution_option_key: default_resolution_option_key(),
             color_models,
             page_dimensions_mm,
             driver_color_control: DriverColorControl::EpsonEscpr {
@@ -464,6 +472,8 @@ pub struct CupsSpoolRequest {
     pub media_type: String,
     pub input_slot: String,
     pub resolution: String,
+    /// Exact PPD option keyword for resolution/quality (e.g. `"PrintQuality"` or `"Resolution"`).
+    pub resolution_option_key: String,
     pub borderless: bool,
     /// `true` when LumaPrint already applied an ICC profile or ABW toning to the 16-bit raster,
     /// instructing the printer driver not to apply a second color profile.
@@ -495,7 +505,27 @@ pub fn discover_system_printers() -> Vec<SystemPrinter> {
         let lpopt_out =
             run_command_stdout("lpoptions", &["-p", &p.queue_name, "-l"]).unwrap_or_default();
         let ppd_path = format!("/etc/cups/ppd/{}.ppd", p.queue_name);
-        let ppd_text = std::fs::read_to_string(&ppd_path).ok();
+        let mut ppd_text = std::fs::read_to_string(&ppd_path).ok();
+        if ppd_text.is_none() && lpopt_out.contains("EpsonColorMode") {
+            let is_p700 = p.queue_name.to_ascii_lowercase().contains("700");
+            let fallback_candidates = if is_p700 {
+                [
+                    "../epson-p900-escpr-cups/ppd/Epson-SC-P700-ESCPR.ppd",
+                    "/home/rene/Projekte/Spielwiese/Drucker-Epson-SC-P900/Code/epson-p900-escpr-cups/ppd/Epson-SC-P700-ESCPR.ppd",
+                ]
+            } else {
+                [
+                    "../epson-p900-escpr-cups/ppd/Epson-SC-P900-ESCPR.ppd",
+                    "/home/rene/Projekte/Spielwiese/Drucker-Epson-SC-P900/Code/epson-p900-escpr-cups/ppd/Epson-SC-P900-ESCPR.ppd",
+                ]
+            };
+            for candidate in fallback_candidates {
+                if let Ok(text) = std::fs::read_to_string(candidate) {
+                    ppd_text = Some(text);
+                    break;
+                }
+            }
+        }
         if !lpopt_out.is_empty() || ppd_text.is_some() {
             p.capabilities = parse_lpoptions_and_ppd(&lpopt_out, ppd_text.as_deref());
         }
@@ -613,6 +643,35 @@ pub fn parse_lpstat_output(lpstat_p_d: &str, lpstat_v: &str) -> Vec<SystemPrinte
     printers
 }
 
+fn merge_or_replace_with_ppd_choices(
+    target: &mut Vec<PrinterOptionChoice>,
+    ppd_choices: Vec<PrinterOptionChoice>,
+) {
+    if ppd_choices.is_empty() {
+        return;
+    }
+    if target.is_empty() {
+        *target = ppd_choices;
+        return;
+    }
+    for item in target.iter_mut() {
+        if let Some(ppd_item) = ppd_choices
+            .iter()
+            .find(|p| p.code.eq_ignore_ascii_case(&item.code))
+        {
+            item.label = ppd_item.label.clone();
+        }
+    }
+    for ppd_item in ppd_choices {
+        if !target
+            .iter()
+            .any(|t| t.code.eq_ignore_ascii_case(&ppd_item.code))
+        {
+            target.push(ppd_item);
+        }
+    }
+}
+
 /// Parses `lpoptions -p <queue> -l` and optional PPD text into `PrinterCapabilities`.
 pub fn parse_lpoptions_and_ppd(lpoptions_l: &str, ppd_text: Option<&str>) -> PrinterCapabilities {
     let mut caps = PrinterCapabilities::standard_fine_art_defaults();
@@ -628,12 +687,8 @@ pub fn parse_lpoptions_and_ppd(lpoptions_l: &str, ppd_text: Option<&str>) -> Pri
         let Some((lhs, rhs)) = line.split_once(':') else {
             continue;
         };
-        let key = lhs
-            .split('/')
-            .next()
-            .unwrap_or("")
-            .trim()
-            .to_ascii_lowercase();
+        let raw_key = lhs.split('/').next().unwrap_or("").trim();
+        let key = raw_key.to_ascii_lowercase();
         let choices = parse_choice_tokens(rhs);
         if choices.is_empty() {
             continue;
@@ -644,6 +699,7 @@ pub fn parse_lpoptions_and_ppd(lpoptions_l: &str, ppd_text: Option<&str>) -> Pri
             "inputslot" => parsed_slots = choices,
             "resolution" | "printquality" | "stpquality" | "cupsprintquality" | "quality" => {
                 if parsed_res.is_empty() {
+                    caps.resolution_option_key = raw_key.to_string();
                     parsed_res = choices;
                 }
             }
@@ -675,28 +731,35 @@ pub fn parse_lpoptions_and_ppd(lpoptions_l: &str, ppd_text: Option<&str>) -> Pri
         if let Some(ctrl) = detect_driver_color_control_from_ppd(ppd) {
             caps.driver_color_control = ctrl;
         }
-        if parsed_media.is_empty() {
-            let ppd_media = parse_ppd_option_choices(ppd, "*MediaType", "*DefaultMediaType:");
-            if !ppd_media.is_empty() {
-                parsed_media = ppd_media;
-            }
-        }
-        if parsed_sizes.is_empty() {
-            let ppd_sizes = parse_ppd_option_choices(ppd, "*PageSize", "*DefaultPageSize:");
-            if !ppd_sizes.is_empty() {
-                parsed_sizes = ppd_sizes;
-            }
-        }
-        if parsed_slots.is_empty() {
-            let ppd_slots = parse_ppd_option_choices(ppd, "*InputSlot", "*DefaultInputSlot:");
-            if !ppd_slots.is_empty() {
-                parsed_slots = ppd_slots;
-            }
-        }
-        if parsed_res.is_empty() {
-            let ppd_qual = parse_ppd_option_choices(ppd, "*PrintQuality", "*DefaultPrintQuality:");
-            if !ppd_qual.is_empty() {
-                parsed_res = ppd_qual;
+        let ppd_media = parse_ppd_option_choices(ppd, "*MediaType", "*DefaultMediaType:");
+        merge_or_replace_with_ppd_choices(&mut parsed_media, ppd_media);
+
+        let ppd_sizes = parse_ppd_option_choices(ppd, "*PageSize", "*DefaultPageSize:");
+        merge_or_replace_with_ppd_choices(&mut parsed_sizes, ppd_sizes);
+
+        let ppd_slots = parse_ppd_option_choices(ppd, "*InputSlot", "*DefaultInputSlot:");
+        merge_or_replace_with_ppd_choices(&mut parsed_slots, ppd_slots);
+
+        for (opt_key, opt_prefix, def_prefix) in [
+            ("PrintQuality", "*PrintQuality", "*DefaultPrintQuality:"),
+            ("Resolution", "*Resolution", "*DefaultResolution:"),
+            ("StpQuality", "*StpQuality", "*DefaultStpQuality:"),
+            (
+                "cupsPrintQuality",
+                "*cupsPrintQuality",
+                "*DefaultcupsPrintQuality:",
+            ),
+        ] {
+            let ppd_qual = parse_ppd_option_choices(ppd, opt_prefix, def_prefix);
+            if !ppd_qual.is_empty()
+                && (parsed_res.is_empty()
+                    || caps.resolution_option_key.eq_ignore_ascii_case(opt_key))
+            {
+                if parsed_res.is_empty() {
+                    caps.resolution_option_key = String::from(opt_key);
+                }
+                merge_or_replace_with_ppd_choices(&mut parsed_res, ppd_qual);
+                break;
             }
         }
     }
@@ -704,15 +767,19 @@ pub fn parse_lpoptions_and_ppd(lpoptions_l: &str, ppd_text: Option<&str>) -> Pri
     if !parsed_sizes.is_empty() {
         for choice in &mut parsed_sizes {
             if let Some(spec) = find_paper_size(&choice.code) {
-                choice.label = spec.name.to_string();
+                if choice.label == choice.code {
+                    choice.label = spec.name.to_string();
+                }
                 caps.page_dimensions_mm
                     .entry(choice.code.clone())
                     .or_insert_with(|| spec.size_mm());
-            } else if let Some(&sz) = caps.page_dimensions_mm.get(&choice.code) {
-                choice.label = format!(
-                    "{} ({:.0} × {:.0} mm)",
-                    choice.code, sz.width_mm, sz.height_mm
-                );
+            } else if choice.label == choice.code {
+                if let Some(&sz) = caps.page_dimensions_mm.get(&choice.code) {
+                    choice.label = format!(
+                        "{} ({:.0} × {:.0} mm)",
+                        choice.code, sz.width_mm, sz.height_mm
+                    );
+                }
             }
         }
         caps.page_sizes = parsed_sizes;
@@ -919,24 +986,13 @@ pub fn build_lp_command_args(req: &CupsSpoolRequest, file_path: &Path) -> Vec<St
     }
 
     if !req.resolution.is_empty() {
+        let opt_key = if req.resolution_option_key.is_empty() {
+            "Resolution"
+        } else {
+            req.resolution_option_key.as_str()
+        };
         args.push(String::from("-o"));
-        args.push(format!("Resolution={}", req.resolution));
-        if matches!(req.driver_color_control, DriverColorControl::EpsonEscpr { .. }) {
-            let pq = match req.resolution.to_ascii_lowercase().as_str() {
-                "normal" | "360dpi" | "360x360dpi" | "720dpi" | "720x360dpi" | "720x720dpi" => {
-                    "Normal"
-                }
-                "fine" | "720x1440dpi" | "1440x720dpi" => "Fine",
-                "high" | "1440dpi" | "1440x1440dpi" => "High",
-                "max" | "2880x1440dpi" => "Max",
-                "carbonblack" | "5760dpi" | "5760x1440dpi" | "carbonblack5760x1440" => {
-                    "CarbonBlack"
-                }
-                _ => req.resolution.as_str(),
-            };
-            args.push(String::from("-o"));
-            args.push(format!("PrintQuality={pq}"));
-        }
+        args.push(format!("{opt_key}={}", req.resolution));
     }
 
     if req.borderless {
@@ -1135,7 +1191,8 @@ ColorModel/Color Model: *RGB Gray
             page_size: "A3Plus".into(),
             media_type: "Baryta".into(),
             input_slot: "Rear".into(),
-            resolution: "2880x1440dpi".into(),
+            resolution: "Max".into(),
+            resolution_option_key: "PrintQuality".into(),
             borderless: true,
             app_manages_color: true,
             driver_color_control: DriverColorControl::EpsonEscpr {

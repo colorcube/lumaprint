@@ -568,10 +568,29 @@ impl Session {
             .unwrap_or_else(|| self.doc.printer.media_key.clone());
 
         if let Some(media) = find_media_type(&lookup_key) {
-            if !media.supports_carbon_black
-                && self.doc.printer.quality == PrintQuality::CarbonBlack5760x1440
-            {
-                self.doc.printer.quality = PrintQuality::MaxQuality2880x1440;
+            if !media.supports_carbon_black {
+                if self.doc.printer.quality == PrintQuality::CarbonBlack5760x1440 {
+                    self.doc.printer.quality = PrintQuality::MaxQuality2880x1440;
+                }
+                if self
+                    .doc
+                    .printer
+                    .resolution_key
+                    .eq_ignore_ascii_case("CarbonBlack")
+                {
+                    let fallback_res = self
+                        .active_system_printer()
+                        .and_then(|sp| {
+                            sp.capabilities
+                                .resolutions
+                                .iter()
+                                .find(|r| r.code.eq_ignore_ascii_case("Max"))
+                                .map(|r| r.code.clone())
+                                .or_else(|| Some(sp.capabilities.default_resolution()))
+                        })
+                        .unwrap_or_else(|| String::from("Max"));
+                    self.doc.printer.resolution_key = fallback_res;
+                }
             }
             if !media.supports_black_enhance_overcoat {
                 self.doc.printer.detailed.black_enhance_overcoat = false;
@@ -913,18 +932,37 @@ impl Session {
                 }
             }
             EngineCommand::SetPaperSizeKey(key) => {
+                if let Some(sz) = self
+                    .active_system_printer()
+                    .and_then(|sp| sp.capabilities.resolve_page_size_mm(&key))
+                {
+                    self.doc.printer.custom_paper_size_mm = sz;
+                }
                 self.doc.printer.paper_size_key = key;
             }
             EngineCommand::SetPaperSource { source, borderless } => {
+                if self.doc.printer.paper_source != source
+                    || self.doc.printer.input_slot_key.is_empty()
+                {
+                    self.doc.printer.input_slot_key = source.cups_slot_code().to_string();
+                }
                 self.doc.printer.paper_source = source;
-                self.doc.printer.input_slot_key = source.cups_slot_code().to_string();
                 self.doc.printer.borderless = borderless;
             }
             EngineCommand::SetInputSlotKey(slot) => {
+                self.doc.printer.paper_source = match slot.to_ascii_lowercase().as_str() {
+                    "roll" => PaperSource::RollPaper,
+                    "frontposterboard" => PaperSource::FrontPosterBoard,
+                    "frontthick" => PaperSource::FrontThick,
+                    "frontnoejectroller" | "frontglossy" => PaperSource::FrontGlossyNoRoller,
+                    "frontfineart" => PaperSource::FrontFineArt,
+                    _ => PaperSource::RearFeed,
+                };
                 self.doc.printer.input_slot_key = slot;
             }
             EngineCommand::SetResolutionKey(res) => {
                 self.doc.printer.resolution_key = res;
+                self.apply_media_constraints();
             }
             EngineCommand::SetPrintQuality(q) => {
                 self.doc.printer.quality = q;
@@ -2274,6 +2312,29 @@ impl Session {
             .map(|sp| sp.capabilities.driver_color_control)
             .unwrap_or(DriverColorControl::GenericCups);
 
+        let resolution_option_key = self
+            .active_system_printer()
+            .map(|sp| sp.capabilities.resolution_option_key.clone())
+            .unwrap_or_else(|| String::from("Resolution"));
+
+        let effective_resolution = self
+            .active_system_printer()
+            .and_then(|sp| {
+                sp.capabilities
+                    .resolutions
+                    .iter()
+                    .find(|r| r.code.eq_ignore_ascii_case(&self.doc.printer.resolution_key))
+                    .map(|r| r.code.clone())
+                    .or_else(|| {
+                        if sp.capabilities.resolutions.is_empty() {
+                            None
+                        } else {
+                            Some(sp.capabilities.default_resolution())
+                        }
+                    })
+            })
+            .unwrap_or_else(|| self.doc.printer.resolution_key.clone());
+
         let custom_media = self.find_custom_media(&self.doc.printer.media_key);
         let effective_media_type = custom_media
             .map(|cm| cm.base_media_key.clone())
@@ -2311,11 +2372,15 @@ impl Session {
                 )
             };
 
-        let overcoat = Some(if self.doc.printer.detailed.black_enhance_overcoat {
-            String::from("On")
+        let overcoat = if matches!(driver_color_control, DriverColorControl::EpsonEscpr { .. }) {
+            Some(if self.doc.printer.detailed.black_enhance_overcoat {
+                String::from("On")
+            } else {
+                String::from("Off")
+            })
         } else {
-            String::from("Off")
-        });
+            None
+        };
 
         CupsSpoolRequest {
             queue_name: self.doc.printer.printer_queue.clone(),
@@ -2324,7 +2389,8 @@ impl Session {
             page_size: self.doc.printer.paper_size_key.clone(),
             media_type: effective_media_type,
             input_slot: self.doc.printer.input_slot_key.clone(),
-            resolution: self.doc.printer.resolution_key.clone(),
+            resolution: effective_resolution,
+            resolution_option_key,
             borderless: self.doc.printer.borderless,
             app_manages_color,
             driver_color_control,

@@ -4968,6 +4968,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         let cur_media = find_media_type(base_lookup_key).unwrap_or(&MEDIA_TYPES[0]);
         let custom_media_list = self.session.doc.user_backup.custom_media.clone();
         let cur_size_key = self.session.doc.printer.paper_size_key.clone();
+        let cur_slot_key = self.session.doc.printer.input_slot_key.clone();
+        let cur_res_key = self.session.doc.printer.resolution_key.clone();
         let mut src = self.session.doc.printer.paper_source;
         let mut bl = self.session.doc.printer.borderless;
         let mut qual = self.session.doc.printer.quality;
@@ -5026,7 +5028,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 ap.capabilities
                                     .media_types
                                     .iter()
-                                    .find(|m| m.code == cur_media_key)
+                                    .find(|m| m.code.eq_ignore_ascii_case(&cur_media_key))
                                     .map(|m| m.label.clone())
                             })
                             .unwrap_or_else(|| cur_media.name.to_string())
@@ -5055,12 +5057,16 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 }
                                 ui.separator();
                             }
+                            let has_ppd_media = active_printer
+                                .as_ref()
+                                .map(|ap| !ap.capabilities.media_types.is_empty())
+                                .unwrap_or(false);
                             if let Some(ref ap) = active_printer {
-                                if !ap.capabilities.media_types.is_empty() {
+                                if has_ppd_media {
                                     for m in &ap.capabilities.media_types {
                                         if ui
                                             .selectable_label(
-                                                m.code == cur_media_key,
+                                                m.code.eq_ignore_ascii_case(&cur_media_key),
                                                 &m.label,
                                             )
                                             .clicked()
@@ -5068,15 +5074,16 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                             self.exec(EngineCommand::SetMediaKey(m.code.clone()));
                                         }
                                     }
-                                    ui.separator();
                                 }
                             }
-                            for m in MEDIA_TYPES {
-                                if ui
-                                    .selectable_label(m.key == cur_media_key, m.name)
-                                    .clicked()
-                                {
-                                    self.exec(EngineCommand::SetMediaKey(m.key.to_string()));
+                            if !has_ppd_media {
+                                for m in MEDIA_TYPES {
+                                    if ui
+                                        .selectable_label(m.key == cur_media_key, m.name)
+                                        .clicked()
+                                    {
+                                        self.exec(EngineCommand::SetMediaKey(m.key.to_string()));
+                                    }
                                 }
                             }
                         });
@@ -5090,35 +5097,97 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 ui.end_row();
 
                 ui.label(RichText::new("Papierformat:").color(t.text_dim));
+                let size_display = active_printer
+                    .as_ref()
+                    .and_then(|ap| {
+                        ap.capabilities
+                            .page_sizes
+                            .iter()
+                            .find(|s| s.code.eq_ignore_ascii_case(&cur_size_key))
+                            .map(|s| s.label.clone())
+                    })
+                    .unwrap_or_else(|| cur_size_key.clone());
                 egui::ComboBox::from_id_salt("paper_size_combo")
-                    .selected_text(&cur_size_key)
+                    .selected_text(size_display)
                     .width(245.0)
                     .show_ui(ui, |ui| {
-                        for p in PAPER_SIZES {
-                            if ui
-                                .selectable_label(p.key == cur_size_key, p.name)
-                                .clicked()
-                            {
-                                self.exec(EngineCommand::SetPaperSizeKey(p.key.to_string()));
+                        let has_ppd_sizes = active_printer
+                            .as_ref()
+                            .map(|ap| !ap.capabilities.page_sizes.is_empty())
+                            .unwrap_or(false);
+                        if let Some(ref ap) = active_printer {
+                            if has_ppd_sizes {
+                                for s in &ap.capabilities.page_sizes {
+                                    if ui
+                                        .selectable_label(
+                                            s.code.eq_ignore_ascii_case(&cur_size_key),
+                                            &s.label,
+                                        )
+                                        .clicked()
+                                    {
+                                        self.exec(EngineCommand::SetPaperSizeKey(s.code.clone()));
+                                    }
+                                }
+                            }
+                        }
+                        if !has_ppd_sizes {
+                            for p in PAPER_SIZES {
+                                if ui
+                                    .selectable_label(p.key == cur_size_key, p.name)
+                                    .clicked()
+                                {
+                                    self.exec(EngineCommand::SetPaperSizeKey(p.key.to_string()));
+                                }
                             }
                         }
                     });
                 ui.end_row();
 
                 ui.label(RichText::new("Papierzufuhr:").color(t.text_dim));
+                let has_ppd_slots = active_printer
+                    .as_ref()
+                    .map(|ap| !ap.capabilities.input_slots.is_empty())
+                    .unwrap_or(false);
+                let slot_display = active_printer
+                    .as_ref()
+                    .and_then(|ap| {
+                        ap.capabilities
+                            .input_slots
+                            .iter()
+                            .find(|s| s.code.eq_ignore_ascii_case(&cur_slot_key))
+                            .map(|s| s.label.clone())
+                    })
+                    .unwrap_or_else(|| src.label_de(bl).to_string());
                 egui::ComboBox::from_id_salt("paper_src_combo")
-                    .selected_text(src.label_de(bl))
+                    .selected_text(slot_display)
                     .width(245.0)
                     .show_ui(ui, |ui| {
-                        for s in PaperSource::ALL {
-                            if ui
-                                .selectable_value(&mut src, s, s.label_de(bl))
-                                .changed()
-                            {
-                                self.exec(EngineCommand::SetPaperSource {
-                                    source: src,
-                                    borderless: bl,
-                                });
+                        if let Some(ref ap) = active_printer {
+                            if has_ppd_slots {
+                                for s in &ap.capabilities.input_slots {
+                                    if ui
+                                        .selectable_label(
+                                            s.code.eq_ignore_ascii_case(&cur_slot_key),
+                                            &s.label,
+                                        )
+                                        .clicked()
+                                    {
+                                        self.exec(EngineCommand::SetInputSlotKey(s.code.clone()));
+                                    }
+                                }
+                            }
+                        }
+                        if !has_ppd_slots {
+                            for s in PaperSource::ALL {
+                                if ui
+                                    .selectable_value(&mut src, s, s.label_de(bl))
+                                    .changed()
+                                {
+                                    self.exec(EngineCommand::SetPaperSource {
+                                        source: src,
+                                        borderless: bl,
+                                    });
+                                }
                             }
                         }
                     });
@@ -5134,18 +5203,56 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 ui.end_row();
 
                 ui.label(RichText::new("Druckqualität:").color(t.text_dim));
+                let has_ppd_res = active_printer
+                    .as_ref()
+                    .map(|ap| !ap.capabilities.resolutions.is_empty())
+                    .unwrap_or(false);
+                let res_display = active_printer
+                    .as_ref()
+                    .and_then(|ap| {
+                        ap.capabilities
+                            .resolutions
+                            .iter()
+                            .find(|r| r.code.eq_ignore_ascii_case(&cur_res_key))
+                            .map(|r| r.label.clone())
+                    })
+                    .unwrap_or_else(|| qual.label_de().to_string());
                 egui::ComboBox::from_id_salt("quality_combo")
-                    .selected_text(qual.label_de())
+                    .selected_text(res_display)
                     .width(245.0)
                     .show_ui(ui, |ui| {
-                        for q in PrintQuality::ALL {
-                            if q == PrintQuality::CarbonBlack5760x1440
-                                && !cur_media.supports_carbon_black
-                            {
-                                continue;
+                        if let Some(ref ap) = active_printer {
+                            if has_ppd_res {
+                                for r in &ap.capabilities.resolutions {
+                                    if r.code.eq_ignore_ascii_case("CarbonBlack")
+                                        && !cur_media.supports_carbon_black
+                                    {
+                                        continue;
+                                    }
+                                    if ui
+                                        .selectable_label(
+                                            r.code.eq_ignore_ascii_case(&cur_res_key),
+                                            &r.label,
+                                        )
+                                        .clicked()
+                                    {
+                                        self.exec(EngineCommand::SetResolutionKey(
+                                            r.code.clone(),
+                                        ));
+                                    }
+                                }
                             }
-                            if ui.selectable_value(&mut qual, q, q.label_de()).changed() {
-                                self.exec(EngineCommand::SetPrintQuality(qual));
+                        }
+                        if !has_ppd_res {
+                            for q in PrintQuality::ALL {
+                                if q == PrintQuality::CarbonBlack5760x1440
+                                    && !cur_media.supports_carbon_black
+                                {
+                                    continue;
+                                }
+                                if ui.selectable_value(&mut qual, q, q.label_de()).changed() {
+                                    self.exec(EngineCommand::SetPrintQuality(qual));
+                                }
                             }
                         }
                     });
