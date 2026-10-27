@@ -15,7 +15,7 @@
 )]
 
 use lumaprint_doc::{
-    CenteringMode, FrameLineSpec, GalleryWrapEffect, LayoutMode, LayoutTemplate,
+    CenteringMode, FrameLineSpec, FreeComposerSpec, GalleryWrapEffect, LayoutMode, LayoutTemplate,
     PaperSource, PrintJobDocument, SizingCriterion, SlotCaptionMode, SourceImageEntry,
 };
 use lumaprint_geom::{
@@ -635,22 +635,8 @@ pub fn solve_page_layout_at(doc: &PrintJobDocument, page_index: usize) -> Solved
         }
 
         LayoutMode::FreeComposer(comp_spec) => {
-            let (paper_size_mm, printable_rect_mm) = resolve_paper_and_printable_area(
-                doc,
-                comp_spec.orientation,
-                BorderlessExpandLevel::None,
-                &mut warnings,
-            );
-            let margin = comp_spec.page_margin_mm.max(0.0);
-            let pack_x = printable_rect_mm.x_mm.max(margin);
-            let pack_y = printable_rect_mm.y_mm.max(margin);
-            let pack_r = (paper_size_mm.width_mm - margin).min(printable_rect_mm.right_mm());
-            let pack_b = (paper_size_mm.height_mm - margin).min(printable_rect_mm.bottom_mm());
-            let pack_rect_mm = if pack_r > pack_x + 10.0 && pack_b > pack_y + 10.0 {
-                RectMm::new(pack_x, pack_y, pack_r - pack_x, pack_b - pack_y)
-            } else {
-                printable_rect_mm
-            };
+            let (paper_size_mm, printable_rect_mm, pack_rect_mm) =
+                resolve_sammel_pack_rect(doc, comp_spec, &mut warnings);
 
             let indexed_images: Vec<(usize, SourceImageEntry)> = page_slots
                 .iter()
@@ -697,6 +683,206 @@ pub fn solve_page_layout_at(doc: &PrintJobDocument, page_index: usize) -> Solved
     }
 }
 
+fn resolve_sammel_pack_rect(
+    doc: &PrintJobDocument,
+    comp_spec: &FreeComposerSpec,
+    warnings: &mut Vec<String>,
+) -> (SizeMm, RectMm, RectMm) {
+    let (paper_size_mm, printable_rect_mm) = resolve_paper_and_printable_area(
+        doc,
+        comp_spec.orientation,
+        BorderlessExpandLevel::None,
+        warnings,
+    );
+    let margin = comp_spec.page_margin_mm.max(0.0);
+    let pack_x = printable_rect_mm.x_mm.max(margin);
+    let pack_y = printable_rect_mm.y_mm.max(margin);
+    let pack_r = (paper_size_mm.width_mm - margin).min(printable_rect_mm.right_mm());
+    let pack_b = (paper_size_mm.height_mm - margin).min(printable_rect_mm.bottom_mm());
+    let pack_rect_mm = if pack_r > pack_x + 10.0 && pack_b > pack_y + 10.0 {
+        RectMm::new(pack_x, pack_y, pack_r - pack_x, pack_b - pack_y)
+    } else {
+        printable_rect_mm
+    };
+    (paper_size_mm, printable_rect_mm, pack_rect_mm)
+}
+
+/// Returns how many items from `sizes` fit onto a single `FreeComposer` (`Sammelbogen`) page
+/// without overflowing the bottom or right page margin (always at least `1` when `sizes` is non-empty).
+pub fn count_fitting_sammel_items(
+    doc: &PrintJobDocument,
+    comp_spec: &FreeComposerSpec,
+    sizes: &[SizeMm],
+) -> usize {
+    if sizes.is_empty() {
+        return 0;
+    }
+    let mut warnings = Vec::new();
+    let (_paper, _printable, pack_rect_mm) =
+        resolve_sammel_pack_rect(doc, comp_spec, &mut warnings);
+    pack_sammel_rects(
+        sizes,
+        pack_rect_mm,
+        comp_spec.nest_gap_mm,
+        comp_spec.allow_rotation_in_nest,
+    )
+    .len()
+    .max(1)
+}
+
+/// Evaluates 90°-orientation combinations to pack as many rectangles from `sizes` onto `printable`
+/// as possible without overflowing `printable.bottom_mm()`, minimizing shelf count, orientation
+/// switches, and total bounding height.
+pub fn pack_sammel_rects(
+    sizes: &[SizeMm],
+    printable: RectMm,
+    gap_mm: f64,
+    allow_rotate: bool,
+) -> Vec<(RectMm, bool)> {
+    if sizes.is_empty() {
+        return Vec::new();
+    }
+    let gap = gap_mm.max(0.0);
+    let right = printable.right_mm();
+    let bottom = printable.bottom_mm();
+    let eps = 1e-4;
+
+    let k_bits = if allow_rotate {
+        sizes.len().min(12)
+    } else {
+        0
+    };
+    let num_masks = 1usize << k_bits;
+
+    let mut best_placements: Vec<(RectMm, bool)> = Vec::new();
+    // Tuple score to maximize/minimize:
+    // (fitted_count (max), -shelves, -transitions, -max_bottom_mm, -max_right_mm, -rotations)
+    let mut best_key: Option<(usize, usize, usize, i64, i64, usize)> = None;
+
+    for mask in 0..num_masks {
+        let mut placements = Vec::with_capacity(sizes.len());
+        let mut cur_x = printable.x_mm;
+        let mut cur_y = printable.y_mm;
+        let mut shelf_h = 0.0f64;
+        let mut shelves = 1usize;
+        let mut transitions = 0usize;
+        let mut rotations = 0usize;
+        let mut prev_is_landscape: Option<bool> = None;
+        let mut max_right = printable.x_mm;
+        let mut max_bottom = printable.y_mm;
+
+        for (i, sz) in sizes.iter().enumerate() {
+            let base_w = sz.width_mm.max(10.0);
+            let base_h = sz.height_mm.max(10.0);
+            let mut rotated_90 = if i < k_bits {
+                ((mask >> i) & 1) != 0
+            } else {
+                false
+            };
+            let (mut w, mut h) = if rotated_90 {
+                (base_h, base_w)
+            } else {
+                (base_w, base_h)
+            };
+
+            if i >= k_bits
+                && allow_rotate
+                && cur_x + w > right + eps
+                && cur_x + h <= right + eps
+                && cur_y + w <= bottom + eps
+            {
+                std::mem::swap(&mut w, &mut h);
+                rotated_90 = true;
+            }
+
+            if cur_x + w > right + eps && cur_x > printable.x_mm + eps {
+                cur_x = printable.x_mm;
+                cur_y += shelf_h + gap;
+                shelf_h = 0.0;
+                shelves += 1;
+            }
+
+            if i >= k_bits
+                && allow_rotate
+                && !rotated_90
+                && (cur_x + w > right + eps || cur_y + h > bottom + eps)
+                && cur_x + h <= right + eps
+                && cur_y + w <= bottom + eps
+            {
+                std::mem::swap(&mut w, &mut h);
+                rotated_90 = true;
+            }
+
+            if cur_x + w > right + eps || cur_y + h > bottom + eps {
+                break;
+            }
+
+            let rect = RectMm::new(cur_x, cur_y, w, h);
+            placements.push((rect, rotated_90));
+            let is_landscape = w >= h;
+            if let Some(prev) = prev_is_landscape
+                && prev != is_landscape
+            {
+                transitions += 1;
+            }
+            prev_is_landscape = Some(is_landscape);
+            if rotated_90 {
+                rotations += 1;
+            }
+
+            cur_x += w + gap;
+            shelf_h = shelf_h.max(h);
+            max_right = max_right.max(rect.right_mm());
+            max_bottom = max_bottom.max(rect.bottom_mm());
+        }
+
+        let fitted = placements.len();
+        let key = (
+            fitted,
+            usize::MAX - shelves,
+            usize::MAX - transitions,
+            -((max_bottom * 100.0).round() as i64),
+            -((max_right * 100.0).round() as i64),
+            usize::MAX - rotations,
+        );
+        if best_key.is_none_or(|bk| key > bk) {
+            best_key = Some(key);
+            best_placements = placements;
+        }
+    }
+
+    // Fallback when even the very first image is larger than printable in both orientations:
+    // clamp it to printable so at least 1 slot is visible on the sheet.
+    if best_placements.is_empty()
+        && let Some(first) = sizes.first()
+    {
+        let mut w = first.width_mm.max(10.0);
+        let mut h = first.height_mm.max(10.0);
+        let mut rotated_90 = false;
+        if allow_rotate {
+            let unrot_overflow =
+                (w - printable.width_mm).max(0.0) + (h - printable.height_mm).max(0.0);
+            let rot_overflow =
+                (h - printable.width_mm).max(0.0) + (w - printable.height_mm).max(0.0);
+            if rot_overflow + eps < unrot_overflow {
+                std::mem::swap(&mut w, &mut h);
+                rotated_90 = true;
+            }
+        }
+        best_placements.push((
+            RectMm::new(
+                printable.x_mm,
+                printable.y_mm,
+                w.min(printable.width_mm),
+                h.min(printable.height_mm),
+            ),
+            rotated_90,
+        ));
+    }
+
+    best_placements
+}
+
 /// Smart 2D shelf bin-packer (`Auto-Nesting`) that packs multiple images onto `printable` with minimal waste.
 pub fn solve_auto_nested_slots(
     images: &[SourceImageEntry],
@@ -706,11 +892,8 @@ pub fn solve_auto_nested_slots(
     frame_line: FrameLineSpec,
     warnings: &mut Vec<String>,
 ) -> Vec<SolvedImageSlot> {
-    let indexed: Vec<(usize, SourceImageEntry)> = images
-        .iter()
-        .cloned()
-        .enumerate()
-        .collect();
+    let indexed: Vec<(usize, SourceImageEntry)> =
+        images.iter().cloned().enumerate().collect();
     solve_auto_nested_slots_indexed(
         &indexed,
         printable,
@@ -732,52 +915,16 @@ pub fn solve_auto_nested_slots_indexed(
     cut_marks: bool,
     warnings: &mut Vec<String>,
 ) -> Vec<SolvedImageSlot> {
-    let mut slots = Vec::with_capacity(indexed_images.len());
-    let gap = gap_mm.max(0.0);
-    let mut cur_x = printable.x_mm;
-    let mut cur_y = printable.y_mm;
-    let mut shelf_h = 0.0f64;
+    let sizes: Vec<SizeMm> = indexed_images
+        .iter()
+        .map(|(_, img)| img.composer_size_mm)
+        .collect();
+    let placements = pack_sammel_rects(&sizes, printable, gap_mm, allow_rotate);
+    let mut slots = Vec::with_capacity(placements.len());
 
-    for (orig_slot_idx, img) in indexed_images {
-        let mut w = img.composer_size_mm.width_mm.clamp(10.0, printable.width_mm);
-        let mut h = img.composer_size_mm.height_mm.clamp(10.0, printable.height_mm);
-        let mut rotated_90 = false;
-
-        // If rotated fits on current shelf and unrotated doesn't, rotate 90 deg
-        if allow_rotate
-            && cur_x + w > printable.right_mm()
-            && cur_x + h <= printable.right_mm()
-            && cur_y + w <= printable.bottom_mm()
-        {
-            std::mem::swap(&mut w, &mut h);
-            rotated_90 = true;
-        }
-
-        if cur_x + w > printable.right_mm() && cur_x > printable.x_mm {
-            cur_x = printable.x_mm;
-            cur_y += shelf_h + gap;
-            shelf_h = 0.0;
-        }
-
-        // If starting a new shelf and unrotated exceeds right/bottom while rotated fits better, rotate 90 deg
-        if allow_rotate
-            && !rotated_90
-            && (cur_x + w > printable.right_mm() || cur_y + h > printable.bottom_mm())
-            && cur_x + h <= printable.right_mm()
-            && cur_y + w <= printable.bottom_mm()
-        {
-            std::mem::swap(&mut w, &mut h);
-            rotated_90 = true;
-        }
-
-        if cur_y + h > printable.bottom_mm() {
-            warnings.push(format!(
-                "Bild '{}' ragt über den unteren Seitenrand hinaus (größeres Papier wählen oder Bildmaße verkleinern).",
-                img.display_name
-            ));
-        }
-
-        let rect = RectMm::new(cur_x, cur_y, w, h);
+    for ((orig_slot_idx, img), (rect, rotated_90)) in
+        indexed_images.iter().zip(placements)
+    {
         let mut img_for_solve = img.clone();
         if rotated_90 {
             img_for_solve.crop.rotation_deg = (img_for_solve.crop.rotation_deg + 90) % 360;
@@ -803,9 +950,13 @@ pub fn solve_auto_nested_slots_indexed(
             cut_marks,
             caption_text: None,
         });
+    }
 
-        cur_x += w + gap;
-        shelf_h = shelf_h.max(h);
+    if slots.len() < indexed_images.len() {
+        let skipped = indexed_images.len() - slots.len();
+        warnings.push(format!(
+            "{skipped} weiteres/weitere Bild(er) passen nicht mehr auf diesen Bogen."
+        ));
     }
 
     slots
@@ -983,4 +1134,37 @@ mod tests {
             assert!(x + w <= 1.001 && y + h <= 1.001);
         }
     }
+
+    #[test]
+    fn sammel_packs_four_9x13_on_a4_portrait_in_2x2_grid() {
+        let mut doc = PrintJobDocument::default();
+        doc.printer.paper_size_key = "A4".into(); // 210 x 297 mm
+        let comp = FreeComposerSpec {
+            orientation: Orientation::Portrait,
+            allow_rotation_in_nest: true,
+            nest_gap_mm: 4.0,
+            page_margin_mm: 5.0,
+            ..Default::default()
+        };
+        let sz = SizeMm {
+            width_mm: 127.0,
+            height_mm: 89.0,
+        };
+        let four = vec![sz; 4];
+        assert_eq!(count_fitting_sammel_items(&doc, &comp, &four), 4);
+        let five = vec![sz; 5];
+        assert_eq!(count_fitting_sammel_items(&doc, &comp, &five), 4);
+
+        let printable = RectMm::new(5.0, 5.0, 200.0, 287.0);
+        let packed = pack_sammel_rects(&four, printable, 4.0, true);
+        assert_eq!(packed.len(), 4);
+        for &(r, rotated) in &packed {
+            assert!(rotated);
+            assert!((r.width_mm - 89.0).abs() < 1e-3);
+            assert!((r.height_mm - 127.0).abs() < 1e-3);
+            assert!(r.right_mm() <= printable.right_mm() + 1e-3);
+            assert!(r.bottom_mm() <= printable.bottom_mm() + 1e-3);
+        }
+    }
 }
+

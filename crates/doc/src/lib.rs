@@ -721,6 +721,13 @@ impl Default for TemplateLayoutSpec {
     }
 }
 
+fn default_sammel_size_mm() -> SizeMm {
+    SizeMm {
+        width_mm: 127.0,
+        height_mm: 89.0,
+    }
+}
+
 /// Multi-image Sammelbogen & Auto-Nesting layout settings (Qimage / Mirage Fine-Art RIP concept).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FreeComposerSpec {
@@ -730,6 +737,9 @@ pub struct FreeComposerSpec {
     pub allow_rotation_in_nest: bool,
     pub cut_marks: bool,
     pub frame_line: FrameLineSpec,
+    /// Default target print size (`mm`) applied to the next image placed on this Sammelbogen.
+    #[serde(default = "default_sammel_size_mm")]
+    pub default_size_mm: SizeMm,
     /// Optional per-slot target print size (`mm`) overriding `SourceImageEntry::composer_size_mm`.
     #[serde(default)]
     pub slot_sizes_mm: Vec<Option<SizeMm>>,
@@ -747,6 +757,7 @@ impl Default for FreeComposerSpec {
             allow_rotation_in_nest: true,
             cut_marks: true,
             frame_line: FrameLineSpec::default(),
+            default_size_mm: default_sammel_size_mm(),
             slot_sizes_mm: Vec::new(),
             keep_aspect_ratio: true,
         }

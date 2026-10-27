@@ -4801,22 +4801,26 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
                 let active_page = self.session.doc.active_page_index;
                 let active_slot = self.session.doc.active_slot_index;
-                let assigned_slot_id = self
-                    .session
-                    .doc
-                    .slot_assignments
-                    .get(active_slot)
-                    .copied()
-                    .flatten()
-                    .or_else(|| {
+                let selected_slot_idx: Option<usize> = self
+                    .slot_selected
+                    .then_some(active_slot)
+                    .filter(|&si| {
                         self.session
                             .doc
                             .slot_assignments
-                            .iter()
+                            .get(si)
                             .copied()
                             .flatten()
-                            .next()
+                            .is_some()
                     });
+                let assigned_slot_id = selected_slot_idx.and_then(|si| {
+                    self.session
+                        .doc
+                        .slot_assignments
+                        .get(si)
+                        .copied()
+                        .flatten()
+                });
                 let target_img = assigned_slot_id
                     .and_then(|id| self.session.doc.images.iter().find(|i| i.id == id))
                     .or_else(|| {
@@ -4826,17 +4830,15 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             .get(self.session.doc.active_image_index)
                     })
                     .cloned();
-                let mut cur_size = target_img
-                    .as_ref()
-                    .map(|img| comp.effective_slot_size_mm(active_slot, img))
-                    .unwrap_or(SizeMm {
-                        width_mm: 152.0,
-                        height_mm: 102.0,
-                    });
+                let mut cur_size = if let (Some(si), Some(img)) = (selected_slot_idx, target_img.as_ref()) {
+                    comp.effective_slot_size_mm(si, img)
+                } else {
+                    comp.default_size_mm
+                };
                 let img_aspect = target_img
                     .as_ref()
                     .map(effective_cropped_aspect)
-                    .unwrap_or(1.5)
+                    .unwrap_or(cur_size.width_mm / cur_size.height_mm.max(1.0))
                     .max(0.05);
                 let preset_lbl = match_photo_size_preset_label(cur_size)
                     .map(str::to_string)
@@ -4956,10 +4958,12 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         });
                         ui.end_row();
 
-                        ui.label(
-                            RichText::new(format!("Bildmaße (#{}):", active_slot + 1))
-                                .color(t.text_dim),
-                        );
+                        let size_row_lbl = if let Some(si) = selected_slot_idx {
+                            format!("Bildmaße (#{}):", si + 1)
+                        } else {
+                            String::from("Größe (Nächstes):")
+                        };
+                        ui.label(RichText::new(size_row_lbl).color(t.text_dim));
                         egui::ComboBox::from_id_salt("comp_size_preset_combo")
                             .selected_text(preset_lbl)
                             .width(245.0)
@@ -4969,12 +4973,17 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                     let is_match =
                                         matches_photo_size_preset(cur_size, preset_sz);
                                     if ui.selectable_label(is_match, lbl).clicked() {
-                                        size_cmd = Some(EngineCommand::SetComposerSlotSize {
-                                            page_index: active_page,
-                                            slot_index: Some(active_slot),
-                                            size_mm: preset_sz,
-                                            orient_to_image: true,
-                                        });
+                                        if let Some(si) = selected_slot_idx {
+                                            size_cmd = Some(EngineCommand::SetComposerSlotSize {
+                                                page_index: active_page,
+                                                slot_index: Some(si),
+                                                size_mm: preset_sz,
+                                                orient_to_image: true,
+                                            });
+                                        } else {
+                                            comp.default_size_mm = preset_sz;
+                                            changed = true;
+                                        }
                                     }
                                 }
                             });
@@ -5005,34 +5014,49 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 .clicked()
                             {
                                 std::mem::swap(&mut cur_size.width_mm, &mut cur_size.height_mm);
-                                size_cmd = Some(EngineCommand::SetComposerSlotSize {
-                                    page_index: active_page,
-                                    slot_index: Some(active_slot),
-                                    size_mm: cur_size,
-                                    orient_to_image: false,
-                                });
+                                if let Some(si) = selected_slot_idx {
+                                    size_cmd = Some(EngineCommand::SetComposerSlotSize {
+                                        page_index: active_page,
+                                        slot_index: Some(si),
+                                        size_mm: cur_size,
+                                        orient_to_image: false,
+                                    });
+                                } else {
+                                    comp.default_size_mm = cur_size;
+                                    changed = true;
+                                }
                             } else if w_changed {
                                 if comp.keep_aspect_ratio {
                                     cur_size.height_mm =
                                         (cur_size.width_mm / img_aspect).clamp(10.0, 800.0);
                                 }
-                                size_cmd = Some(EngineCommand::SetComposerSlotSize {
-                                    page_index: active_page,
-                                    slot_index: Some(active_slot),
-                                    size_mm: cur_size,
-                                    orient_to_image: false,
-                                });
+                                if let Some(si) = selected_slot_idx {
+                                    size_cmd = Some(EngineCommand::SetComposerSlotSize {
+                                        page_index: active_page,
+                                        slot_index: Some(si),
+                                        size_mm: cur_size,
+                                        orient_to_image: false,
+                                    });
+                                } else {
+                                    comp.default_size_mm = cur_size;
+                                    changed = true;
+                                }
                             } else if h_changed {
                                 if comp.keep_aspect_ratio {
                                     cur_size.width_mm =
                                         (cur_size.height_mm * img_aspect).clamp(10.0, 800.0);
                                 }
-                                size_cmd = Some(EngineCommand::SetComposerSlotSize {
-                                    page_index: active_page,
-                                    slot_index: Some(active_slot),
-                                    size_mm: cur_size,
-                                    orient_to_image: false,
-                                });
+                                if let Some(si) = selected_slot_idx {
+                                    size_cmd = Some(EngineCommand::SetComposerSlotSize {
+                                        page_index: active_page,
+                                        slot_index: Some(si),
+                                        size_mm: cur_size,
+                                        orient_to_image: false,
+                                    });
+                                } else {
+                                    comp.default_size_mm = cur_size;
+                                    changed = true;
+                                }
                             }
                         });
                         ui.end_row();
@@ -5052,7 +5076,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     if ui
                         .button("📏 Größe auf alle Bilder")
                         .on_hover_text(
-                            "Übernimmt die aktuelle Bildgröße für alle Bilder auf diesem Sammelbogen",
+                            "Übernimmt die eingestellte Bildgröße für alle platzierten Bilder auf dem Sammelbogen",
                         )
                         .clicked()
                     {
@@ -5062,27 +5086,6 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             size_mm: cur_size,
                             orient_to_image: true,
                         });
-                    }
-                    if let Some(pool_img) = self
-                        .session
-                        .doc
-                        .images
-                        .get(self.session.doc.active_image_index)
-                    {
-                        let pid = pool_img.id;
-                        if ui
-                            .button("➕ Pool-Bild hinzufügen")
-                            .on_hover_text(
-                                "Fügt das im Bilder-Pool markierte Bild als weiteres Foto auf diesem Sammelbogen hinzu",
-                            )
-                            .clicked()
-                        {
-                            size_cmd = Some(EngineCommand::PlacePoolImageOnSheet {
-                                image_id: pid,
-                                page_index: active_page,
-                                slot_index: None,
-                            });
-                        }
                     }
                     if self.session.doc.images.len() > 1
                         && ui

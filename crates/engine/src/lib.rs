@@ -29,8 +29,8 @@ use lumaprint_doc::{
 use lumaprint_geom::{MarginsMm, Orientation, RectMm, SizeMm};
 use lumaprint_ipp::{IppError, PrinterStatus, query_printer_status_ipp};
 use lumaprint_layout::{
-    SolvedPageLayout, build_grid_template, orient_size_for_image, slots_capacity_for_layout,
-    solve_page_layout, solve_page_layout_at,
+    SolvedPageLayout, build_grid_template, count_fitting_sammel_items, orient_size_for_image,
+    slots_capacity_for_layout, solve_page_layout, solve_page_layout_at,
 };
 use lumaprint_render::{RenderError, render_page_16bit, render_page_at_16bit};
 use serde::{Deserialize, Serialize};
@@ -1090,7 +1090,51 @@ impl Session {
                     height_mm: size_mm.height_mm.clamp(10.0, 800.0),
                 };
                 let pi = page_index.min(self.doc.pages.len().saturating_sub(1));
-                if let Some(page) = self.doc.pages.get_mut(pi) {
+                let is_sammel_all = slot_index.is_none()
+                    && self
+                        .doc
+                        .pages
+                        .get(pi)
+                        .is_some_and(|p| matches!(p.layout, LayoutMode::FreeComposer(_)));
+
+                if is_sammel_all {
+                    for page in &mut self.doc.pages {
+                        if let LayoutMode::FreeComposer(comp) = &mut page.layout {
+                            comp.default_size_mm = clamped;
+                            let slot_len = page.slot_assignments.len().max(25);
+                            comp.slot_sizes_mm.resize(slot_len, None);
+                            for (si, maybe_id) in
+                                page.slot_assignments.iter().copied().enumerate()
+                            {
+                                if let Some(id) = maybe_id {
+                                    let eff = if orient_to_image
+                                        && let Some(img) =
+                                            self.doc.images.iter().find(|i| i.id == id)
+                                    {
+                                        orient_size_for_image(clamped, img)
+                                    } else {
+                                        clamped
+                                    };
+                                    comp.slot_sizes_mm[si] = Some(eff);
+                                } else {
+                                    comp.slot_sizes_mm[si] = None;
+                                }
+                            }
+                        }
+                    }
+                    for img in &mut self.doc.images {
+                        img.composer_size_mm = if orient_to_image {
+                            orient_size_for_image(clamped, img)
+                        } else {
+                            clamped
+                        };
+                    }
+                    self.rebalance_sammel_pages();
+                    self.status_message = format!(
+                        "Bildmaße {:.1} × {:.1} mm auf alle Bilder des Sammelbogens angewendet.",
+                        clamped.width_mm, clamped.height_mm
+                    );
+                } else if let Some(page) = self.doc.pages.get_mut(pi) {
                     match &mut page.layout {
                         LayoutMode::FreeComposer(comp) => {
                             if let Some(si) = slot_index {
@@ -1110,6 +1154,7 @@ impl Session {
                                 } else {
                                     clamped
                                 };
+                                comp.default_size_mm = eff;
                                 if si >= comp.slot_sizes_mm.len() {
                                     comp.slot_sizes_mm.resize(si + 1, None);
                                 }
@@ -1126,35 +1171,6 @@ impl Session {
                                     eff.height_mm,
                                     pi + 1,
                                     si + 1
-                                );
-                            } else {
-                                // Apply to all slots on this Sammelbogen and all pool images
-                                let slot_len = page.slot_assignments.len().max(25);
-                                comp.slot_sizes_mm.resize(slot_len, None);
-                                for (si, maybe_id) in
-                                    page.slot_assignments.iter().copied().enumerate()
-                                {
-                                    let eff = if orient_to_image
-                                        && let Some(id) = maybe_id
-                                        && let Some(img) =
-                                            self.doc.images.iter().find(|i| i.id == id)
-                                    {
-                                        orient_size_for_image(clamped, img)
-                                    } else {
-                                        clamped
-                                    };
-                                    comp.slot_sizes_mm[si] = Some(eff);
-                                }
-                                for img in &mut self.doc.images {
-                                    img.composer_size_mm = if orient_to_image {
-                                        orient_size_for_image(clamped, img)
-                                    } else {
-                                        clamped
-                                    };
-                                }
-                                self.status_message = format!(
-                                    "Bildmaße {:.1} × {:.1} mm auf alle Bilder des Sammelbogens angewendet.",
-                                    clamped.width_mm, clamped.height_mm
                                 );
                             }
                         }
@@ -1188,6 +1204,7 @@ impl Session {
                         }
                         _ => {}
                     }
+                    self.rebalance_sammel_pages();
                 }
                 self.doc.load_active_page_from_list();
                 return Ok(());
@@ -1208,6 +1225,7 @@ impl Session {
                     let pi = self.doc.active_page_index;
                     self.auto_orient_image_for_slot(id, pi, slot_index);
                 }
+                self.rebalance_sammel_pages();
             }
             EngineCommand::AssignImageToPageSlot {
                 page_index,
@@ -1242,6 +1260,10 @@ impl Session {
                         comp.slot_sizes_mm = new_sizes;
                     }
                 }
+                if let Some(id) = image_id {
+                    self.auto_orient_image_for_slot(id, page_index, slot_index);
+                }
+                self.rebalance_sammel_pages();
                 self.doc.active_page_index = page_index.min(self.doc.pages.len().saturating_sub(1));
                 self.doc.active_slot_index = if image_id.is_some() {
                     slot_index
@@ -1250,7 +1272,6 @@ impl Session {
                 };
                 self.doc.load_active_page_from_list();
                 if let Some(id) = image_id {
-                    self.auto_orient_image_for_slot(id, page_index, slot_index);
                     if let Some((idx, img)) = self
                         .doc
                         .images
@@ -1262,8 +1283,8 @@ impl Session {
                         self.status_message = format!(
                             "Bild '{}' auf Bogen {} (Bildstelle {}) platziert.",
                             img.display_name,
-                            page_index + 1,
-                            slot_index + 1
+                            self.doc.active_page_index + 1,
+                            self.doc.active_slot_index + 1
                         );
                     }
                 } else {
@@ -1626,33 +1647,208 @@ impl Session {
         }
 
         self.doc.sync_active_page_to_list();
+        self.rebalance_sammel_pages();
+        self.doc.load_active_page_from_list();
         Ok(())
+    }
+
+    /// Rebalances all `FreeComposer` (`Sammelbogen`) pages so that:
+    /// 1. Any image that overflows the bottom edge of a `FreeComposer` page is moved to the next page
+    ///    (creating a new `FreeComposer` page if necessary).
+    /// 2. If space frees up on a `FreeComposer` page (e.g. after shrinking sizes or removing an image),
+    ///    items from subsequent `FreeComposer` pages are pulled back and empty trailing pages are removed.
+    fn rebalance_sammel_pages(&mut self) {
+        if !self
+            .doc
+            .pages
+            .iter()
+            .any(|p| matches!(p.layout, LayoutMode::FreeComposer(_)))
+        {
+            return;
+        }
+
+        let mut p_idx = 0usize;
+        while p_idx < self.doc.pages.len() {
+            let Some(comp_spec) = (match &self.doc.pages[p_idx].layout {
+                LayoutMode::FreeComposer(c) => Some(c.clone()),
+                _ => None,
+            }) else {
+                p_idx += 1;
+                continue;
+            };
+
+            let mut items = self.extract_sammel_page_items(p_idx, &comp_spec);
+
+            // Pull items from subsequent FreeComposer pages if they fit on `p_idx`
+            while p_idx + 1 < self.doc.pages.len() {
+                let Some(next_comp) = (match &self.doc.pages[p_idx + 1].layout {
+                    LayoutMode::FreeComposer(c) => Some(c.clone()),
+                    _ => None,
+                }) else {
+                    break;
+                };
+                let mut next_items = self.extract_sammel_page_items(p_idx + 1, &next_comp);
+                let Some(&(cand_id, cand_sz)) = next_items.first() else {
+                    break;
+                };
+                let mut test_sizes: Vec<SizeMm> = items.iter().map(|&(_, sz)| sz).collect();
+                test_sizes.push(cand_sz);
+                let fits = items.is_empty()
+                    || count_fitting_sammel_items(&self.doc, &comp_spec, &test_sizes)
+                        >= test_sizes.len();
+                if fits && items.len() < 25 {
+                    next_items.remove(0);
+                    items.push((cand_id, cand_sz));
+                    self.write_sammel_page_items(p_idx + 1, &next_items);
+                } else {
+                    break;
+                }
+            }
+
+            // Push overflowing items from `p_idx` to `p_idx + 1`
+            if items.len() > 1 {
+                let sizes: Vec<SizeMm> = items.iter().map(|&(_, sz)| sz).collect();
+                let fit = count_fitting_sammel_items(&self.doc, &comp_spec, &sizes).max(1);
+                if fit < items.len() {
+                    let overflow: Vec<(u64, SizeMm)> = items.drain(fit..).collect();
+                    let next_is_sammel = self
+                        .doc
+                        .pages
+                        .get(p_idx + 1)
+                        .is_some_and(|p| matches!(p.layout, LayoutMode::FreeComposer(_)));
+                    if next_is_sammel {
+                        if let LayoutMode::FreeComposer(next_comp) =
+                            self.doc.pages[p_idx + 1].layout.clone()
+                        {
+                            let mut next_items = overflow;
+                            next_items.extend(self.extract_sammel_page_items(p_idx + 1, &next_comp));
+                            self.write_sammel_page_items(p_idx + 1, &next_items);
+                        }
+                    } else {
+                        let next_id = self
+                            .doc
+                            .pages
+                            .iter()
+                            .map(|p| p.id)
+                            .max()
+                            .unwrap_or(0)
+                            + 1;
+                        let mut new_comp = comp_spec.clone();
+                        new_comp.slot_sizes_mm.clear();
+                        self.doc.pages.insert(
+                            p_idx + 1,
+                            PrintSheetPage {
+                                id: next_id,
+                                layout: LayoutMode::FreeComposer(new_comp),
+                                slot_assignments: vec![None; 25],
+                            },
+                        );
+                        self.write_sammel_page_items(p_idx + 1, &overflow);
+                    }
+                }
+            }
+
+            self.write_sammel_page_items(p_idx, &items);
+            p_idx += 1;
+        }
+
+        // Remove trailing empty FreeComposer overflow pages (always keeping at least 1 page)
+        while self.doc.pages.len() > 1 {
+            let remove_last = self.doc.pages.last().is_some_and(|last| {
+                matches!(last.layout, LayoutMode::FreeComposer(_))
+                    && last.slot_assignments.iter().all(Option::is_none)
+            });
+            if remove_last {
+                self.doc.pages.pop();
+            } else {
+                break;
+            }
+        }
+        if self.doc.active_page_index >= self.doc.pages.len() {
+            self.doc.active_page_index = self.doc.pages.len().saturating_sub(1);
+        }
+    }
+
+    fn extract_sammel_page_items(
+        &self,
+        page_index: usize,
+        comp_spec: &lumaprint_doc::FreeComposerSpec,
+    ) -> Vec<(u64, SizeMm)> {
+        let Some(page) = self.doc.pages.get(page_index) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for (si, maybe_id) in page.slot_assignments.iter().copied().enumerate() {
+            let Some(id) = maybe_id else {
+                continue;
+            };
+            let sz = if let Some(img) = self.doc.images.iter().find(|i| i.id == id) {
+                comp_spec.effective_slot_size_mm(si, img)
+            } else {
+                comp_spec
+                    .slot_sizes_mm
+                    .get(si)
+                    .copied()
+                    .flatten()
+                    .unwrap_or(comp_spec.default_size_mm)
+            };
+            out.push((id, sz));
+        }
+        out
+    }
+
+    fn write_sammel_page_items(&mut self, page_index: usize, items: &[(u64, SizeMm)]) {
+        let Some(page) = self.doc.pages.get_mut(page_index) else {
+            return;
+        };
+        let slot_len = items.len().max(25);
+        let mut new_slots = vec![None; slot_len];
+        let mut new_sizes = vec![None; slot_len];
+        for (i, &(id, sz)) in items.iter().enumerate() {
+            new_slots[i] = Some(id);
+            new_sizes[i] = Some(sz);
+        }
+        page.slot_assignments = new_slots;
+        if let LayoutMode::FreeComposer(comp) = &mut page.layout {
+            comp.slot_sizes_mm = new_sizes;
+        }
     }
 
     /// Automatically rotates `image_id` by 90° if its current cropped aspect orientation
     /// (landscape vs. portrait) does not match the target slot's orientation on `page_index`.
     /// In `FreeComposer` (`Sammelbogen`) mode, the slot size instead adapts to the image's orientation.
     fn auto_orient_image_for_slot(&mut self, image_id: u64, page_index: usize, slot_index: usize) {
-        let is_composer = self
+        let comp_default = self
             .doc
             .pages
             .get(page_index)
-            .map(|p| matches!(p.layout, LayoutMode::FreeComposer(_)))
-            .unwrap_or_else(|| matches!(self.doc.layout, LayoutMode::FreeComposer(_)));
+            .and_then(|p| match &p.layout {
+                LayoutMode::FreeComposer(c) => Some((
+                    c.default_size_mm,
+                    c.slot_sizes_mm.get(slot_index).copied().flatten(),
+                )),
+                _ => None,
+            })
+            .or_else(|| match &self.doc.layout {
+                LayoutMode::FreeComposer(c) => Some((
+                    c.default_size_mm,
+                    c.slot_sizes_mm.get(slot_index).copied().flatten(),
+                )),
+                _ => None,
+            });
 
-        if is_composer {
+        if let Some((default_sz, existing_slot_sz)) = comp_default {
             if let Some(img) = self.doc.images.iter_mut().find(|i| i.id == image_id) {
-                img.composer_size_mm = orient_size_for_image(img.composer_size_mm, img);
-                let oriented = img.composer_size_mm;
+                let base_sz = existing_slot_sz.unwrap_or(default_sz);
+                let oriented = orient_size_for_image(base_sz, img);
+                img.composer_size_mm = oriented;
                 if let Some(page) = self.doc.pages.get_mut(page_index)
                     && let LayoutMode::FreeComposer(comp) = &mut page.layout
                 {
                     if slot_index >= comp.slot_sizes_mm.len() {
                         comp.slot_sizes_mm.resize(slot_index + 1, None);
                     }
-                    if comp.slot_sizes_mm[slot_index].is_none() {
-                        comp.slot_sizes_mm[slot_index] = Some(oriented);
-                    }
+                    comp.slot_sizes_mm[slot_index] = Some(oriented);
                 }
             }
             return;
@@ -1705,12 +1901,33 @@ impl Session {
                 page.slot_assignments[si] = Some(img_id);
             }
             self.auto_orient_image_for_slot(img_id, pi, si);
+            self.rebalance_sammel_pages();
             return (pi, si);
         }
 
         let page_len = self.doc.pages.len();
         let start_pi = preferred_page.min(page_len.saturating_sub(1));
         for p_idx in start_pi..page_len {
+            if let LayoutMode::FreeComposer(comp) = self.doc.pages[p_idx].layout.clone() {
+                let existing = self.extract_sammel_page_items(p_idx, &comp);
+                if !existing.is_empty() {
+                    let new_sz = self
+                        .doc
+                        .images
+                        .iter()
+                        .find(|i| i.id == img_id)
+                        .map(|img| orient_size_for_image(comp.default_size_mm, img))
+                        .unwrap_or(comp.default_size_mm);
+                    let mut cand_sizes: Vec<SizeMm> =
+                        existing.iter().map(|&(_, sz)| sz).collect();
+                    cand_sizes.push(new_sz);
+                    if count_fitting_sammel_items(&self.doc, &comp, &cand_sizes) < cand_sizes.len()
+                    {
+                        continue;
+                    }
+                }
+            }
+
             let cap = slots_capacity_for_layout(&self.doc, &self.doc.pages[p_idx].layout);
             if let Some(page) = self.doc.pages.get_mut(p_idx) {
                 if page.slot_assignments.len() < cap {
@@ -1738,13 +1955,16 @@ impl Session {
             .max()
             .unwrap_or(0)
             + 1;
-        let inherited_layout = self
+        let mut inherited_layout = self
             .doc
             .pages
             .get(start_pi)
             .or_else(|| self.doc.pages.last())
             .map(|p| p.layout.clone())
             .unwrap_or_else(|| self.doc.layout.clone());
+        if let LayoutMode::FreeComposer(comp) = &mut inherited_layout {
+            comp.slot_sizes_mm.clear();
+        }
         let mut slots = vec![None; 25];
         slots[0] = Some(img_id);
         self.doc.pages.push(PrintSheetPage {
@@ -2291,6 +2511,75 @@ mod tests {
             .unwrap();
         assert_eq!(session.doc.images[0].crop.rotation_deg % 180, 0);
     }
+
+    #[test]
+    fn sammel_multi_page_overflow_and_resize_rebalance_works() {
+        let mut session = Session::new();
+        session.doc.printer.paper_size_key = String::from("A4");
+        for idx in 1..=5 {
+            session.doc.images.push(SourceImageEntry {
+                id: idx,
+                path: format!("sammel_{idx}.tif"),
+                display_name: format!("sammel_{idx}.tif"),
+                meta: Default::default(),
+                crop: CropSpec::default(),
+                composer_size_mm: SizeMm {
+                    width_mm: 127.0,
+                    height_mm: 89.0,
+                },
+                composer_pos_mm: (10.0, 10.0),
+            });
+        }
+        session.next_image_id = 6;
+        session
+            .execute(EngineCommand::SetLayoutMode(LayoutMode::FreeComposer(
+                lumaprint_doc::FreeComposerSpec::default(),
+            )))
+            .unwrap();
+
+        // Place 5 images of 9x13 cm (127 x 89 mm) onto A4 Portrait:
+        // 4 fit on Bogen 1 (in a 2x2 grid), the 5th must be placed on Bogen 2!
+        for idx in 1..=5 {
+            session
+                .execute(EngineCommand::PlacePoolImageOnSheet {
+                    image_id: idx,
+                    page_index: 0,
+                    slot_index: None,
+                })
+                .unwrap();
+        }
+        assert_eq!(session.doc.page_count(), 2);
+        let p0_count = session.doc.pages[0]
+            .slot_assignments
+            .iter()
+            .flatten()
+            .count();
+        let p1_count = session.doc.pages[1]
+            .slot_assignments
+            .iter()
+            .flatten()
+            .count();
+        assert_eq!(p0_count, 4);
+        assert_eq!(p1_count, 1);
+
+        // Resize all images to 60x60 mm ("Größe auf alle Bilder") -> all 5 now fit on Bogen 1, Bogen 2 is removed!
+        session
+            .execute(EngineCommand::SetComposerSlotSize {
+                page_index: 0,
+                slot_index: None,
+                size_mm: SizeMm {
+                    width_mm: 60.0,
+                    height_mm: 60.0,
+                },
+                orient_to_image: false,
+            })
+            .unwrap();
+        assert_eq!(session.doc.page_count(), 1);
+        let p0_after = session.doc.pages[0]
+            .slot_assignments
+            .iter()
+            .flatten()
+            .count();
+        assert_eq!(p0_after, 5);
+    }
 }
-
-
