@@ -2616,8 +2616,26 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     }
                 }
 
+                // Check if this page is in Standard layout with free/axis-free movement enabled
+                let std_free_move = match self.session.doc.page_layout(page_index) {
+                    LayoutMode::Standard(std_spec) => {
+                        !(self.session.doc.printer.borderless && std_spec.fit_to_scale)
+                            && std_spec.centering != CenteringMode::Center
+                            && self.session.doc.canvas_view_mode == CanvasViewMode::SinglePage
+                    }
+                    _ => false,
+                };
+
                 // Shift + Left-Click Drag -> pan image inside slot (`pan_x`, `pan_y`) when zoomed or Fill
                 let shift_held = ui.ctx().input(|i| i.modifiers.shift);
+                if std_free_move && !shift_held {
+                    if resp.dragged() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                    } else if resp.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                    }
+                }
+
                 if resp.drag_started() || resp.dragged() {
                     self.session.doc.active_slot_index = slot.slot_index;
                     self.slot_selected = true;
@@ -2643,6 +2661,65 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 }
                                 pending_cmd =
                                     Some(EngineCommand::SetImageCrop { image_id: img_id, crop });
+                            }
+                        }
+                    } else if std_free_move {
+                        let delta = resp.drag_delta();
+                        if delta.length_sq() > 0.01 && scale > 0.01 {
+                            if let LayoutMode::Standard(mut std_spec) =
+                                self.session.doc.page_layout(page_index).clone()
+                            {
+                                let dx_mm = f64::from(delta.x / scale);
+                                let dy_mm = f64::from(delta.y / scale);
+                                let cur_r = slot.image_draw_rect_mm;
+                                let pw = solved.paper_size_mm.width_mm;
+                                let ph = solved.paper_size_mm.height_mm;
+                                let max_x = (pw - cur_r.width_mm).max(0.0);
+                                let max_y = (ph - cur_r.height_mm).max(0.0);
+
+                                let new_x = match std_spec.centering {
+                                    CenteringMode::None | CenteringMode::Vertical => {
+                                        (cur_r.x_mm + dx_mm).clamp(0.0, max_x)
+                                    }
+                                    CenteringMode::Center | CenteringMode::Horizontal => cur_r.x_mm,
+                                };
+                                let new_y = match std_spec.centering {
+                                    CenteringMode::None | CenteringMode::Horizontal => {
+                                        (cur_r.y_mm + dy_mm).clamp(0.0, max_y)
+                                    }
+                                    CenteringMode::Center | CenteringMode::Vertical => cur_r.y_mm,
+                                };
+
+                                std_spec.manual_rect_mm.x_mm = new_x;
+                                std_spec.manual_rect_mm.y_mm = new_y;
+                                std_spec.manual_rect_mm.width_mm = cur_r.width_mm;
+                                std_spec.manual_rect_mm.height_mm = cur_r.height_mm;
+
+                                if std_spec.criterion == SizingCriterion::Margin {
+                                    if matches!(
+                                        std_spec.centering,
+                                        CenteringMode::None | CenteringMode::Vertical
+                                    ) {
+                                        std_spec.margins_mm.left_mm = new_x;
+                                        std_spec.margins_mm.right_mm =
+                                            (pw - new_x - cur_r.width_mm).max(0.0);
+                                    }
+                                    if matches!(
+                                        std_spec.centering,
+                                        CenteringMode::None | CenteringMode::Horizontal
+                                    ) {
+                                        std_spec.margins_mm.top_mm = new_y;
+                                        std_spec.margins_mm.bottom_mm =
+                                            (ph - new_y - cur_r.height_mm).max(0.0);
+                                    }
+                                }
+
+                                if !is_active_page {
+                                    self.exec(EngineCommand::SelectPage { page_index });
+                                }
+                                pending_cmd = Some(EngineCommand::SetLayoutMode(
+                                    LayoutMode::Standard(std_spec),
+                                ));
                             }
                         }
                     } else {
@@ -3775,6 +3852,22 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                         .selectable_value(&mut std_spec.centering, c, c.label_de())
                                         .changed()
                                     {
+                                        if c != CenteringMode::Center {
+                                            if let Some(ref solved) = self.cached_solved {
+                                                if let Some(slot) = solved.slots.first() {
+                                                    let cur_r = slot.image_draw_rect_mm;
+                                                    let pw = solved.paper_size_mm.width_mm;
+                                                    let ph = solved.paper_size_mm.height_mm;
+                                                    std_spec.manual_rect_mm = cur_r;
+                                                    std_spec.margins_mm.left_mm = cur_r.x_mm;
+                                                    std_spec.margins_mm.top_mm = cur_r.y_mm;
+                                                    std_spec.margins_mm.right_mm =
+                                                        (pw - cur_r.right_mm()).max(0.0);
+                                                    std_spec.margins_mm.bottom_mm =
+                                                        (ph - cur_r.bottom_mm()).max(0.0);
+                                                }
+                                            }
+                                        }
                                         changed = true;
                                     }
                                 }
@@ -3809,7 +3902,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 if ui
                                     .add(
                                         egui::DragValue::new(&mut std_spec.margins_mm.top_mm)
-                                            .range(0.0..=120.0)
+                                            .range(0.0..=800.0)
                                             .speed(0.5)
                                             .suffix(" mm"),
                                     )
@@ -3821,7 +3914,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 if ui
                                     .add(
                                         egui::DragValue::new(&mut std_spec.margins_mm.bottom_mm)
-                                            .range(0.0..=120.0)
+                                            .range(0.0..=800.0)
                                             .speed(0.5)
                                             .suffix(" mm"),
                                     )
@@ -3837,7 +3930,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 if ui
                                     .add(
                                         egui::DragValue::new(&mut std_spec.margins_mm.left_mm)
-                                            .range(0.0..=120.0)
+                                            .range(0.0..=800.0)
                                             .speed(0.5)
                                             .suffix(" mm"),
                                     )
@@ -3849,7 +3942,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 if ui
                                     .add(
                                         egui::DragValue::new(&mut std_spec.margins_mm.right_mm)
-                                            .range(0.0..=120.0)
+                                            .range(0.0..=800.0)
                                             .speed(0.5)
                                             .suffix(" mm"),
                                     )
@@ -3889,6 +3982,48 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 }
                             });
                             ui.end_row();
+
+                            if std_spec.centering != CenteringMode::Center {
+                                ui.label(RichText::new("Position (L / O):").color(t.text_dim));
+                                ui.horizontal(|ui| {
+                                    let can_x = matches!(
+                                        std_spec.centering,
+                                        CenteringMode::None | CenteringMode::Vertical
+                                    );
+                                    let can_y = matches!(
+                                        std_spec.centering,
+                                        CenteringMode::None | CenteringMode::Horizontal
+                                    );
+                                    if ui
+                                        .add_enabled(
+                                            can_x,
+                                            egui::DragValue::new(&mut std_spec.manual_rect_mm.x_mm)
+                                                .range(0.0..=800.0)
+                                                .speed(0.5)
+                                                .suffix(" mm"),
+                                        )
+                                        .on_hover_text("Abstand vom linken Blattrand")
+                                        .changed()
+                                    {
+                                        changed = true;
+                                    }
+                                    ui.label("×");
+                                    if ui
+                                        .add_enabled(
+                                            can_y,
+                                            egui::DragValue::new(&mut std_spec.manual_rect_mm.y_mm)
+                                                .range(0.0..=800.0)
+                                                .speed(0.5)
+                                                .suffix(" mm"),
+                                        )
+                                        .on_hover_text("Abstand vom oberen Blattrand")
+                                        .changed()
+                                    {
+                                        changed = true;
+                                    }
+                                });
+                                ui.end_row();
+                            }
                         }
 
                         ui.label(RichText::new("Proportionen:").color(t.text_dim));

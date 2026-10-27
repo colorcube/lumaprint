@@ -800,8 +800,19 @@ fn solve_slot_draw_and_uv(
         draw_h,
     );
     if let Some(page) = page_size_mm {
-        if total_scale <= 1.001 {
-            draw_rect = apply_centering(draw_rect, page, centering);
+        if !force_fill {
+            draw_rect.x_mm = match centering {
+                CenteringMode::Center | CenteringMode::Horizontal => {
+                    (page.width_mm - draw_rect.width_mm) * 0.5
+                }
+                CenteringMode::None | CenteringMode::Vertical => slot_rect_mm.x_mm,
+            };
+            draw_rect.y_mm = match centering {
+                CenteringMode::Center | CenteringMode::Vertical => {
+                    (page.height_mm - draw_rect.height_mm) * 0.5
+                }
+                CenteringMode::None | CenteringMode::Horizontal => slot_rect_mm.y_mm,
+            };
         }
     }
 
