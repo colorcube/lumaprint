@@ -194,16 +194,16 @@ fn draw_color_swatch_item(ui: &mut Ui, rgb: Rgb8, label: &str, selected: bool) -
 }
 
 /// Renders the `Rahmenlinie:` and (when enabled) `Rahmenfarbe:` rows inside a 2-column layout Grid.
-/// Returns `(changed_frame_line, optional_add_custom_color)`.
+/// Returns `(changed_frame_line, optional_custom_color_command)`.
 fn draw_frame_line_rows(
     ui: &mut Ui,
     id_prefix: &'static str,
     t: &Tokens,
     frame_line: &mut FrameLineSpec,
     custom_colors: &[(String, Rgb8)],
-) -> (bool, Option<(String, Rgb8)>) {
+) -> (bool, Option<EngineCommand>) {
     let mut changed = false;
-    let mut add_custom: Option<(String, Rgb8)> = None;
+    let mut color_cmd: Option<EngineCommand> = None;
 
     ui.label(RichText::new("Rahmenlinie:").color(t.text_dim));
     ui.horizontal(|ui| {
@@ -281,20 +281,27 @@ fn draw_frame_line_rows(
                     }
                 });
 
-            let already_in_list = matched_gray.is_some() || matched_custom.is_some();
-            if ui
-                .add_enabled(!already_in_list, egui::Button::new("➕"))
+            if matched_custom.is_some() {
+                if ui
+                    .button(RichText::new("🗑").color(t.danger))
+                    .on_hover_text("Gespeicherte eigene Farbe aus der Auswahlliste löschen")
+                    .clicked()
+                {
+                    color_cmd = Some(EngineCommand::RemoveCustomFrameColor(cur_c));
+                }
+            } else if ui
+                .add_enabled(matched_gray.is_none(), egui::Button::new("➕"))
                 .on_hover_text("Aktuelle freie Farbe zur Auswahlliste hinzufügen")
                 .clicked()
             {
                 let name = format!("Farbe #{:02X}{:02X}{:02X}", cur_c.r, cur_c.g, cur_c.b);
-                add_custom = Some((name, cur_c));
+                color_cmd = Some(EngineCommand::AddCustomFrameColor { name, color: cur_c });
             }
         });
         ui.end_row();
     }
 
-    (changed, add_custom)
+    (changed, color_cmd)
 }
 
 /// Drag & Drop payload shared between the Image Pool, Page Slots, and Page Navigator.
@@ -4619,7 +4626,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
                         ui.end_row();
 
-                        let (fl_changed, fl_add) = draw_frame_line_rows(
+                        let (fl_changed, fl_cmd) = draw_frame_line_rows(
                             ui,
                             "std",
                             &t,
@@ -4629,8 +4636,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         if fl_changed {
                             changed = true;
                         }
-                        if let Some((name, color)) = fl_add {
-                            self.exec(EngineCommand::AddCustomFrameColor { name, color });
+                        if let Some(cmd) = fl_cmd {
+                            self.exec(cmd);
                         }
                     });
 
@@ -4746,7 +4753,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
             LayoutMode::Template(mut tpl_spec) => {
                 let mut changed = false;
-                let mut add_custom_color: Option<(String, Rgb8)> = None;
+                let mut custom_color_cmd: Option<EngineCommand> = None;
                 let custom_colors = self.session.doc.user_backup.custom_frame_colors.clone();
                 let all_tpls = builtin_templates();
                 let current_tpl_label = self
@@ -4860,7 +4867,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
                         ui.end_row();
 
-                        let (fl_changed, fl_add) = draw_frame_line_rows(
+                        let (fl_changed, fl_cmd) = draw_frame_line_rows(
                             ui,
                             "tpl",
                             &t,
@@ -4870,8 +4877,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         if fl_changed {
                             changed = true;
                         }
-                        if fl_add.is_some() {
-                            add_custom_color = fl_add;
+                        if fl_cmd.is_some() {
+                            custom_color_cmd = fl_cmd;
                         }
 
                         ui.label(RichText::new("Bildunterschrift:").color(t.text_dim));
@@ -4932,8 +4939,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 if changed {
                     self.exec(EngineCommand::SetLayoutMode(LayoutMode::Template(tpl_spec)));
                 }
-                if let Some((name, color)) = add_custom_color {
-                    self.exec(EngineCommand::AddCustomFrameColor { name, color });
+                if let Some(cmd) = custom_color_cmd {
+                    self.exec(cmd);
                 }
             }
 
@@ -4964,7 +4971,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             LayoutMode::FreeComposer(mut comp) => {
                 let mut changed = false;
                 let mut size_cmd: Option<EngineCommand> = None;
-                let mut add_custom_color: Option<(String, Rgb8)> = None;
+                let mut custom_color_cmd: Option<EngineCommand> = None;
                 let custom_colors = self.session.doc.user_backup.custom_frame_colors.clone();
 
                 let active_page = self.session.doc.active_page_index;
@@ -5103,7 +5110,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
                         ui.end_row();
 
-                        let (fl_changed, fl_add) = draw_frame_line_rows(
+                        let (fl_changed, fl_cmd) = draw_frame_line_rows(
                             ui,
                             "comp",
                             &t,
@@ -5113,8 +5120,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         if fl_changed {
                             changed = true;
                         }
-                        if fl_add.is_some() {
-                            add_custom_color = fl_add;
+                        if fl_cmd.is_some() {
+                            custom_color_cmd = fl_cmd;
                         }
 
                         let size_row_lbl = if let Some(si) = selected_slot_idx {
@@ -5263,8 +5270,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 if changed {
                     self.exec(EngineCommand::SetLayoutMode(LayoutMode::FreeComposer(comp)));
                 }
-                if let Some((name, color)) = add_custom_color {
-                    self.exec(EngineCommand::AddCustomFrameColor { name, color });
+                if let Some(cmd) = custom_color_cmd {
+                    self.exec(cmd);
                 }
                 if let Some(cmd) = size_cmd {
                     self.exec(cmd);

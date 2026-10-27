@@ -252,6 +252,7 @@ pub enum EngineCommand {
         name: String,
         color: Rgb8,
     },
+    RemoveCustomFrameColor(Rgb8),
     SetGalleryWrap(GalleryWrapSpec),
     SetTemplateId(String),
     CreateGridTemplate {
@@ -1007,6 +1008,19 @@ impl Session {
                         .push((label.clone(), color));
                     self.status_message =
                         format!("Rahmenfarbe '{label}' zur Farbliste hinzugefügt.");
+                }
+            }
+            EngineCommand::RemoveCustomFrameColor(color) => {
+                let before = self.doc.user_backup.custom_frame_colors.len();
+                self.doc
+                    .user_backup
+                    .custom_frame_colors
+                    .retain(|(_, c)| *c != color);
+                if self.doc.user_backup.custom_frame_colors.len() < before {
+                    self.status_message = format!(
+                        "Eigene Rahmenfarbe #{:02X}{:02X}{:02X} aus der Farbliste gelöscht.",
+                        color.r, color.g, color.b
+                    );
                 }
             }
             EngineCommand::SetGalleryWrap(gw) => {
