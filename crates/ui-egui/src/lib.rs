@@ -304,7 +304,29 @@ fn draw_frame_line_rows(
     (changed, color_cmd)
 }
 
-/// Drag & Drop payload shared between the Image Pool, Page Slots, and Page Navigator.
+/// Movable Dock panels that can be dragged by their header/tab and dropped onto edge zones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DockDragItem {
+    Pool,
+    PageList,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DockDropTarget {
+    PoolPos(FilmstripPosition),
+    PageListPos(PageListPosition),
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DockDropZone {
+    target: DockDropTarget,
+    hit_rect: Rect,
+    preview_rect: Rect,
+    label: &'static str,
+    is_current: bool,
+}
+
+/// Drag & Drop payload shared between the Image Pool, Page Slots, Page Navigator, and movable Docks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DragPayload {
     /// Dragging an image from the Image Pool by its `image_id`.
@@ -317,6 +339,8 @@ enum DragPayload {
     },
     /// Reordering a page in the Page-Thumbnail Navigator.
     ReorderPage(usize),
+    /// Dragging a Dock header or tab to a new edge/dock target (KDE / JetBrains IDEA style).
+    DockPanel(DockDragItem),
 }
 
 #[derive(Debug, Clone)]
@@ -794,6 +818,246 @@ impl LumaPrintApp {
                 self.set_page_list_position(pos);
                 ui.close_menu();
             }
+        }
+    }
+
+    /// Renders a draggable Dock title or tab (KDE / JetBrains IDEA style).
+    /// Returns `true` if clicked (or hovered while dragging an image to switch tabs).
+    fn draggable_dock_tab(
+        &mut self,
+        ui: &mut Ui,
+        item: DockDragItem,
+        label: impl Into<String>,
+        is_selected: bool,
+        as_tab: bool,
+    ) -> bool {
+        let t = self.tokens;
+        let text = label.into();
+        let rich = if as_tab {
+            RichText::new(text).strong().color(if is_selected {
+                t.text
+            } else {
+                t.text_dim
+            })
+        } else {
+            RichText::new(text).strong().color(t.text)
+        };
+
+        let btn = if as_tab {
+            egui::Button::new(rich)
+                .fill(if is_selected {
+                    t.accent.gamma_multiply(0.24)
+                } else {
+                    Color32::TRANSPARENT
+                })
+                .stroke(if is_selected {
+                    Stroke::new(1.0_f32, t.accent)
+                } else {
+                    Stroke::NONE
+                })
+                .sense(Sense::click_and_drag())
+        } else {
+            egui::Button::new(rich)
+                .frame(false)
+                .sense(Sense::click_and_drag())
+        };
+
+        let resp = ui
+            .add(btn)
+            .on_hover_cursor(egui::CursorIcon::Grab)
+            .on_hover_text(
+                "Mit der Maus ziehen, um das Dock an eine andere Position zu verschieben (Rechtsklick für Menü)",
+            );
+
+        if resp.drag_started() || resp.dragged() {
+            let payload = DragPayload::DockPanel(item);
+            self.active_drag = Some(payload);
+            egui::DragAndDrop::set_payload(ui.ctx(), payload);
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        }
+
+        resp.context_menu(|ui| {
+            self.draw_dock_placement_menu(ui);
+        });
+
+        let image_drag_hovered = matches!(
+            self.active_drag,
+            Some(DragPayload::PoolImage(_) | DragPayload::PageSlot { .. })
+        ) && resp.hovered();
+
+        resp.clicked() || image_drag_hovered
+    }
+
+    fn compute_dock_drop_zones(&self, ctx: &Context, item: DockDragItem) -> Vec<DockDropZone> {
+        let screen = ctx.screen_rect();
+        let top_y = (screen.min.y + 44.0).min(screen.max.y);
+        let left_w = 295.0_f32.min(screen.width() * 0.28).max(160.0);
+        let right_w = 430.0_f32.min(screen.width() * 0.36).max(200.0);
+        let cx_min = if self.last_canvas_rect.width() > 80.0 {
+            self.last_canvas_rect.min.x
+        } else {
+            (screen.min.x + left_w).min(screen.center().x)
+        };
+        let cx_max = if self.last_canvas_rect.width() > 80.0 {
+            self.last_canvas_rect.max.x
+        } else {
+            (screen.max.x - right_w).max(screen.center().x)
+        };
+
+        let left_preview = Rect::from_min_max(
+            Pos2::new(screen.min.x, top_y),
+            Pos2::new(screen.min.x + left_w, screen.max.y),
+        );
+        let left_hit = Rect::from_min_max(
+            Pos2::new(screen.min.x, top_y),
+            Pos2::new(
+                screen.min.x + left_w,
+                (screen.max.y - 150.0).max(top_y + 60.0),
+            ),
+        );
+
+        match item {
+            DockDragItem::Pool => {
+                let cur = self.session.doc.filmstrip_position;
+                let right_preview =
+                    Rect::from_min_max(Pos2::new(screen.max.x - right_w, top_y), screen.max);
+                let right_hit = Rect::from_min_max(
+                    Pos2::new(screen.max.x - right_w, top_y),
+                    Pos2::new(screen.max.x, (screen.max.y - 150.0).max(top_y + 60.0)),
+                );
+                let bottom_preview = Rect::from_min_max(
+                    Pos2::new(screen.min.x, (screen.max.y - 165.0).max(top_y)),
+                    screen.max,
+                );
+                let bottom_hit = Rect::from_min_max(
+                    Pos2::new(screen.min.x, (screen.max.y - 150.0).max(top_y)),
+                    screen.max,
+                );
+                vec![
+                    DockDropZone {
+                        target: DockDropTarget::PoolPos(FilmstripPosition::Left),
+                        hit_rect: left_hit,
+                        preview_rect: left_preview,
+                        label: "⬅ Links am Rand",
+                        is_current: cur == FilmstripPosition::Left,
+                    },
+                    DockDropZone {
+                        target: DockDropTarget::PoolPos(FilmstripPosition::RightTabbed),
+                        hit_rect: right_hit,
+                        preview_rect: right_preview,
+                        label: "➡ Rechts als Tab (Druck-Einstellungen)",
+                        is_current: cur == FilmstripPosition::RightTabbed,
+                    },
+                    DockDropZone {
+                        target: DockDropTarget::PoolPos(FilmstripPosition::Bottom),
+                        hit_rect: bottom_hit,
+                        preview_rect: bottom_preview,
+                        label: "⬇ Unten",
+                        is_current: cur == FilmstripPosition::Bottom,
+                    },
+                ]
+            }
+            DockDragItem::PageList => {
+                let cur = self.session.doc.page_list_position;
+                let split_y = (screen.max.y - 72.0).max(top_y + 40.0);
+                let inner_top_y = (screen.max.y - 150.0).max(top_y);
+                let in_canvas_preview = Rect::from_min_max(
+                    Pos2::new(cx_min, (screen.max.y - 114.0).max(top_y)),
+                    Pos2::new(cx_max, screen.max.y),
+                );
+                let in_canvas_hit =
+                    Rect::from_min_max(Pos2::new(cx_min, inner_top_y), Pos2::new(cx_max, split_y));
+                let full_bottom_preview = Rect::from_min_max(
+                    Pos2::new(screen.min.x, (screen.max.y - 114.0).max(top_y)),
+                    screen.max,
+                );
+                let full_bottom_hit =
+                    Rect::from_min_max(Pos2::new(screen.min.x, split_y), screen.max);
+                vec![
+                    DockDropZone {
+                        target: DockDropTarget::PageListPos(PageListPosition::Left),
+                        hit_rect: left_hit,
+                        preview_rect: left_preview,
+                        label: "⬅ Links am Rand",
+                        is_current: cur == PageListPosition::Left,
+                    },
+                    DockDropZone {
+                        target: DockDropTarget::PageListPos(PageListPosition::BottomInCanvas),
+                        hit_rect: in_canvas_hit,
+                        preview_rect: in_canvas_preview,
+                        label: "⬇ Nur im Bogen unten",
+                        is_current: cur == PageListPosition::BottomInCanvas,
+                    },
+                    DockDropZone {
+                        target: DockDropTarget::PageListPos(PageListPosition::BottomFullWidth),
+                        hit_rect: full_bottom_hit,
+                        preview_rect: full_bottom_preview,
+                        label: "⬇ Auf volle Breite unten",
+                        is_current: cur == PageListPosition::BottomFullWidth,
+                    },
+                ]
+            }
+        }
+    }
+
+    fn draw_dock_drop_zones_overlay(&self, ctx: &Context, item: DockDragItem, pos: Pos2) {
+        let t = self.tokens;
+        let zones = self.compute_dock_drop_zones(ctx, item);
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("lumaprint_dock_drop_zones_layer"),
+        ));
+
+        // 1. Paint full target footprint preview for the hovered drop zone (KDE / IDEA live dock preview)
+        for z in &zones {
+            if z.hit_rect.contains(pos) {
+                painter.rect_filled(
+                    z.preview_rect,
+                    CornerRadius::same(4),
+                    t.accent.gamma_multiply(0.18),
+                );
+                painter.rect_stroke(
+                    z.preview_rect.shrink(1.5),
+                    CornerRadius::same(4),
+                    Stroke::new(2.5_f32, t.accent),
+                    StrokeKind::Middle,
+                );
+            }
+        }
+
+        // 2. Paint labeled drop-zone indicator pills in each zone
+        for z in &zones {
+            let hovered = z.hit_rect.contains(pos);
+            let pill_size = Vec2::new(250.0_f32.min(z.hit_rect.width() - 16.0).max(130.0), 36.0);
+            let pill_rect = Rect::from_center_size(z.hit_rect.center(), pill_size);
+
+            let bg = if hovered {
+                t.accent
+            } else {
+                t.chrome.gamma_multiply(0.94)
+            };
+            let fg = if hovered {
+                Color32::WHITE
+            } else if z.is_current {
+                t.accent
+            } else {
+                t.text
+            };
+            let border = if hovered {
+                Stroke::new(2.0_f32, Color32::WHITE)
+            } else {
+                Stroke::new(1.5_f32, t.accent)
+            };
+
+            painter.rect_filled(pill_rect, CornerRadius::same(6), bg);
+            painter.rect_stroke(pill_rect, CornerRadius::same(6), border, StrokeKind::Middle);
+            painter.text(
+                pill_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                z.label,
+                FontId::proportional(12.5),
+                fg,
+            );
         }
     }
 
@@ -1500,6 +1764,18 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             return;
         };
 
+        // 0. Check if a Dock header/tab was dragged onto a Dock Drop Zone (KDE / IDEA style)
+        if let DragPayload::DockPanel(item) = payload {
+            let zones = self.compute_dock_drop_zones(ctx, item);
+            if let Some(z) = zones.iter().find(|z| z.hit_rect.contains(drop_pos)) {
+                match z.target {
+                    DockDropTarget::PoolPos(pos) => self.set_pool_position(pos),
+                    DockDropTarget::PageListPos(pos) => self.set_page_list_position(pos),
+                }
+            }
+            return;
+        }
+
         // 1. Check if dropped directly onto a specific sheet slot
         if let Some(&(pi, si, _)) = self
             .last_slot_screen_rects
@@ -1647,6 +1923,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         else {
             return;
         };
+        if let DragPayload::DockPanel(item) = payload {
+            self.draw_dock_drop_zones_overlay(ctx, item, pos);
+        }
         let label = match payload {
             DragPayload::PoolImage(id) => {
                 let name = self
@@ -1669,6 +1948,12 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 slot_index + 1
             ),
             DragPayload::ReorderPage(pi) => format!("📄 Bogen {} verschieben", pi + 1),
+            DragPayload::DockPanel(DockDragItem::Pool) => {
+                String::from("🖼 Bilder-Pool verschieben → Auf gewünschte Andock-Zone ziehen")
+            }
+            DragPayload::DockPanel(DockDragItem::PageList) => {
+                String::from("📄 Bogenliste verschieben → Auf gewünschte Andock-Zone ziehen")
+            }
         };
         egui::Area::new(egui::Id::new("lumaprint_dnd_floating_badge"))
             .order(egui::Order::Tooltip)
@@ -2173,42 +2458,31 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     if has_left_pool && has_left_pages {
                         let pool_lbl = format!("🖼 Pool ({})", self.session.doc.images.len());
                         let pages_lbl = format!("📄 Bögen ({})", self.session.doc.page_count());
-                        let pool_tab = ui.selectable_label(
-                            self.left_dock_tab == SharedDockTab::Pool,
+                        if self.draggable_dock_tab(
+                            ui,
+                            DockDragItem::Pool,
                             pool_lbl,
-                        );
-                        if pool_tab.clicked()
-                            || (self.active_drag.is_some() && pool_tab.hovered())
-                        {
+                            self.left_dock_tab == SharedDockTab::Pool,
+                            true,
+                        ) {
                             self.left_dock_tab = SharedDockTab::Pool;
                         }
-                        let pages_tab = ui.selectable_label(
-                            self.left_dock_tab == SharedDockTab::PageList,
+                        if self.draggable_dock_tab(
+                            ui,
+                            DockDragItem::PageList,
                             pages_lbl,
-                        );
-                        if pages_tab.clicked()
-                            || (self.active_drag.is_some() && pages_tab.hovered())
-                        {
+                            self.left_dock_tab == SharedDockTab::PageList,
+                            true,
+                        ) {
                             self.left_dock_tab = SharedDockTab::PageList;
                         }
                     } else if has_left_pool {
-                        ui.label(
-                            RichText::new(format!(
-                                "🖼 Bilder-Pool ({})",
-                                self.session.doc.images.len()
-                            ))
-                            .strong()
-                            .color(t.text),
-                        );
+                        let lbl = format!("🖼 Bilder-Pool ({})", self.session.doc.images.len());
+                        let _ = self.draggable_dock_tab(ui, DockDragItem::Pool, lbl, true, false);
                     } else {
-                        ui.label(
-                            RichText::new(format!(
-                                "📄 Bogenliste ({})",
-                                self.session.doc.page_count()
-                            ))
-                            .strong()
-                            .color(t.text),
-                        );
+                        let lbl = format!("📄 Bogenliste ({})", self.session.doc.page_count());
+                        let _ =
+                            self.draggable_dock_tab(ui, DockDragItem::PageList, lbl, true, false);
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -2219,11 +2493,6 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         {
                             self.session.doc.left_dock_collapsed = true;
                         }
-                        ui.menu_button("◫", |ui| {
-                            self.draw_dock_placement_menu(ui);
-                        })
-                        .response
-                        .on_hover_text("Dock-Position wählen (Pool / Bogenliste)");
                     });
                 });
 
@@ -2390,38 +2659,30 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             if has_pages && has_pool {
                 let pages_lbl = format!("📄 Bogenliste ({})", self.session.doc.page_count());
                 let pool_lbl = format!("🖼 Bilder-Pool ({})", self.session.doc.images.len());
-                let pages_tab = ui.selectable_label(
-                    self.bottom_dock_tab == SharedDockTab::PageList,
+                if self.draggable_dock_tab(
+                    ui,
+                    DockDragItem::PageList,
                     pages_lbl,
-                );
-                if pages_tab.clicked()
-                    || (self.active_drag.is_some() && pages_tab.hovered())
-                {
+                    self.bottom_dock_tab == SharedDockTab::PageList,
+                    true,
+                ) {
                     self.bottom_dock_tab = SharedDockTab::PageList;
                 }
-                let pool_tab = ui.selectable_label(
-                    self.bottom_dock_tab == SharedDockTab::Pool,
+                if self.draggable_dock_tab(
+                    ui,
+                    DockDragItem::Pool,
                     pool_lbl,
-                );
-                if pool_tab.clicked()
-                    || (self.active_drag.is_some() && pool_tab.hovered())
-                {
+                    self.bottom_dock_tab == SharedDockTab::Pool,
+                    true,
+                ) {
                     self.bottom_dock_tab = SharedDockTab::Pool;
                 }
             } else if has_pages {
-                ui.label(
-                    RichText::new(format!("📄 Bogenliste ({})", self.session.doc.page_count()))
-                        .small()
-                        .strong()
-                        .color(t.text_dim),
-                );
+                let lbl = format!("📄 Bogenliste ({})", self.session.doc.page_count());
+                let _ = self.draggable_dock_tab(ui, DockDragItem::PageList, lbl, true, false);
             } else {
-                ui.label(
-                    RichText::new(format!("🖼 Bilder-Pool ({})", self.session.doc.images.len()))
-                        .small()
-                        .strong()
-                        .color(t.text),
-                );
+                let lbl = format!("🖼 Bilder-Pool ({})", self.session.doc.images.len());
+                let _ = self.draggable_dock_tab(ui, DockDragItem::Pool, lbl, true, false);
             }
 
             if show_pool {
@@ -2460,11 +2721,6 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 {
                     self.session.doc.bottom_dock_collapsed = true;
                 }
-                ui.menu_button("◫", |ui| {
-                    self.draw_dock_placement_menu(ui);
-                })
-                .response
-                .on_hover_text("Dock-Position wählen (Bogenliste / Pool)");
             });
         });
 
@@ -4367,35 +4623,57 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     .stroke(Stroke::new(1.0_f32, t.separator)),
             )
             .show(ctx, |ui| {
-                // Dock Header Bar: Tabs (when Pool is docked right) + Placement Menu + Collapse Button
+                // Dock Header Bar: Tabs (when Pool is docked right) + Collapse Button
                 ui.horizontal(|ui| {
                     if has_right_pool {
-                        if ui
-                            .selectable_label(
-                                self.right_dock_tab == RightDockTab::Settings,
-                                RichText::new("⚙ Druck-Einstellungen").strong(),
-                            )
-                            .clicked()
-                        {
+                        let is_settings = self.right_dock_tab == RightDockTab::Settings;
+                        let settings_btn = egui::Button::new(
+                            RichText::new("⚙ Druck-Einstellungen")
+                                .strong()
+                                .color(if is_settings { t.text } else { t.text_dim }),
+                        )
+                        .fill(if is_settings {
+                            t.accent.gamma_multiply(0.24)
+                        } else {
+                            Color32::TRANSPARENT
+                        })
+                        .stroke(if is_settings {
+                            Stroke::new(1.0_f32, t.accent)
+                        } else {
+                            Stroke::NONE
+                        });
+                        let s_resp = ui.add(settings_btn);
+                        if s_resp.clicked() {
                             self.right_dock_tab = RightDockTab::Settings;
                         }
-                        let pool_lbl = format!("🖼 Bilder-Pool ({})", self.session.doc.images.len());
-                        if ui
-                            .selectable_label(
-                                self.right_dock_tab == RightDockTab::Pool,
-                                RichText::new(pool_lbl).strong(),
-                            )
-                            .clicked()
-                        {
+                        s_resp.context_menu(|ui| {
+                            self.draw_dock_placement_menu(ui);
+                        });
+
+                        let pool_lbl =
+                            format!("🖼 Bilder-Pool ({})", self.session.doc.images.len());
+                        if self.draggable_dock_tab(
+                            ui,
+                            DockDragItem::Pool,
+                            pool_lbl,
+                            self.right_dock_tab == RightDockTab::Pool,
+                            true,
+                        ) {
                             self.right_dock_tab = RightDockTab::Pool;
                         }
                     } else {
                         self.right_dock_tab = RightDockTab::Settings;
-                        ui.label(
-                            RichText::new("⚙ Druck-Einstellungen")
-                                .strong()
-                                .color(t.text),
+                        let lbl_resp = ui.add(
+                            egui::Button::new(
+                                RichText::new("⚙ Druck-Einstellungen")
+                                    .strong()
+                                    .color(t.text),
+                            )
+                            .frame(false),
                         );
+                        lbl_resp.context_menu(|ui| {
+                            self.draw_dock_placement_menu(ui);
+                        });
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -4406,7 +4684,6 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         {
                             self.session.doc.right_dock_collapsed = true;
                         }
-                        self.draw_dock_placement_menu(ui);
                     });
                 });
                 ui.add_space(4.0);
@@ -9711,6 +9988,46 @@ mod tests {
                 .is_some()
             );
         });
+
+        // 6. Drag & Drop a Dock header/tab onto a target drop zone (KDE / JetBrains IDEA style)
+        app.session.doc.left_dock_collapsed = false;
+        app.session.doc.right_dock_collapsed = false;
+        app.session.doc.bottom_dock_collapsed = false;
+        app.set_pool_position(FilmstripPosition::Left);
+        app.set_page_list_position(PageListPosition::BottomInCanvas);
+
+        let right_zone_center = app
+            .compute_dock_drop_zones(&ctx, DockDragItem::Pool)
+            .into_iter()
+            .find(|z| z.target == DockDropTarget::PoolPos(FilmstripPosition::RightTabbed))
+            .map(|z| z.hit_rect.center())
+            .unwrap_or(Pos2::new(900.0, 300.0));
+
+        app.active_drag = Some(DragPayload::DockPanel(DockDragItem::Pool));
+        app.last_drag_pos = Some(right_zone_center);
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            app.render_ui(ctx);
+        });
+        assert_eq!(
+            app.session.doc.filmstrip_position,
+            FilmstripPosition::RightTabbed
+        );
+
+        let left_zone_center = app
+            .compute_dock_drop_zones(&ctx, DockDragItem::PageList)
+            .into_iter()
+            .find(|z| z.target == DockDropTarget::PageListPos(PageListPosition::Left))
+            .map(|z| z.hit_rect.center())
+            .unwrap_or(Pos2::new(100.0, 300.0));
+
+        app.active_drag = Some(DragPayload::DockPanel(DockDragItem::PageList));
+        app.last_drag_pos = Some(left_zone_center);
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            app.render_ui(ctx);
+        });
+        assert_eq!(
+            app.session.doc.page_list_position,
+            PageListPosition::Left
+        );
     }
 }
-
