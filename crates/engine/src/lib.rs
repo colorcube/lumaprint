@@ -14,7 +14,7 @@ use lumaprint_cms::{IccProfile, RenderingIntent, SoftproofConfig, WorkingColorSp
 use lumaprint_codecs::{
     CodecError, generate_test_chart_16bit, load_image_file, save_png16, save_tiff16,
 };
-use lumaprint_color::{AbwSettings, AbwTonePreset, ImageBuffer16, Rgb16};
+use lumaprint_color::{AbwSettings, AbwTonePreset, ImageBuffer16, Rgb8, Rgb16};
 use lumaprint_cups::{
     CupsError, CupsSpoolRequest, DriverColorControl, SystemPrinter, discover_custom_media_json,
     discover_system_printers, sn_id_to_base_media_key, submit_cups_job,
@@ -248,6 +248,10 @@ pub enum EngineCommand {
     SetStandardManualRect(RectMm),
     SetStandardCentering(CenteringMode),
     SetStandardFrameLine(FrameLineSpec),
+    AddCustomFrameColor {
+        name: String,
+        color: Rgb8,
+    },
     SetGalleryWrap(GalleryWrapSpec),
     SetTemplateId(String),
     CreateGridTemplate {
@@ -982,6 +986,27 @@ impl Session {
             EngineCommand::SetStandardFrameLine(fl) => {
                 if let LayoutMode::Standard(s) = &mut self.doc.layout {
                     s.frame_line = fl;
+                }
+            }
+            EngineCommand::AddCustomFrameColor { name, color } => {
+                if !self
+                    .doc
+                    .user_backup
+                    .custom_frame_colors
+                    .iter()
+                    .any(|(_, c)| *c == color)
+                {
+                    let label = if name.trim().is_empty() {
+                        format!("Farbe #{:02X}{:02X}{:02X}", color.r, color.g, color.b)
+                    } else {
+                        name.trim().to_string()
+                    };
+                    self.doc
+                        .user_backup
+                        .custom_frame_colors
+                        .push((label.clone(), color));
+                    self.status_message =
+                        format!("Rahmenfarbe '{label}' zur Farbliste hinzugefügt.");
                 }
             }
             EngineCommand::SetGalleryWrap(gw) => {

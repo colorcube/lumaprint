@@ -20,9 +20,9 @@ use lumaprint_cms::{RenderingIntent, ViewingLight};
 use lumaprint_color::{AbwHighlightShift, AbwMidtone, AbwTonePreset, ImageBuffer16, Rgb8};
 use lumaprint_doc::{
     CanvasBackdropTone, CanvasViewMode, CenteringMode, ColorManagementMode, FilmstripPosition,
-    GalleryWrapEffect, GalleryWrapSpec, LayoutMode, LayoutTemplate, MEDIA_TYPES, OutputSharpening,
-    PaperSource, PrintQuality, PrintScope, SizingCriterion, SlotCaptionMode, StandardLayoutSpec,
-    TemplateLayoutSpec, find_media_type,
+    FrameLineSpec, GalleryWrapEffect, GalleryWrapSpec, LayoutMode, LayoutTemplate, MEDIA_TYPES,
+    OutputSharpening, PaperSource, PrintQuality, PrintScope, SizingCriterion, SlotCaptionMode,
+    StandardLayoutSpec, TemplateLayoutSpec, find_media_type,
 };
 use lumaprint_engine::{EngineCommand, Session, scan_folder_for_images};
 use lumaprint_geom::{
@@ -160,6 +160,141 @@ fn match_photo_size_preset_label(size: SizeMm) -> Option<&'static str> {
         .iter()
         .find(|(_, p)| matches_photo_size_preset(size, *p))
         .map(|(lbl, _)| *lbl)
+}
+
+/// Built-in gray tone presets (`Grautöne`) for the frame line (`Rahmenlinie`).
+const FRAME_GRAY_PRESETS: &[(&str, Rgb8)] = &[
+    ("Schwarz (0 %)", Rgb8::new(0, 0, 0)),
+    ("Anthrazit (20 %)", Rgb8::new(51, 51, 51)),
+    ("Dunkelgrau (35 %)", Rgb8::new(89, 89, 89)),
+    ("Mittelgrau (50 %)", Rgb8::new(128, 128, 128)),
+    ("Silbergrau (70 %)", Rgb8::new(179, 179, 179)),
+    ("Hellgrau (85 %)", Rgb8::new(217, 217, 217)),
+    ("Weiß (100 %)", Rgb8::new(255, 255, 255)),
+];
+
+fn draw_color_swatch_item(ui: &mut Ui, rgb: Rgb8, label: &str, selected: bool) -> egui::Response {
+    ui.horizontal(|ui| {
+        let (swatch_rect, _) =
+            ui.allocate_exact_size(Vec2::new(14.0, 14.0), Sense::hover());
+        ui.painter().rect_filled(
+            swatch_rect,
+            CornerRadius::same(2),
+            Color32::from_rgb(rgb.r, rgb.g, rgb.b),
+        );
+        ui.painter().rect_stroke(
+            swatch_rect,
+            CornerRadius::same(2),
+            Stroke::new(1.0_f32, Color32::from_gray(120)),
+            StrokeKind::Middle,
+        );
+        ui.selectable_label(selected, label)
+    })
+    .inner
+}
+
+/// Renders the `Rahmenlinie:` and (when enabled) `Rahmenfarbe:` rows inside a 2-column layout Grid.
+/// Returns `(changed_frame_line, optional_add_custom_color)`.
+fn draw_frame_line_rows(
+    ui: &mut Ui,
+    id_prefix: &'static str,
+    t: &Tokens,
+    frame_line: &mut FrameLineSpec,
+    custom_colors: &[(String, Rgb8)],
+) -> (bool, Option<(String, Rgb8)>) {
+    let mut changed = false;
+    let mut add_custom: Option<(String, Rgb8)> = None;
+
+    ui.label(RichText::new("Rahmenlinie:").color(t.text_dim));
+    ui.horizontal(|ui| {
+        if ui.checkbox(&mut frame_line.enabled, "Aktiv").changed() {
+            changed = true;
+        }
+        if frame_line.enabled
+            && ui
+                .add(
+                    egui::DragValue::new(&mut frame_line.thickness_mm)
+                        .range(0.1..=5.0)
+                        .speed(0.1)
+                        .prefix("Stärke ")
+                        .suffix(" mm"),
+                )
+                .changed()
+        {
+            changed = true;
+        }
+    });
+    ui.end_row();
+
+    if frame_line.enabled {
+        ui.label(RichText::new("Rahmenfarbe:").color(t.text_dim));
+        ui.horizontal(|ui| {
+            let mut srgb = [frame_line.color.r, frame_line.color.g, frame_line.color.b];
+            if ui
+                .color_edit_button_srgb(&mut srgb)
+                .on_hover_text("Freie Rahmenfarbe einstellen")
+                .changed()
+            {
+                frame_line.color = Rgb8::new(srgb[0], srgb[1], srgb[2]);
+                changed = true;
+            }
+
+            let cur_c = frame_line.color;
+            let matched_gray = FRAME_GRAY_PRESETS
+                .iter()
+                .find(|(_, c)| *c == cur_c)
+                .map(|(lbl, _)| (*lbl).to_string());
+            let matched_custom = custom_colors
+                .iter()
+                .find(|(_, c)| *c == cur_c)
+                .map(|(lbl, _)| lbl.clone());
+            let combo_label = matched_gray
+                .clone()
+                .or_else(|| matched_custom.clone())
+                .unwrap_or_else(|| format!("Frei (#{:02X}{:02X}{:02X})", cur_c.r, cur_c.g, cur_c.b));
+
+            egui::ComboBox::from_id_salt((id_prefix, "frame_color_combo"))
+                .selected_text(combo_label)
+                .width(155.0)
+                .truncate()
+                .show_ui(ui, |ui| {
+                    ui.label(RichText::new("Grautöne:").small().color(t.text_dim));
+                    for &(lbl, gray_rgb) in FRAME_GRAY_PRESETS {
+                        if draw_color_swatch_item(ui, gray_rgb, lbl, cur_c == gray_rgb).clicked() {
+                            frame_line.color = gray_rgb;
+                            changed = true;
+                            ui.close_menu();
+                        }
+                    }
+                    if !custom_colors.is_empty() {
+                        ui.separator();
+                        ui.label(RichText::new("Eigene Farben:").small().color(t.text_dim));
+                        for (lbl, cust_rgb) in custom_colors {
+                            if draw_color_swatch_item(ui, *cust_rgb, lbl, cur_c == *cust_rgb)
+                                .clicked()
+                            {
+                                frame_line.color = *cust_rgb;
+                                changed = true;
+                                ui.close_menu();
+                            }
+                        }
+                    }
+                });
+
+            let already_in_list = matched_gray.is_some() || matched_custom.is_some();
+            if ui
+                .add_enabled(!already_in_list, egui::Button::new("➕"))
+                .on_hover_text("Aktuelle freie Farbe zur Auswahlliste hinzufügen")
+                .clicked()
+            {
+                let name = format!("Farbe #{:02X}{:02X}{:02X}", cur_c.r, cur_c.g, cur_c.b);
+                add_custom = Some((name, cur_c));
+            }
+        });
+        ui.end_row();
+    }
+
+    (changed, add_custom)
 }
 
 /// Drag & Drop payload shared between the Image Pool, Page Slots, and Page Navigator.
@@ -4484,28 +4619,19 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
                         ui.end_row();
 
-                        ui.label(RichText::new("Rahmenlinie:").color(t.text_dim));
-                        ui.horizontal(|ui| {
-                            if ui
-                                .checkbox(&mut std_spec.frame_line.enabled, "Aktiv")
-                                .changed()
-                            {
-                                changed = true;
-                            }
-                            if std_spec.frame_line.enabled
-                                && ui
-                                    .add(
-                                        egui::DragValue::new(&mut std_spec.frame_line.thickness_mm)
-                                            .range(0.1..=5.0)
-                                            .speed(0.1)
-                                            .suffix(" mm"),
-                                    )
-                                    .changed()
-                            {
-                                changed = true;
-                            }
-                        });
-                        ui.end_row();
+                        let (fl_changed, fl_add) = draw_frame_line_rows(
+                            ui,
+                            "std",
+                            &t,
+                            &mut std_spec.frame_line,
+                            &self.session.doc.user_backup.custom_frame_colors,
+                        );
+                        if fl_changed {
+                            changed = true;
+                        }
+                        if let Some((name, color)) = fl_add {
+                            self.exec(EngineCommand::AddCustomFrameColor { name, color });
+                        }
                     });
 
                 if changed {
@@ -4620,6 +4746,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
             LayoutMode::Template(mut tpl_spec) => {
                 let mut changed = false;
+                let mut add_custom_color: Option<(String, Rgb8)> = None;
+                let custom_colors = self.session.doc.user_backup.custom_frame_colors.clone();
                 let all_tpls = builtin_templates();
                 let current_tpl_label = self
                     .session
@@ -4732,6 +4860,20 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
                         ui.end_row();
 
+                        let (fl_changed, fl_add) = draw_frame_line_rows(
+                            ui,
+                            "tpl",
+                            &t,
+                            &mut tpl_spec.frame_line,
+                            &custom_colors,
+                        );
+                        if fl_changed {
+                            changed = true;
+                        }
+                        if fl_add.is_some() {
+                            add_custom_color = fl_add;
+                        }
+
                         ui.label(RichText::new("Bildunterschrift:").color(t.text_dim));
                         egui::ComboBox::from_id_salt("tpl_caption_mode_combo")
                             .selected_text(tpl_spec.caption_mode.label_de())
@@ -4790,6 +4932,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 if changed {
                     self.exec(EngineCommand::SetLayoutMode(LayoutMode::Template(tpl_spec)));
                 }
+                if let Some((name, color)) = add_custom_color {
+                    self.exec(EngineCommand::AddCustomFrameColor { name, color });
+                }
             }
 
             LayoutMode::Panorama(mut pano) => {
@@ -4819,6 +4964,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             LayoutMode::FreeComposer(mut comp) => {
                 let mut changed = false;
                 let mut size_cmd: Option<EngineCommand> = None;
+                let mut add_custom_color: Option<(String, Rgb8)> = None;
+                let custom_colors = self.session.doc.user_backup.custom_frame_colors.clone();
 
                 let active_page = self.session.doc.active_page_index;
                 let active_slot = self.session.doc.active_slot_index;
@@ -4956,28 +5103,19 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
                         ui.end_row();
 
-                        ui.label(RichText::new("Rahmenlinie:").color(t.text_dim));
-                        ui.horizontal(|ui| {
-                            if ui
-                                .checkbox(&mut comp.frame_line.enabled, "Aktiv")
-                                .changed()
-                            {
-                                changed = true;
-                            }
-                            if comp.frame_line.enabled
-                                && ui
-                                    .add(
-                                        egui::DragValue::new(&mut comp.frame_line.thickness_mm)
-                                            .range(0.1..=5.0)
-                                            .speed(0.1)
-                                            .suffix(" mm"),
-                                    )
-                                    .changed()
-                            {
-                                changed = true;
-                            }
-                        });
-                        ui.end_row();
+                        let (fl_changed, fl_add) = draw_frame_line_rows(
+                            ui,
+                            "comp",
+                            &t,
+                            &mut comp.frame_line,
+                            &custom_colors,
+                        );
+                        if fl_changed {
+                            changed = true;
+                        }
+                        if fl_add.is_some() {
+                            add_custom_color = fl_add;
+                        }
 
                         let size_row_lbl = if let Some(si) = selected_slot_idx {
                             format!("Bildmaße (#{}):", si + 1)
@@ -5124,6 +5262,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
                 if changed {
                     self.exec(EngineCommand::SetLayoutMode(LayoutMode::FreeComposer(comp)));
+                }
+                if let Some((name, color)) = add_custom_color {
+                    self.exec(EngineCommand::AddCustomFrameColor { name, color });
                 }
                 if let Some(cmd) = size_cmd {
                     self.exec(cmd);

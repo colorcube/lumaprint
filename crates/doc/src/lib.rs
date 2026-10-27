@@ -1092,6 +1092,8 @@ pub struct UserSettingsBackup {
     pub custom_canvas_sizes: Vec<(String, SizeMm)>,
     pub custom_templates: Vec<LayoutTemplate>,
     pub saved_abw_tonings: Vec<(String, AbwSettings)>,
+    #[serde(default)]
+    pub custom_frame_colors: Vec<(String, Rgb8)>,
 }
 
 impl UserSettingsBackup {
