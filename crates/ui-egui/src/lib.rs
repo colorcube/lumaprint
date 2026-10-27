@@ -468,6 +468,14 @@ impl LumaPrintApp {
         let mut zoom_reset = false;
         let mut do_undo = false;
         let mut do_redo = false;
+        let mut toggle_pool = false;
+        let mut toggle_settings = false;
+        let mut toggle_slot_guides = false;
+        let mut toggle_rulers = false;
+        let mut set_view_mode: Option<CanvasViewMode> = None;
+        let mut toggle_softproof = false;
+        let mut toggle_paper_white = false;
+        let mut toggle_gamut_warning = false;
         let mut pasted_paths: Vec<std::path::PathBuf> = Vec::new();
 
         ctx.input(|i| {
@@ -480,6 +488,16 @@ impl LumaPrintApp {
                             }
                         }
                     }
+                }
+            }
+
+            // Function-key dock toggles (KDE Dolphin / Gwenview / Okular convention: F9 = Left Pool, F10 = Right Setup Dock)
+            if !i.modifiers.any() {
+                if i.key_pressed(egui::Key::F9) {
+                    toggle_pool = true;
+                }
+                if i.key_pressed(egui::Key::F10) {
+                    toggle_settings = true;
                 }
             }
 
@@ -505,6 +523,34 @@ impl LumaPrintApp {
                     }
                 }
             }
+
+            // View Mode shortcuts (KDE Gwenview / digiKam / Dolphin convention: Ctrl+1 / Ctrl+2)
+            if !i.modifiers.shift && i.key_pressed(egui::Key::Num1) {
+                set_view_mode = Some(CanvasViewMode::SinglePage);
+            }
+            if !i.modifiers.shift && i.key_pressed(egui::Key::Num2) {
+                set_view_mode = Some(CanvasViewMode::AllPagesOverview);
+            }
+
+            // Guides & Rulers (KDE Krita / Calligra / Inkscape convention: Ctrl+G = Guides, Ctrl+R = Rulers)
+            if !i.modifiers.shift && i.key_pressed(egui::Key::G) {
+                toggle_slot_guides = true;
+            }
+            if !i.modifiers.shift && i.key_pressed(egui::Key::R) {
+                toggle_rulers = true;
+            }
+
+            // Softproof & Gamut Warning (Krita convention: Ctrl+Shift+S / Ctrl+Shift+W / Ctrl+Shift+G)
+            if i.modifiers.shift && i.key_pressed(egui::Key::S) {
+                toggle_softproof = true;
+            }
+            if i.modifiers.shift && i.key_pressed(egui::Key::W) {
+                toggle_paper_white = true;
+            }
+            if i.modifiers.shift && i.key_pressed(egui::Key::G) {
+                toggle_gamut_warning = true;
+            }
+
             if i.key_pressed(egui::Key::Z) {
                 if i.modifiers.shift {
                     do_redo = true;
@@ -522,6 +568,40 @@ impl LumaPrintApp {
                 .input(|i| i.pointer.hover_pos().or_else(|| i.pointer.interact_pos()))
                 .or(self.last_drag_pos);
             self.process_os_dropped_paths(pasted_paths, pos);
+        }
+
+        if let Some(vm) = set_view_mode {
+            self.exec(EngineCommand::SetCanvasViewMode(vm));
+        }
+        if toggle_pool {
+            if self.session.doc.filmstrip_position != FilmstripPosition::Hidden {
+                self.last_visible_pool_position = self.session.doc.filmstrip_position;
+                self.session.doc.filmstrip_position = FilmstripPosition::Hidden;
+            } else {
+                self.session.doc.filmstrip_position = self.last_visible_pool_position;
+            }
+        }
+        if toggle_settings {
+            self.session.doc.show_settings_panel = !self.session.doc.show_settings_panel;
+        }
+        if toggle_slot_guides {
+            self.session.doc.show_slot_guides = !self.session.doc.show_slot_guides;
+        }
+        if toggle_rulers {
+            self.session.doc.show_rulers = !self.session.doc.show_rulers;
+        }
+        if toggle_softproof || toggle_paper_white || toggle_gamut_warning {
+            let mut sp = self.session.doc.color.softproof;
+            if toggle_softproof {
+                sp.enabled = !sp.enabled;
+            }
+            if toggle_paper_white && sp.enabled {
+                sp.simulate_paper_white = !sp.simulate_paper_white;
+            }
+            if toggle_gamut_warning {
+                sp.gamut_warning = !sp.gamut_warning;
+            }
+            self.exec(EngineCommand::SetSoftproof(sp));
         }
 
         if zoom_reset {
@@ -1268,7 +1348,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         if ui
                             .radio(
                                 view_mode == CanvasViewMode::SinglePage,
-                                "▢ Einzelbogen-Ansicht",
+                                "▢ Einzelbogen-Ansicht  (Ctrl+1)",
                             )
                             .clicked()
                         {
@@ -1278,7 +1358,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         if ui
                             .radio(
                                 view_mode == CanvasViewMode::AllPagesOverview,
-                                format!("⊞ Alle Bögen Übersicht ({page_cnt})"),
+                                format!("⊞ Alle Bögen Übersicht ({page_cnt})  (Ctrl+2)"),
                             )
                             .clicked()
                         {
@@ -1294,7 +1374,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
                         let mut show_pool =
                             self.session.doc.filmstrip_position != FilmstripPosition::Hidden;
-                        if ui.checkbox(&mut show_pool, "Zeige Pool").changed() {
+                        if ui.checkbox(&mut show_pool, "Zeige Pool  (F9)").changed() {
                             self.session.doc.filmstrip_position = if show_pool {
                                 self.last_visible_pool_position
                             } else {
@@ -1303,22 +1383,22 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
                         let _ = ui.checkbox(
                             &mut self.session.doc.show_settings_panel,
-                            "Zeige rechtes Dock (Druck-Setup)",
+                            "Zeige Druck-Einstellungen  (F10)",
                         );
                         let _ = ui.checkbox(
                             &mut self.session.doc.show_slot_guides,
-                            "Zeige Rahmen um Slots (gestrichelte Linie)",
+                            "Zeige Rahmen um Slots (gestrichelte Linie)  (Ctrl+G)",
                         );
                         let _ = ui.checkbox(
                             &mut self.session.doc.show_rulers,
-                            "Zeige Lineal",
+                            "Zeige Lineal  (Ctrl+R)",
                         );
 
                         ui.separator();
                         let mut sp = self.session.doc.color.softproof;
                         let mut sp_changed = false;
                         if ui
-                            .checkbox(&mut sp.enabled, "👁 Softproof aktivieren")
+                            .checkbox(&mut sp.enabled, "👁 Softproof aktivieren  (Ctrl+Shift+S)")
                             .changed()
                         {
                             sp_changed = true;
@@ -1328,7 +1408,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 sp.enabled,
                                 egui::Checkbox::new(
                                     &mut sp.simulate_paper_white,
-                                    "Papierweiß simulieren",
+                                    "Papierweiß simulieren  (Ctrl+Shift+W)",
                                 ),
                             )
                             .changed()
@@ -1336,7 +1416,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             sp_changed = true;
                         }
                         if ui
-                            .checkbox(&mut sp.gamut_warning, "⚠ Gamut-Warnung anzeigen")
+                            .checkbox(
+                                &mut sp.gamut_warning,
+                                "⚠ Gamut-Warnung anzeigen  (Ctrl+Shift+G)",
+                            )
                             .changed()
                         {
                             sp_changed = true;
@@ -1349,15 +1432,15 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         ui.label(
                             RichText::new(format!("Zoom ({:.0} %)", self.zoom * 100.0)).strong(),
                         );
-                        if ui.button("🔍+ Zoom vergrößern (Ctrl + +)").clicked() {
+                        if ui.button("🔍+ Zoom vergrößern  (Ctrl++)").clicked() {
                             self.zoom = (self.zoom + 0.15).min(2.5);
                             ui.close_menu();
                         }
-                        if ui.button("🔍− Zoom verkleinern (Ctrl + -)").clicked() {
+                        if ui.button("🔍− Zoom verkleinern  (Ctrl+-)").clicked() {
                             self.zoom = (self.zoom - 0.15).max(0.4);
                             ui.close_menu();
                         }
-                        if ui.button("🔍 Zoom 100 % zurücksetzen (Ctrl + 0)").clicked() {
+                        if ui.button("🔍 Zoom 100 % zurücksetzen  (Ctrl+0)").clicked() {
                             self.zoom = 1.0;
                             ui.close_menu();
                         }
@@ -1524,7 +1607,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             view_mode == CanvasViewMode::SinglePage,
                             "▢ Einzelbogen",
                         )
-                        .on_hover_text("Detailansicht des aktiven Bogens mit Linealen")
+                        .on_hover_text("Detailansicht des aktiven Bogens (Ctrl+1)")
                         .clicked()
                     {
                         self.exec(EngineCommand::SetCanvasViewMode(CanvasViewMode::SinglePage));
@@ -1534,7 +1617,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             view_mode == CanvasViewMode::AllPagesOverview,
                             format!("⊞ Alle Bögen ({page_cnt})"),
                         )
-                        .on_hover_text("Leuchtpult-Übersicht aller Druckbögen nebeneinander")
+                        .on_hover_text("Leuchtpult-Übersicht aller Druckbögen nebeneinander (Ctrl+2)")
                         .clicked()
                     {
                         self.exec(EngineCommand::SetCanvasViewMode(
@@ -1543,13 +1626,13 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     }
 
                     if draw_slot_guides_toolbar_button(ui, &t, self.session.doc.show_slot_guides)
-                        .on_hover_text("Zeige Rahmen um Slots (gestrichelte Linie)")
+                        .on_hover_text("Zeige Rahmen um Slots (gestrichelte Linie) (Ctrl+G)")
                         .clicked()
                     {
                         self.session.doc.show_slot_guides = !self.session.doc.show_slot_guides;
                     }
                     if draw_rulers_toolbar_button(ui, &t, self.session.doc.show_rulers)
-                        .on_hover_text("Zeige Lineal")
+                        .on_hover_text("Zeige Lineal (Ctrl+R)")
                         .clicked()
                     {
                         self.session.doc.show_rulers = !self.session.doc.show_rulers;
@@ -1562,7 +1645,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     let mut sp_changed = false;
                     if ui
                         .selectable_label(sp.enabled, "👁 Softproof")
-                        .on_hover_text("Simuliert das gewählte Papier-ICC-Profil auf dem Bildschirm")
+                        .on_hover_text("Simuliert das gewählte Papier-ICC-Profil auf dem Bildschirm (Ctrl+Shift+S)")
                         .clicked()
                     {
                         sp.enabled = !sp.enabled;
@@ -1571,6 +1654,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     if sp.enabled {
                         if ui
                             .checkbox(&mut sp.simulate_paper_white, "Papierweiß")
+                            .on_hover_text("Papierweiß simulieren (Ctrl+Shift+W)")
                             .changed()
                         {
                             sp_changed = true;
@@ -1591,7 +1675,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     }
                     if ui
                         .selectable_label(sp.gamut_warning, "⚠ Gamut-Warnung")
-                        .on_hover_text("Markiert nicht druckbare Farben farbig")
+                        .on_hover_text("Markiert nicht druckbare Farben farbig (Ctrl+Shift+G)")
                         .clicked()
                     {
                         sp.gamut_warning = !sp.gamut_warning;
@@ -3291,7 +3375,18 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             .spacing([14.0, 10.0])
             .min_col_width(130.0)
             .show(ui, |ui| {
-                ui.label(RichText::new("Drucker:").color(t.text_dim));
+                let printer_lbl = ui.label(RichText::new("Drucker:").color(t.text_dim));
+                if let Some(ref ap) = active_printer {
+                    let tip = if ap.device_uri.is_empty() {
+                        format!("CUPS-Queue: {} ({})", ap.queue_name, ap.state_message)
+                    } else {
+                        format!(
+                            "CUPS-Queue: {} ({})\nURI: {}",
+                            ap.queue_name, ap.state_message, ap.device_uri
+                        )
+                    };
+                    printer_lbl.on_hover_text(tip);
+                }
                 ui.horizontal(|ui| {
                     egui::ComboBox::from_id_salt("printer_queue_combo")
                         .selected_text(selected_printer_label)
@@ -3317,17 +3412,6 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     }
                 });
                 ui.end_row();
-
-                if let Some(ref ap) = active_printer {
-                    ui.label(RichText::new("CUPS-Queue:").color(t.text_dim));
-                    let uri_info = if ap.device_uri.is_empty() {
-                        ap.state_message.clone()
-                    } else {
-                        format!("{} ({})", ap.queue_name, ap.state_message)
-                    };
-                    ui.label(RichText::new(uri_info).small().color(t.text_faint));
-                    ui.end_row();
-                }
 
                 ui.label(RichText::new("Medientyp:").color(t.text_dim));
                 ui.horizontal(|ui| {
@@ -3513,6 +3597,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 .checkbox(
                     &mut det.bottom_edge_priority,
                     "Priorisiert Druckqualität Unterkante",
+                )
+                .on_hover_text(
+                    "Verwendet auf den letzten ~20 mm am unteren Blattrand (wenn das Blatt die hintere Hauptwalze verlässt) einen feineren Papiervorschub und mehr Druckkopfdurchgänge, um Streifenbildung (Banding) am unteren Rand zu verhindern (etwas langsamere Druckgeschwindigkeit am Blattende).",
                 )
                 .changed()
             {
