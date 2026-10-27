@@ -921,6 +921,18 @@ pub fn build_lp_command_args(req: &CupsSpoolRequest, file_path: &Path) -> Vec<St
     if !req.resolution.is_empty() {
         args.push(String::from("-o"));
         args.push(format!("Resolution={}", req.resolution));
+        if matches!(req.driver_color_control, DriverColorControl::EpsonEscpr { .. }) {
+            let pq = match req.resolution.to_ascii_lowercase().as_str() {
+                "normal" | "360x360dpi" | "720x720dpi" => "Normal",
+                "fine" | "720x1440dpi" | "1440x720dpi" => "Fine",
+                "high" | "1440x1440dpi" => "High",
+                "max" | "2880x1440dpi" | "5760x1440dpi" => "Max",
+                "carbonblack" | "carbonblack5760x1440" => "CarbonBlack",
+                _ => req.resolution.as_str(),
+            };
+            args.push(String::from("-o"));
+            args.push(format!("PrintQuality={pq}"));
+        }
     }
 
     if req.borderless {

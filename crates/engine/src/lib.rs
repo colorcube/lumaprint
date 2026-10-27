@@ -361,6 +361,8 @@ impl Session {
             PathBuf::from("/usr/share/color/icc"),
             PathBuf::from("/usr/share/color/icc/epson-scp900"),
             PathBuf::from("/usr/local/share/color/icc"),
+            PathBuf::from("/home/rene/Projekte/Spielwiese/Drucker-Epson-SC-P900/Code/epson-p900-escpr-cups/icc"),
+            PathBuf::from("../epson-p900-escpr-cups/icc"),
             PathBuf::from("/home/rene/Projekte/Spielwiese/Drucker-Epson-SC-P900/Code/epson-p900-escpr-cups/profiles"),
             PathBuf::from("../epson-p900-escpr-cups/profiles"),
             PathBuf::from("/home/rene/Projekte/Spielwiese/Drucker-Epson-SC-P900/Code/Epson-SC-P900-Treiber/extracted/icc"),
@@ -592,6 +594,11 @@ impl Session {
             if let Some(p) = self.icc_profiles.get(&prefixed) {
                 return Some(p);
             }
+            if let Some(stripped) = fname.strip_prefix("mac_").or_else(|| fname.strip_prefix("win_")) {
+                if let Some(p) = self.icc_profiles.get(stripped) {
+                    return Some(p);
+                }
+            }
         }
         None
     }
@@ -633,10 +640,10 @@ impl Session {
             .map(|cm| cm.base_media_key.as_str())
             .unwrap_or(self.doc.printer.media_key.as_str());
         if let Some(media) = find_media_type(base_key) {
-            if let Some(p) = self.icc_profiles.get(media.mac_icc_filename) {
+            if let Some(p) = self.resolve_icc_by_path_or_basename(media.mac_icc_filename) {
                 return Some(p);
             }
-            if let Some(p) = self.icc_profiles.get(media.win_icc_filename) {
+            if let Some(p) = self.resolve_icc_by_path_or_basename(media.win_icc_filename) {
                 return Some(p);
             }
         }
@@ -2306,6 +2313,8 @@ impl Session {
 
         let overcoat = if self.doc.printer.detailed.black_enhance_overcoat {
             Some(String::from("On"))
+        } else if matches!(driver_color_control, DriverColorControl::EpsonEscpr { .. }) {
+            Some(String::from("Off"))
         } else {
             None
         };

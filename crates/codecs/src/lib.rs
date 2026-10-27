@@ -10,7 +10,7 @@
     clippy::unreachable
 )]
 
-use image::{ColorType, DynamicImage, GenericImageView, ImageEncoder};
+use image::{ColorType, DynamicImage, GenericImageView, ImageDecoder, ImageEncoder, ImageReader};
 use lumaprint_cms::{IccProfile, WorkingColorSpace};
 use lumaprint_color::{ImageBuffer16, Rgb16};
 use serde::{Deserialize, Serialize};
@@ -79,6 +79,15 @@ pub fn load_image_file(path: impl AsRef<Path>) -> Result<LoadedImage, CodecError
 
 /// Decodes an image from an in-memory byte slice.
 pub fn load_image_from_bytes(bytes: &[u8], source_label: &str) -> Result<LoadedImage, CodecError> {
+    let mut decoder_icc: Option<Vec<u8>> = None;
+    if let Ok(reader) = ImageReader::new(Cursor::new(bytes)).with_guessed_format() {
+        if let Ok(mut decoder) = reader.into_decoder() {
+            if let Ok(Some(icc)) = decoder.icc_profile() {
+                decoder_icc = Some(icc);
+            }
+        }
+    }
+
     let dyn_img = image::load_from_memory(bytes).map_err(|e| CodecError::Decode {
         path: source_label.to_string(),
         reason: e.to_string(),
@@ -103,7 +112,8 @@ pub fn load_image_from_bytes(bytes: &[u8], source_label: &str) -> Result<LoadedI
         }
     })?;
 
-    let (color_space, icc_profile_name) = detect_embedded_color_space(bytes);
+    let (color_space, icc_profile_name) =
+        detect_embedded_color_space(decoder_icc.as_deref(), bytes);
 
     Ok(LoadedImage {
         buffer,
@@ -121,25 +131,50 @@ pub fn load_image_from_bytes(bytes: &[u8], source_label: &str) -> Result<LoadedI
     })
 }
 
-/// Inspects raw file bytes for an embedded ICC profile (`acsp`) or AdobeRGB/ProPhoto/DisplayP3 markers.
-fn detect_embedded_color_space(bytes: &[u8]) -> (WorkingColorSpace, String) {
-    // Search for an embedded ICC header ('acsp' at offset +36 of profile header)
+fn classify_icc_profile(prof: &IccProfile) -> (WorkingColorSpace, String) {
+    let desc_low = prof.description.to_ascii_lowercase();
+    let ws = if desc_low.contains("adobe") || desc_low.contains("clayrgb") {
+        WorkingColorSpace::AdobeRgb1998
+    } else if desc_low.contains("prophoto") || desc_low.contains("romm") {
+        WorkingColorSpace::ProPhotoRgb
+    } else if desc_low.contains("p3") {
+        WorkingColorSpace::DisplayP3
+    } else if let Some(r_xyz) = prof.red_primary_xyz {
+        // Fallback classification by D50-adapted Red primary X coordinate:
+        // sRGB: ~0.436, Display P3: ~0.515, AdobeRGB: ~0.610, ProPhoto: ~0.798
+        if r_xyz[0] > 0.70 {
+            WorkingColorSpace::ProPhotoRgb
+        } else if r_xyz[0] > 0.56 {
+            WorkingColorSpace::AdobeRgb1998
+        } else if r_xyz[0] > 0.48 {
+            WorkingColorSpace::DisplayP3
+        } else {
+            WorkingColorSpace::Srgb
+        }
+    } else {
+        WorkingColorSpace::Srgb
+    };
+    (ws, prof.description.clone())
+}
+
+/// Inspects decompressed ICC profile bytes from `ImageDecoder::icc_profile()` or raw file bytes
+/// for an embedded ICC header (`acsp`).
+fn detect_embedded_color_space(
+    decoded_icc: Option<&[u8]>,
+    bytes: &[u8],
+) -> (WorkingColorSpace, String) {
+    if let Some(icc_slice) = decoded_icc {
+        if let Ok(prof) = IccProfile::from_bytes(icc_slice, None) {
+            return classify_icc_profile(&prof);
+        }
+    }
+    // Fallback: search for an uncompressed embedded ICC header ('acsp' at offset +36 of profile header)
     if let Some(pos) = bytes.windows(4).position(|w| w == b"acsp") {
         if pos >= 36 {
             let start = pos - 36;
             if let Some(slice) = bytes.get(start..) {
                 if let Ok(prof) = IccProfile::from_bytes(slice, None) {
-                    let desc_low = prof.description.to_ascii_lowercase();
-                    let ws = if desc_low.contains("adobe") {
-                        WorkingColorSpace::AdobeRgb1998
-                    } else if desc_low.contains("prophoto") || desc_low.contains("romm") {
-                        WorkingColorSpace::ProPhotoRgb
-                    } else if desc_low.contains("p3") {
-                        WorkingColorSpace::DisplayP3
-                    } else {
-                        WorkingColorSpace::Srgb
-                    };
-                    return (ws, prof.description);
+                    return classify_icc_profile(&prof);
                 }
             }
         }
@@ -293,8 +328,8 @@ pub fn generate_test_chart_16bit(width: u32, height: u32) -> Result<LoadedImage,
             width,
             height,
             bit_depth_per_channel: 16,
-            color_space: WorkingColorSpace::AdobeRgb1998,
-            icc_profile_name: WorkingColorSpace::AdobeRgb1998.name().to_string(),
+            color_space: WorkingColorSpace::Srgb,
+            icc_profile_name: WorkingColorSpace::Srgb.name().to_string(),
             dpi_x: Some(360.0),
             dpi_y: Some(360.0),
             camera_model: Some("LumaPrint Calibration Generator".into()),

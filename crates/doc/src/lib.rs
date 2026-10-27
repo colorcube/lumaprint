@@ -903,9 +903,9 @@ impl ColorManagementMode {
 /// Output sharpening level for compensating print dot-gain (Qimage / Lightroom Pro concept).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum OutputSharpening {
+    #[default]
     Off,
     Low,
-    #[default]
     Standard,
     High,
 }
@@ -915,7 +915,7 @@ impl OutputSharpening {
 
     pub fn label_de(self) -> &'static str {
         match self {
-            Self::Off => "Aus",
+            Self::Off => "Aus (1:1 Original)",
             Self::Low => "Niedrig",
             Self::Standard => "Standard (Empfohlen)",
             Self::High => "Hoch (Mattes Fine-Art-Papier)",
@@ -982,11 +982,11 @@ impl Default for ColorSettings {
             mode: ColorManagementMode::UseIccProfile,
             auto_select_icc_for_media: true,
             custom_icc_profile_path: None,
-            rendering_intent: RenderingIntent::Perceptual,
+            rendering_intent: RenderingIntent::RelativeColorimetric,
             black_point_compensation: true,
             abw: AbwSettings::default(),
             adjustments: ColorAdjustments::default(),
-            output_sharpening: OutputSharpening::Standard,
+            output_sharpening: OutputSharpening::Off,
             softproof: SoftproofConfig::default(),
             display_color_space: DisplayColorSpaceMode::AutoWayland,
             resolved_display_space: WorkingColorSpace::Srgb,

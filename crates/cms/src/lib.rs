@@ -262,8 +262,8 @@ impl WorkingColorSpace {
     }
 }
 
-/// Standard ICC D50 PCS illuminant XYZ.
-pub const D50_XYZ: [f32; 3] = [0.9642, 1.0000, 0.8249];
+/// Standard ICC D50 PCS illuminant XYZ (matches the row sums of sRGB/AdobeRGB/ProPhoto/DisplayP3 D50 matrices).
+pub const D50_XYZ: [f32; 3] = [0.96422, 1.00000, 0.82521];
 
 /// Converts CIE XYZ (D50) to CIE `L*a*b*` (`L` in `0..=100`, `a` and `b` in `-128..=127`).
 pub fn xyz_d50_to_lab(xyz: [f32; 3]) -> [f32; 3] {
@@ -507,13 +507,14 @@ fn sample_1d(table: &[f32], x: f32) -> f32 {
     a + frac * (b - a)
 }
 
-/// Parsed ICC v2/v4 Printer / Output Profile.
+/// Parsed ICC v2/v4 Printer / Output / Input Profile.
 #[derive(Debug, Clone)]
 pub struct IccProfile {
     pub description: String,
     pub file_path: Option<PathBuf>,
     pub media_white_xyz: [f32; 3],
     pub media_black_xyz: [f32; 3],
+    pub red_primary_xyz: Option<[f32; 3]>,
     pub b2a0: Option<Lut3D>,
     pub b2a1: Option<Lut3D>,
     pub b2a2: Option<Lut3D>,
@@ -540,6 +541,7 @@ impl IccProfile {
         let mut description = String::from("ICC Profile");
         let mut media_white_xyz = D50_XYZ;
         let mut media_black_xyz = [0.003f32, 0.003, 0.0025];
+        let mut red_primary_xyz = None;
         let mut b2a0 = None;
         let mut b2a1 = None;
         let mut b2a2 = None;
@@ -575,6 +577,11 @@ impl IccProfile {
                         media_black_xyz = xyz;
                     }
                 }
+                b"rXYZ" => {
+                    if let Ok(xyz) = parse_xyz_tag(tag_slice) {
+                        red_primary_xyz = Some(xyz);
+                    }
+                }
                 b"B2A0" => b2a0 = Lut3D::parse(tag_slice).ok(),
                 b"B2A1" => b2a1 = Lut3D::parse(tag_slice).ok(),
                 b"B2A2" => b2a2 = Lut3D::parse(tag_slice).ok(),
@@ -586,11 +593,29 @@ impl IccProfile {
             }
         }
 
+        // ISO 18619 / LittleCMS2 `cmsDetectDestinationBlackPoint`:
+        // For output profiles with B2A1 + A2B1 tables, the legacy `bkpt` tag is often inaccurate;
+        // derive the true Relative Colorimetric destination black point by round-tripping
+        // PCS black (L*=0, a*=0, b*=0 -> norm [0.0, 0.5, 0.5]) through B2A1 -> A2B1.
+        if let Some(ref a2b) = a2b1 {
+            let dev_blk = b2a1
+                .as_ref()
+                .map(|b2a| {
+                    let out = b2a.eval([0.0, 0.5, 0.5]);
+                    [out[0], out[1], out[2]]
+                })
+                .unwrap_or([0.0, 0.0, 0.0]);
+            let norm_lab_blk = a2b.eval(dev_blk);
+            let l_blk = (norm_lab_blk[0] * (65535.0 / 65280.0) * 100.0).clamp(0.0, 25.0);
+            media_black_xyz = lab_to_xyz_d50([l_blk, 0.0, 0.0]);
+        }
+
         Ok(Self {
             description,
             file_path,
             media_white_xyz,
             media_black_xyz,
+            red_primary_xyz,
             b2a0,
             b2a1,
             b2a2,
@@ -644,12 +669,14 @@ impl IccProfile {
         };
         let mut xyz = src_space.rgb16_to_xyz_d50(px.r, px.g, px.b);
 
-        // Apply Black Point Compensation (Adobe BPC linear XYZ scaling)
-        if black_point_compensation && intent != RenderingIntent::AbsoluteColorimetric {
+        // Apply Black Point Compensation (ISO 18619 / Adobe BPC linear XYZ scaling).
+        // Perceptual (`B2A0`) already bakes black-point scaling into its CLUT (its A2B0 black point is L*≈0),
+        // whereas Relative Colorimetric (`B2A1`) requires linear XYZ scaling to `self.media_black_xyz`.
+        if black_point_compensation && intent == RenderingIntent::RelativeColorimetric {
             let y_dst_blk = self.media_black_xyz[1].clamp(0.0, 0.08);
             let scale = 1.0 - y_dst_blk;
-            for c in &mut xyz {
-                *c = *c * scale + y_dst_blk * D50_XYZ[1];
+            for (i, c) in xyz.iter_mut().enumerate() {
+                *c = *c * scale + y_dst_blk * D50_XYZ[i];
             }
         }
 
@@ -663,11 +690,14 @@ impl IccProfile {
         }
 
         let lab = xyz_d50_to_lab(xyz);
-        // ICC v2 mft2 Lab encoding: L* in [0, 100], a* and b* in [-128, 127]
+        // ICC PCS Lab grid normalization:
+        // Neutral a*=0, b*=0 maps to exact 0.5 (`128.0 / 256.0 = 16.0 / 32.0` on a 33^3 CLUT)
+        // so that pure white (L*=100, a*=0, b*=0) hits CLUT node (32, 16, 16) = RGB(65535, 65535, 65535)
+        // without bleeding into adjacent nodes.
         let norm_lab = [
             (lab[0] / 100.0).clamp(0.0, 1.0),
-            ((lab[1] + 128.0) / 255.0).clamp(0.0, 1.0),
-            ((lab[2] + 128.0) / 255.0).clamp(0.0, 1.0),
+            ((lab[1] + 128.0) / 256.0).clamp(0.0, 1.0),
+            ((lab[2] + 128.0) / 256.0).clamp(0.0, 1.0),
         ];
         let out = b2a.eval(norm_lab);
         Rgb16 {
@@ -683,8 +713,8 @@ impl IccProfile {
         let lab = xyz_d50_to_lab(xyz);
         let norm_lab = [
             (lab[0] / 100.0).clamp(0.0, 1.0),
-            ((lab[1] + 128.0) / 255.0).clamp(0.0, 1.0),
-            ((lab[2] + 128.0) / 255.0).clamp(0.0, 1.0),
+            ((lab[1] + 128.0) / 256.0).clamp(0.0, 1.0),
+            ((lab[2] + 128.0) / 256.0).clamp(0.0, 1.0),
         ];
         if let Some(gamt) = &self.gamt {
             let v = gamt.eval(norm_lab)[0];
@@ -835,8 +865,8 @@ impl IccProfile {
                 let norm_lab = a2b.eval(norm_dev);
                 let lab = [
                     norm_lab[0] * 100.0,
-                    norm_lab[1] * 255.0 - 128.0,
-                    norm_lab[2] * 255.0 - 128.0,
+                    norm_lab[1] * 256.0 - 128.0,
+                    norm_lab[2] * 256.0 - 128.0,
                 ];
                 let mut xyz = lab_to_xyz_d50(lab);
                 if proof.simulate_paper_white {
@@ -1012,7 +1042,7 @@ mod tests {
             RenderingIntent::RelativeColorimetric,
             true,
         );
-        assert!(white_out.r > 63000 && white_out.g > 63000 && white_out.b > 63000);
+        assert_eq!(white_out, Rgb16::WHITE);
 
         let black_out = prof.transform_pixel(
             WorkingColorSpace::Srgb,
