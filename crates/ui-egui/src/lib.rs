@@ -21,8 +21,8 @@ use lumaprint_color::{AbwHighlightShift, AbwMidtone, AbwTonePreset, ImageBuffer1
 use lumaprint_doc::{
     CanvasBackdropTone, CanvasViewMode, CenteringMode, ColorManagementMode, FilmstripPosition,
     FrameLineSpec, GalleryWrapEffect, GalleryWrapSpec, LayoutMode, LayoutTemplate, MEDIA_TYPES,
-    OutputSharpening, PaperSource, PrintQuality, PrintScope, SizingCriterion, SlotCaptionMode,
-    StandardLayoutSpec, TemplateLayoutSpec, find_media_type,
+    OutputSharpening, PageListPosition, PaperSource, PrintQuality, PrintScope, SizingCriterion,
+    SlotCaptionMode, StandardLayoutSpec, TemplateLayoutSpec, find_media_type,
 };
 use lumaprint_engine::{EngineCommand, Session, scan_folder_for_images};
 use lumaprint_geom::{
@@ -623,6 +623,22 @@ impl TemplateStudioState {
     }
 }
 
+/// Active tab in the Right Dock when `FilmstripPosition::RightTabbed` is active.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RightDockTab {
+    #[default]
+    Settings,
+    Pool,
+}
+
+/// Active tab when `Bilder-Pool` and `Bogenliste` share the same Dock (Left or Bottom).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SharedDockTab {
+    #[default]
+    Pool,
+    PageList,
+}
+
 /// Main LumaPrint GUI Application state.
 pub struct LumaPrintApp {
     pub session: Session,
@@ -661,6 +677,9 @@ pub struct LumaPrintApp {
     last_rendered_preview_dpi: u32,
     pub slot_selected: bool,
     last_visible_pool_position: FilmstripPosition,
+    pub right_dock_tab: RightDockTab,
+    pub left_dock_tab: SharedDockTab,
+    pub bottom_dock_tab: SharedDockTab,
 }
 
 impl Default for LumaPrintApp {
@@ -711,6 +730,70 @@ impl LumaPrintApp {
             last_rendered_preview_dpi: 0,
             slot_selected: true,
             last_visible_pool_position: FilmstripPosition::Left,
+            right_dock_tab: RightDockTab::Settings,
+            left_dock_tab: SharedDockTab::Pool,
+            bottom_dock_tab: SharedDockTab::PageList,
+        }
+    }
+
+    pub fn set_pool_position(&mut self, pos: FilmstripPosition) {
+        if pos != FilmstripPosition::Hidden {
+            self.last_visible_pool_position = pos;
+        }
+        self.session.doc.filmstrip_position = pos;
+        match pos {
+            FilmstripPosition::Left => {
+                self.session.doc.left_dock_collapsed = false;
+                self.left_dock_tab = SharedDockTab::Pool;
+            }
+            FilmstripPosition::RightTabbed => {
+                self.session.doc.right_dock_collapsed = false;
+                self.session.doc.show_settings_panel = true;
+                self.right_dock_tab = RightDockTab::Pool;
+            }
+            FilmstripPosition::Bottom => {
+                self.session.doc.bottom_dock_collapsed = false;
+                self.bottom_dock_tab = SharedDockTab::Pool;
+            }
+            FilmstripPosition::Hidden => {}
+        }
+    }
+
+    pub fn set_page_list_position(&mut self, pos: PageListPosition) {
+        self.session.doc.page_list_position = pos;
+        match pos {
+            PageListPosition::Left => {
+                self.session.doc.left_dock_collapsed = false;
+                self.left_dock_tab = SharedDockTab::PageList;
+            }
+            PageListPosition::BottomInCanvas | PageListPosition::BottomFullWidth => {
+                self.session.doc.bottom_dock_collapsed = false;
+                self.bottom_dock_tab = SharedDockTab::PageList;
+            }
+        }
+    }
+
+    fn draw_dock_placement_menu(&mut self, ui: &mut Ui) {
+        ui.label(RichText::new("Bilder-Pool Position").strong());
+        for pos in [
+            FilmstripPosition::Left,
+            FilmstripPosition::RightTabbed,
+            FilmstripPosition::Bottom,
+        ] {
+            let is_sel = self.session.doc.filmstrip_position == pos;
+            if ui.radio(is_sel, pos.label_de()).clicked() {
+                self.set_pool_position(pos);
+                ui.close_menu();
+            }
+        }
+        ui.separator();
+        ui.label(RichText::new("Bogenliste Position").strong());
+        for pos in PageListPosition::ALL {
+            let is_sel = self.session.doc.page_list_position == pos;
+            if ui.radio(is_sel, pos.label_de()).clicked() {
+                self.set_page_list_position(pos);
+                ui.close_menu();
+            }
         }
     }
 
@@ -739,6 +822,7 @@ impl LumaPrintApp {
         let mut zoom_reset = false;
         let mut do_undo = false;
         let mut do_redo = false;
+        let mut toggle_bottom = false;
         let mut toggle_pool = false;
         let mut toggle_settings = false;
         let mut toggle_slot_guides = false;
@@ -762,8 +846,11 @@ impl LumaPrintApp {
                 }
             }
 
-            // Function-key dock toggles (KDE Dolphin / Gwenview / Okular convention: F9 = Left Pool, F10 = Right Setup Dock)
+            // Function-key dock toggles (F8 = Bottom Dock, F9 = Left Dock / Pool, F10 = Right Setup Dock)
             if !i.modifiers.any() {
+                if i.key_pressed(egui::Key::F8) {
+                    toggle_bottom = true;
+                }
                 if i.key_pressed(egui::Key::F9) {
                     toggle_pool = true;
                 }
@@ -844,16 +931,20 @@ impl LumaPrintApp {
         if let Some(vm) = set_view_mode {
             self.exec(EngineCommand::SetCanvasViewMode(vm));
         }
+        if toggle_bottom {
+            self.session.doc.bottom_dock_collapsed = !self.session.doc.bottom_dock_collapsed;
+        }
         if toggle_pool {
-            if self.session.doc.filmstrip_position != FilmstripPosition::Hidden {
-                self.last_visible_pool_position = self.session.doc.filmstrip_position;
-                self.session.doc.filmstrip_position = FilmstripPosition::Hidden;
-            } else {
+            if self.session.doc.filmstrip_position == FilmstripPosition::Hidden {
                 self.session.doc.filmstrip_position = self.last_visible_pool_position;
+                self.session.doc.left_dock_collapsed = false;
+            } else {
+                self.session.doc.left_dock_collapsed = !self.session.doc.left_dock_collapsed;
             }
         }
         if toggle_settings {
             self.session.doc.show_settings_panel = !self.session.doc.show_settings_panel;
+            self.session.doc.right_dock_collapsed = !self.session.doc.show_settings_panel;
         }
         if toggle_slot_guides {
             self.session.doc.show_slot_guides = !self.session.doc.show_slot_guides;
@@ -1354,21 +1445,34 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         self.last_slot_screen_rects.clear();
         self.last_nav_card_rects.clear();
         self.last_nav_add_rect = None;
+        self.last_pool_rect = Rect::NOTHING;
 
         self.draw_top_menu_and_toolbar(ctx);
 
-        if self.session.doc.show_settings_panel {
-            self.draw_right_settings_panel(ctx);
+        let pool_pos = self.session.doc.filmstrip_position;
+        let page_pos = self.session.doc.page_list_position;
+
+        // 1. Full-width Bottom Dock (when Bogenliste is set to BottomFullWidth)
+        if page_pos == PageListPosition::BottomFullWidth {
+            self.draw_bottom_dock_panel(
+                ctx,
+                None,
+                true,
+                pool_pos == FilmstripPosition::Bottom,
+            );
         }
 
-        match self.session.doc.filmstrip_position {
-            FilmstripPosition::Left => self.draw_left_filmstrip(ctx),
-            FilmstripPosition::Bottom => self.draw_bottom_filmstrip(ctx),
-            FilmstripPosition::Hidden => {
-                self.last_pool_rect = Rect::NOTHING;
-            }
+        // 2. Right Dock (Druck-Einstellungen + optional Bilder-Pool Tab, or slim expand strip when collapsed)
+        self.draw_right_settings_panel(ctx);
+
+        // 3. Left Dock (Bilder-Pool and/or Bogenliste, or slim expand strip when collapsed)
+        let has_left_pool = pool_pos == FilmstripPosition::Left;
+        let has_left_pages = page_pos == PageListPosition::Left;
+        if has_left_pool || has_left_pages {
+            self.draw_left_dock(ctx, has_left_pool, has_left_pages);
         }
 
+        // 4. Central Bogen Workspace (+ In-Canvas Bottom Dock when Bogenliste is BottomInCanvas or Pool is Bottom while Bogenliste is Left)
         self.draw_central_canvas(ctx);
         self.finish_active_drag_if_released(ctx);
         self.draw_drag_tooltip(ctx);
@@ -1656,19 +1760,45 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         if self.session.doc.filmstrip_position != FilmstripPosition::Hidden {
                             self.last_visible_pool_position = self.session.doc.filmstrip_position;
                         }
-                        let mut show_pool =
-                            self.session.doc.filmstrip_position != FilmstripPosition::Hidden;
-                        if ui.checkbox(&mut show_pool, "Zeige Pool  (F9)").changed() {
-                            self.session.doc.filmstrip_position = if show_pool {
-                                self.last_visible_pool_position
+                        let mut show_left = !self.session.doc.left_dock_collapsed
+                            && self.session.doc.filmstrip_position != FilmstripPosition::Hidden;
+                        if ui
+                            .checkbox(&mut show_left, "Zeige Linkes Dock / Pool  (F9)")
+                            .changed()
+                        {
+                            if show_left {
+                                if self.session.doc.filmstrip_position == FilmstripPosition::Hidden
+                                {
+                                    self.session.doc.filmstrip_position =
+                                        self.last_visible_pool_position;
+                                }
+                                self.session.doc.left_dock_collapsed = false;
                             } else {
-                                FilmstripPosition::Hidden
-                            };
+                                self.session.doc.left_dock_collapsed = true;
+                            }
                         }
-                        let _ = ui.checkbox(
-                            &mut self.session.doc.show_settings_panel,
-                            "Zeige Druck-Einstellungen  (F10)",
-                        );
+                        let mut show_right = self.session.doc.show_settings_panel
+                            && !self.session.doc.right_dock_collapsed;
+                        if ui
+                            .checkbox(&mut show_right, "Zeige Druck-Einstellungen  (F10)")
+                            .changed()
+                        {
+                            self.session.doc.show_settings_panel = show_right;
+                            self.session.doc.right_dock_collapsed = !show_right;
+                        }
+                        let mut show_bottom = !self.session.doc.bottom_dock_collapsed;
+                        if ui
+                            .checkbox(&mut show_bottom, "Zeige Unteres Dock / Bogenliste  (F8)")
+                            .changed()
+                        {
+                            self.session.doc.bottom_dock_collapsed = !show_bottom;
+                        }
+
+                        ui.menu_button("◫ Docks platzieren", |ui| {
+                            self.draw_dock_placement_menu(ui);
+                        });
+
+                        ui.separator();
                         let _ = ui.checkbox(
                             &mut self.session.doc.show_slot_guides,
                             "Zeige Rahmen um Slots (gestrichelte Linie)  (Ctrl+G)",
@@ -1818,23 +1948,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             }
                         }
                         ui.separator();
-                        ui.label(RichText::new("Bilder-Pool Position").strong());
-                        for (pos, lbl) in [
-                            (FilmstripPosition::Left, "Bilder-Pool Links"),
-                            (FilmstripPosition::Bottom, "Bilder-Pool Unten"),
-                            (FilmstripPosition::Hidden, "Bilder-Pool Ausblenden"),
-                        ] {
-                            if ui
-                                .radio(self.session.doc.filmstrip_position == pos, lbl)
-                                .clicked()
-                            {
-                                if pos != FilmstripPosition::Hidden {
-                                    self.last_visible_pool_position = pos;
-                                }
-                                self.session.doc.filmstrip_position = pos;
-                                ui.close_menu();
-                            }
-                        }
+                        self.draw_dock_placement_menu(ui);
                         ui.separator();
                         ui.label(RichText::new("Arbeitsbereich-Hintergrundfarbe").strong());
                         for tone in CanvasBackdropTone::ALL {
@@ -1972,92 +2086,436 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             });
     }
 
-    fn draw_left_filmstrip(&mut self, ctx: &Context) {
+    fn draw_left_dock(&mut self, ctx: &Context, has_left_pool: bool, has_left_pages: bool) {
         let t = self.tokens;
+        if self.session.doc.left_dock_collapsed {
+            let tip = match (has_left_pool, has_left_pages) {
+                (true, true) => "Linkes Dock ausklappen: Bilder-Pool & Bogenliste (F9)",
+                (true, false) => "Bilder-Pool links ausklappen (F9)",
+                (false, true) => "Bogenliste links ausklappen (F9)",
+                (false, false) => "Linkes Dock ausklappen (F9)",
+            };
+            let badge = match (has_left_pool, has_left_pages) {
+                (true, true) => "▶\n\n🖼\n\n📄",
+                (true, false) => "▶\n\n🖼",
+                (false, true) => "▶\n\n📄",
+                (false, false) => "▶",
+            };
+            egui::SidePanel::left("left_dock_collapsed_strip")
+                .exact_width(24.0)
+                .resizable(false)
+                .show_separator_line(false)
+                .frame(
+                    egui::Frame::new()
+                        .fill(t.dock)
+                        .inner_margin(egui::Margin::ZERO)
+                        .stroke(Stroke::NONE),
+                )
+                .show(ctx, |ui| {
+                    let full_r = ui.max_rect();
+                    let resp = ui
+                        .interact(
+                            full_r,
+                            egui::Id::new("left_dock_expand_btn"),
+                            Sense::click(),
+                        )
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .on_hover_text(tip);
+                    if resp.hovered() {
+                        ui.painter().rect_filled(full_r, CornerRadius::ZERO, t.hover);
+                    }
+                    ui.painter().vline(
+                        full_r.max.x,
+                        full_r.y_range(),
+                        Stroke::new(1.0_f32, t.separator),
+                    );
+                    ui.painter().text(
+                        Pos2::new(full_r.center().x, full_r.min.y + 18.0),
+                        egui::Align2::CENTER_TOP,
+                        badge,
+                        FontId::proportional(12.0),
+                        if resp.hovered() { t.accent } else { t.text_dim },
+                    );
+                    if resp.clicked() {
+                        self.session.doc.left_dock_collapsed = false;
+                    }
+                });
+            return;
+        }
+
+        let show_pool = if has_left_pool && has_left_pages {
+            self.left_dock_tab == SharedDockTab::Pool
+        } else {
+            has_left_pool
+        };
+
         let resp = egui::SidePanel::left("left_filmstrip_panel")
             .default_width(295.0)
             .min_width(235.0)
             .max_width(580.0)
             .resizable(true)
+            .show_separator_line(false)
             .frame(
                 egui::Frame::new()
                     .fill(t.dock)
                     .inner_margin(egui::Margin::symmetric(12, 10))
-                    .stroke(Stroke::new(1.0_f32, t.separator)),
+                    .stroke(Stroke::NONE),
             )
             .show(ctx, |ui| {
-                self.draw_filmstrip_contents(ui);
+                let panel_rect = ui.max_rect().expand2(Vec2::new(12.0, 10.0));
+                ui.painter().vline(
+                    panel_rect.max.x,
+                    panel_rect.y_range(),
+                    Stroke::new(1.0_f32, t.separator),
+                );
+
+                ui.horizontal(|ui| {
+                    if has_left_pool && has_left_pages {
+                        let pool_lbl = format!("🖼 Pool ({})", self.session.doc.images.len());
+                        let pages_lbl = format!("📄 Bögen ({})", self.session.doc.page_count());
+                        let pool_tab = ui.selectable_label(
+                            self.left_dock_tab == SharedDockTab::Pool,
+                            pool_lbl,
+                        );
+                        if pool_tab.clicked()
+                            || (self.active_drag.is_some() && pool_tab.hovered())
+                        {
+                            self.left_dock_tab = SharedDockTab::Pool;
+                        }
+                        let pages_tab = ui.selectable_label(
+                            self.left_dock_tab == SharedDockTab::PageList,
+                            pages_lbl,
+                        );
+                        if pages_tab.clicked()
+                            || (self.active_drag.is_some() && pages_tab.hovered())
+                        {
+                            self.left_dock_tab = SharedDockTab::PageList;
+                        }
+                    } else if has_left_pool {
+                        ui.label(
+                            RichText::new(format!(
+                                "🖼 Bilder-Pool ({})",
+                                self.session.doc.images.len()
+                            ))
+                            .strong()
+                            .color(t.text),
+                        );
+                    } else {
+                        ui.label(
+                            RichText::new(format!(
+                                "📄 Bogenliste ({})",
+                                self.session.doc.page_count()
+                            ))
+                            .strong()
+                            .color(t.text),
+                        );
+                    }
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .small_button("◀")
+                            .on_hover_text("Linkes Dock einklappen (F9)")
+                            .clicked()
+                        {
+                            self.session.doc.left_dock_collapsed = true;
+                        }
+                        ui.menu_button("◫", |ui| {
+                            self.draw_dock_placement_menu(ui);
+                        })
+                        .response
+                        .on_hover_text("Dock-Position wählen (Pool / Bogenliste)");
+                    });
+                });
+
+                ui.add_space(4.0);
+                ui.separator();
+                ui.add_space(4.0);
+
+                if show_pool {
+                    self.draw_filmstrip_contents(ui, false);
+                } else {
+                    self.draw_page_navigator_strip(ui, true);
+                }
             });
-        self.last_pool_rect = resp.response.rect;
+
+        if show_pool {
+            self.last_pool_rect = resp.response.rect;
+        }
     }
 
-    fn draw_bottom_filmstrip(&mut self, ctx: &Context) {
+    fn draw_bottom_dock_panel(
+        &mut self,
+        ctx: &Context,
+        in_canvas_ui: Option<&mut Ui>,
+        has_pages: bool,
+        has_pool: bool,
+    ) {
+        if !has_pages && !has_pool {
+            return;
+        }
         let t = self.tokens;
-        let resp = egui::TopBottomPanel::bottom("bottom_filmstrip_panel")
-            .default_height(175.0)
-            .resizable(true)
+        let is_in_canvas = in_canvas_ui.is_some();
+        let panel_id = if is_in_canvas {
+            "central_page_navigator_strip"
+        } else {
+            "full_bottom_dock_panel"
+        };
+
+        if self.session.doc.bottom_dock_collapsed {
+            let label = match (has_pages, has_pool) {
+                (true, true) => "▲  Bogenliste & Bilder-Pool ausklappen (F8)",
+                (true, false) => "▲  Bogenliste ausklappen (F8)",
+                (false, true) => "▲  Bilder-Pool ausklappen (F8)",
+                (false, false) => "▲  Ausklappen (F8)",
+            };
+            let fill_col = if is_in_canvas {
+                Color32::TRANSPARENT
+            } else {
+                t.dock
+            };
+            let collapsed_id = if is_in_canvas {
+                "central_bottom_dock_collapsed_strip"
+            } else {
+                "bottom_dock_collapsed_strip"
+            };
+            let panel = egui::TopBottomPanel::bottom(collapsed_id)
+                .exact_height(24.0)
+                .resizable(false)
+                .show_separator_line(false)
+                .frame(
+                    egui::Frame::new()
+                        .fill(fill_col)
+                        .inner_margin(egui::Margin::ZERO)
+                        .stroke(Stroke::NONE),
+                );
+            let render_bar = |app: &mut Self, ui: &mut Ui| {
+                let full_r = ui.max_rect();
+                let resp = ui
+                    .interact(
+                        full_r,
+                        egui::Id::new((collapsed_id, "expand_btn")),
+                        Sense::click(),
+                    )
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text(label);
+                if resp.hovered() {
+                    ui.painter().rect_filled(full_r, CornerRadius::ZERO, t.hover);
+                }
+                ui.painter().hline(
+                    full_r.x_range(),
+                    full_r.min.y,
+                    Stroke::new(1.0_f32, t.separator),
+                );
+                ui.painter().text(
+                    full_r.center(),
+                    egui::Align2::CENTER_CENTER,
+                    label,
+                    FontId::proportional(11.5),
+                    if resp.hovered() { t.accent } else { t.text_dim },
+                );
+                if resp.clicked() {
+                    app.session.doc.bottom_dock_collapsed = false;
+                }
+            };
+            if let Some(parent_ui) = in_canvas_ui {
+                panel.show_inside(parent_ui, |ui| render_bar(self, ui));
+            } else {
+                panel.show(ctx, |ui| render_bar(self, ui));
+            }
+            return;
+        }
+
+        let show_pool = if has_pages && has_pool {
+            self.bottom_dock_tab == SharedDockTab::Pool
+        } else {
+            has_pool
+        };
+
+        // No 4-sided box around the Bogenliste: separated from the Bogen above only by a 1px horizontal line!
+        let fill_col = if is_in_canvas && !show_pool {
+            Color32::TRANSPARENT
+        } else {
+            t.dock
+        };
+
+        let mut panel = egui::TopBottomPanel::bottom(panel_id)
+            .show_separator_line(false)
             .frame(
                 egui::Frame::new()
-                    .fill(t.dock)
-                    .inner_margin(egui::Margin::symmetric(12, 8))
-                    .stroke(Stroke::new(1.0_f32, t.separator)),
-            )
-            .show(ctx, |ui| {
-                self.draw_filmstrip_contents(ui);
-            });
-        self.last_pool_rect = resp.response.rect;
+                    .fill(fill_col)
+                    .inner_margin(egui::Margin::symmetric(12, 6))
+                    .stroke(Stroke::NONE),
+            );
+        panel = if show_pool {
+            panel
+                .default_height(165.0)
+                .min_height(135.0)
+                .max_height(300.0)
+                .resizable(true)
+        } else {
+            panel.exact_height(114.0).resizable(false)
+        };
+
+        let resp = if let Some(parent_ui) = in_canvas_ui {
+            panel.show_inside(parent_ui, |ui| {
+                self.draw_bottom_dock_contents(ui, has_pages, has_pool, show_pool);
+            })
+        } else {
+            panel.show(ctx, |ui| {
+                self.draw_bottom_dock_contents(ui, has_pages, has_pool, show_pool);
+            })
+        };
+
+        if show_pool {
+            self.last_pool_rect = resp.response.rect;
+        }
     }
 
-    fn draw_filmstrip_contents(&mut self, ui: &mut Ui) {
+    fn draw_bottom_dock_contents(
+        &mut self,
+        ui: &mut Ui,
+        has_pages: bool,
+        has_pool: bool,
+        show_pool: bool,
+    ) {
         let t = self.tokens;
-        let panel_w = ui.available_width();
-        ui.set_max_width(panel_w);
+        let outer_rect = ui.max_rect().expand2(Vec2::new(12.0, 6.0));
+        ui.painter().hline(
+            outer_rect.x_range(),
+            outer_rect.min.y,
+            Stroke::new(1.0_f32, t.separator),
+        );
 
-        // Header with Pool count
         ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(format!("Bilder-Pool ({})", self.session.doc.images.len()))
-                    .strong()
-                    .color(t.text),
-            );
-        });
-
-        ui.add_space(4.0);
-
-        // Single "Hinzufügen" button (images and folders allowed) + "Auf Bögen verteilen"
-        ui.horizontal(|ui| {
-            if ui
-                .button("➕ Hinzufügen")
-                .on_hover_text(
-                    "Bilder oder Ordner auswählen und zum Bilder-Pool hinzufügen (oder per Drag&Drop hereinziehen)",
-                )
-                .clicked()
-            {
-                self.open_native_add_picker();
+            if has_pages && has_pool {
+                let pages_lbl = format!("📄 Bogenliste ({})", self.session.doc.page_count());
+                let pool_lbl = format!("🖼 Bilder-Pool ({})", self.session.doc.images.len());
+                let pages_tab = ui.selectable_label(
+                    self.bottom_dock_tab == SharedDockTab::PageList,
+                    pages_lbl,
+                );
+                if pages_tab.clicked()
+                    || (self.active_drag.is_some() && pages_tab.hovered())
+                {
+                    self.bottom_dock_tab = SharedDockTab::PageList;
+                }
+                let pool_tab = ui.selectable_label(
+                    self.bottom_dock_tab == SharedDockTab::Pool,
+                    pool_lbl,
+                );
+                if pool_tab.clicked()
+                    || (self.active_drag.is_some() && pool_tab.hovered())
+                {
+                    self.bottom_dock_tab = SharedDockTab::Pool;
+                }
+            } else if has_pages {
+                ui.label(
+                    RichText::new(format!("📄 Bogenliste ({})", self.session.doc.page_count()))
+                        .small()
+                        .strong()
+                        .color(t.text_dim),
+                );
+            } else {
+                ui.label(
+                    RichText::new(format!("🖼 Bilder-Pool ({})", self.session.doc.images.len()))
+                        .small()
+                        .strong()
+                        .color(t.text),
+                );
             }
 
-            if ui
-                .button("🪄 Auf Bögen verteilen")
-                .on_hover_text(
-                    "Verteilt Bilder aus dem Pool automatisch auf freie Bildstellen und legt bei Bedarf neue Bögen an",
-                )
-                .clicked()
-            {
-                self.exec(EngineCommand::AutoDistributePoolImages {
-                    only_unassigned: true,
-                });
+            if show_pool {
+                ui.separator();
+                if ui
+                    .small_button("➕ Hinzufügen")
+                    .on_hover_text(
+                        "Bilder oder Ordner auswählen und zum Bilder-Pool hinzufügen (oder per Drag&Drop hereinziehen)",
+                    )
+                    .clicked()
+                {
+                    self.open_native_add_picker();
+                }
+                if ui
+                    .small_button("🪄 Auf Bögen verteilen")
+                    .on_hover_text(
+                        "Verteilt Bilder aus dem Pool automatisch auf freie Bildstellen und legt bei Bedarf neue Bögen an",
+                    )
+                    .clicked()
+                {
+                    self.exec(EngineCommand::AutoDistributePoolImages {
+                        only_unassigned: true,
+                    });
+                }
+                ui.checkbox(
+                    &mut self.session.doc.pool_filter_unassigned_only,
+                    "Nur unplatzierte zeigen",
+                );
             }
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .small_button("▼")
+                    .on_hover_text("Unteres Dock einklappen (F8)")
+                    .clicked()
+                {
+                    self.session.doc.bottom_dock_collapsed = true;
+                }
+                ui.menu_button("◫", |ui| {
+                    self.draw_dock_placement_menu(ui);
+                })
+                .response
+                .on_hover_text("Dock-Position wählen (Bogenliste / Pool)");
+            });
         });
 
         ui.add_space(2.0);
-        ui.checkbox(
-            &mut self.session.doc.pool_filter_unassigned_only,
-            "Nur unplatzierte zeigen",
-        );
+        if show_pool {
+            self.draw_filmstrip_contents(ui, true);
+        } else {
+            self.draw_page_navigator_strip(ui, false);
+        }
+    }
 
-        ui.add_space(4.0);
-        ui.separator();
-        ui.add_space(4.0);
+    fn draw_filmstrip_contents(&mut self, ui: &mut Ui, is_horizontal: bool) {
+        let panel_w = ui.available_width();
+        ui.set_max_width(panel_w);
+
+        if !is_horizontal {
+            // Single "Hinzufügen" button (images and folders allowed) + "Auf Bögen verteilen"
+            ui.horizontal(|ui| {
+                if ui
+                    .button("➕ Hinzufügen")
+                    .on_hover_text(
+                        "Bilder oder Ordner auswählen und zum Bilder-Pool hinzufügen (oder per Drag&Drop hereinziehen)",
+                    )
+                    .clicked()
+                {
+                    self.open_native_add_picker();
+                }
+
+                if ui
+                    .button("🪄 Auf Bögen verteilen")
+                    .on_hover_text(
+                        "Verteilt Bilder aus dem Pool automatisch auf freie Bildstellen und legt bei Bedarf neue Bögen an",
+                    )
+                    .clicked()
+                {
+                    self.exec(EngineCommand::AutoDistributePoolImages {
+                        only_unassigned: true,
+                    });
+                }
+            });
+
+            ui.add_space(2.0);
+            ui.checkbox(
+                &mut self.session.doc.pool_filter_unassigned_only,
+                "Nur unplatzierte zeigen",
+            );
+
+            ui.add_space(4.0);
+            ui.separator();
+            ui.add_space(4.0);
+        }
 
         let images = self.session.doc.images.clone();
         let active_idx = self.session.doc.active_image_index;
@@ -2066,197 +2524,94 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         let mut pending_cmd: Option<EngineCommand> = None;
         let mut open_crop_for_idx: Option<usize> = None;
 
-        let scroll_resp = egui::ScrollArea::vertical()
-            .drag_to_scroll(false)
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                let row_w = (ui.available_width() - 4.0).max(150.0);
-                let thumb_w = (row_w - 165.0).clamp(64.0, 240.0);
-                let thumb_h = (thumb_w * 0.72).round();
-                let row_h = (thumb_h + 6.0).max(52.0);
+        let scroll_rect = if is_horizontal {
+            egui::ScrollArea::horizontal()
+                .drag_to_scroll(false)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        let card_w = 185.0_f32;
+                        let card_h = (ui.available_height() - 6.0).clamp(64.0, 125.0);
+                        let thumb_w = ((card_h - 8.0) * 1.15).clamp(56.0, 88.0);
+                        let thumb_h = (card_h - 8.0).max(46.0);
 
-                for (idx, img) in images.iter().enumerate() {
-                    let (usage_count, usage_pages) = self.session.doc.image_usage_summary(img.id);
-                    if filter_unassigned && usage_count > 0 {
-                        continue;
-                    }
-
-                    let is_sel = idx == active_idx;
-
-                    // Allocate the entire row up-front with click_and_drag so no child widget steals drags!
-                    let (full_row_rect, row_resp) =
-                        ui.allocate_exact_size(Vec2::new(row_w, row_h), Sense::click_and_drag());
-                    let row_resp = row_resp
-                        .on_hover_cursor(egui::CursorIcon::Grab)
-                        .on_hover_text(
-                            "In den Bogen oder auf eine Bildstelle ziehen (Doppelklick zum Platzieren, Rechtsklick für Aktionen)",
-                        );
-
-                    let bg_fill = if is_sel {
-                        t.accent.gamma_multiply(0.20)
-                    } else if row_resp.hovered() {
-                        t.hover.gamma_multiply(0.65)
-                    } else {
-                        Color32::TRANSPARENT
-                    };
-
-                    let painter = ui.painter();
-                    if bg_fill != Color32::TRANSPARENT {
-                        painter.rect_filled(full_row_rect, CornerRadius::same(4), bg_fill);
-                    }
-
-                    let thumb_rect = Rect::from_min_size(
-                        Pos2::new(full_row_rect.min.x + 3.0, full_row_rect.min.y + 3.0),
-                        Vec2::new(thumb_w, thumb_h),
-                    );
-                    painter.rect_filled(thumb_rect, CornerRadius::same(2), t.canvas);
-
-                    if let Some(tex) = self.thumbnail_textures.get(&img.id) {
-                        let inner = thumb_rect.shrink(2.0);
-                        let iw = (img.meta.width.max(1)) as f32;
-                        let ih = (img.meta.height.max(1)) as f32;
-                        let scale = (inner.width() / iw).min(inner.height() / ih);
-                        let draw_size = Vec2::new(iw * scale, ih * scale);
-                        let draw_rect = Rect::from_center_size(inner.center(), draw_size);
-                        painter.image(
-                            tex.id(),
-                            draw_rect,
-                            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-                            Color32::WHITE,
-                        );
-                    }
-
-                    let border_stroke = if is_sel {
-                        Stroke::new(1.5_f32, t.accent)
-                    } else if usage_count > 0 {
-                        Stroke::new(1.2_f32, Color32::from_rgb(70, 190, 120))
-                    } else {
-                        Stroke::new(1.0_f32, t.field_border)
-                    };
-                    painter.rect_stroke(
-                        thumb_rect,
-                        CornerRadius::same(2),
-                        border_stroke,
-                        StrokeKind::Middle,
-                    );
-
-                    // Paint text column to the right of the thumbnail
-                    let text_x = thumb_rect.max.x + 10.0;
-                    let text_top = thumb_rect.min.y + 2.0;
-                    painter.text(
-                        Pos2::new(text_x, text_top),
-                        egui::Align2::LEFT_TOP,
-                        &img.display_name,
-                        FontId::proportional(12.5),
-                        if is_sel { t.accent } else { t.text },
-                    );
-                    painter.text(
-                        Pos2::new(text_x, text_top + 17.0),
-                        egui::Align2::LEFT_TOP,
-                        format!(
-                            "{}×{} · {}-Bit",
-                            img.meta.width, img.meta.height, img.meta.bit_depth_per_channel
-                        ),
-                        FontId::proportional(11.0),
-                        t.text_dim,
-                    );
-
-                    let (badge_txt, badge_col) = if usage_count == 0 {
-                        (String::from("○ Nicht platziert"), t.text_faint)
-                    } else if usage_count == 1 {
-                        (
-                            format!("● Platziert ({usage_pages})"),
-                            Color32::from_rgb(80, 210, 130),
-                        )
-                    } else {
-                        (
-                            format!("● {usage_count}× ({usage_pages})"),
-                            Color32::from_rgb(90, 195, 255),
-                        )
-                    };
-                    painter.text(
-                        Pos2::new(text_x, text_top + 33.0),
-                        egui::Align2::LEFT_TOP,
-                        badge_txt,
-                        FontId::proportional(11.0),
-                        badge_col,
-                    );
-
-                    if row_resp.clicked() {
-                        clicked_idx = Some(idx);
-                    }
-                    if row_resp.double_clicked() {
-                        let active_page = self.session.doc.active_page_index;
-                        pending_cmd = Some(EngineCommand::PlacePoolImageOnSheet {
-                            image_id: img.id,
-                            page_index: active_page,
-                            slot_index: None,
-                        });
-                    }
-                    if row_resp.drag_started() || row_resp.dragged() {
-                        let payload = DragPayload::PoolImage(img.id);
-                        self.active_drag = Some(payload);
-                        egui::DragAndDrop::set_payload(ui.ctx(), payload);
-                    }
-
-                    row_resp.context_menu(|ui| {
-                        let active_page = self.session.doc.active_page_index;
-                        let active_slot = self.session.doc.active_slot_index;
-                        if ui
-                            .button(format!(
-                                "📥 Auf Bogen {} · Slot {} legen",
-                                active_page + 1,
-                                active_slot + 1
-                            ))
-                            .clicked()
-                        {
-                            pending_cmd = Some(EngineCommand::AssignImageToPageSlot {
-                                page_index: active_page,
-                                slot_index: active_slot,
-                                image_id: Some(img.id),
-                            });
-                            ui.close_menu();
-                        }
-                        if ui.button("📄 Auf neuen Bogen legen").clicked() {
-                            pending_cmd = Some(EngineCommand::AddPage {
-                                initial_image_id: Some(img.id),
-                            });
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        if ui.button("✂ Bildbeschnitt…").clicked() {
-                            open_crop_for_idx = Some(idx);
-                            ui.close_menu();
-                        }
-                        if ui.button("↻ 90° rechts drehen").clicked() {
-                            self.rotate_image_by(img.id, 90);
-                            ui.close_menu();
-                        }
-                        if ui.button("↔ Horizontal spiegeln").clicked() {
-                            self.toggle_flip_horizontal(img.id);
-                            ui.close_menu();
-                        }
-                        if ui.button("↕ Vertikal spiegeln").clicked() {
-                            self.toggle_flip_vertical(img.id);
-                            ui.close_menu();
-                        }
-                        ui.separator();
-                        if ui.button("🗑 Aus Bilder-Pool entfernen").clicked() {
-                            pending_cmd = Some(EngineCommand::RemoveImage { image_id: img.id });
-                            ui.close_menu();
+                        for (idx, img) in images.iter().enumerate() {
+                            let (usage_count, usage_pages) =
+                                self.session.doc.image_usage_summary(img.id);
+                            if filter_unassigned && usage_count > 0 {
+                                continue;
+                            }
+                            let is_sel = idx == active_idx;
+                            let (full_row_rect, row_resp) = ui.allocate_exact_size(
+                                Vec2::new(card_w, card_h),
+                                Sense::click_and_drag(),
+                            );
+                            self.paint_and_interact_pool_item(
+                                ui,
+                                idx,
+                                img,
+                                is_sel,
+                                usage_count,
+                                &usage_pages,
+                                full_row_rect,
+                                Vec2::new(thumb_w, thumb_h),
+                                row_resp,
+                                &mut clicked_idx,
+                                &mut pending_cmd,
+                                &mut open_crop_for_idx,
+                            );
                         }
                     });
+                })
+                .inner_rect
+        } else {
+            egui::ScrollArea::vertical()
+                .drag_to_scroll(false)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    let row_w = (ui.available_width() - 4.0).max(150.0);
+                    let thumb_w = (row_w - 165.0).clamp(64.0, 240.0);
+                    let thumb_h = (thumb_w * 0.72).round();
+                    let row_h = (thumb_h + 6.0).max(52.0);
 
-                    if idx + 1 < images.len() {
-                        ui.add_space(4.0);
-                        ui.separator();
-                        ui.add_space(4.0);
+                    for (idx, img) in images.iter().enumerate() {
+                        let (usage_count, usage_pages) =
+                            self.session.doc.image_usage_summary(img.id);
+                        if filter_unassigned && usage_count > 0 {
+                            continue;
+                        }
+                        let is_sel = idx == active_idx;
+                        let (full_row_rect, row_resp) = ui.allocate_exact_size(
+                            Vec2::new(row_w, row_h),
+                            Sense::click_and_drag(),
+                        );
+                        self.paint_and_interact_pool_item(
+                            ui,
+                            idx,
+                            img,
+                            is_sel,
+                            usage_count,
+                            &usage_pages,
+                            full_row_rect,
+                            Vec2::new(thumb_w, thumb_h),
+                            row_resp,
+                            &mut clicked_idx,
+                            &mut pending_cmd,
+                            &mut open_crop_for_idx,
+                        );
+
+                        if idx + 1 < images.len() {
+                            ui.add_space(4.0);
+                            ui.separator();
+                            ui.add_space(4.0);
+                        }
                     }
-                }
-            });
+                })
+                .inner_rect
+        };
 
         // Visual highlight when dragging a placed slot image back over the Pool
-        let pool_rect = scroll_resp.inner_rect;
         if let Some(DragPayload::PageSlot { .. }) = self
             .active_drag
             .or_else(|| egui::DragAndDrop::payload::<DragPayload>(ui.ctx()).map(|p| *p))
@@ -2269,7 +2624,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             });
             if pointer_in_pool {
                 ui.painter().rect_stroke(
-                    pool_rect.shrink(2.0),
+                    scroll_rect.shrink(2.0),
                     CornerRadius::same(4),
                     Stroke::new(2.0_f32, Color32::from_rgb(255, 165, 60)),
                     StrokeKind::Middle,
@@ -2289,36 +2644,216 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn paint_and_interact_pool_item(
+        &mut self,
+        ui: &mut Ui,
+        idx: usize,
+        img: &lumaprint_doc::SourceImageEntry,
+        is_sel: bool,
+        usage_count: usize,
+        usage_pages: &str,
+        full_row_rect: Rect,
+        thumb_size: Vec2,
+        row_resp: egui::Response,
+        clicked_idx: &mut Option<usize>,
+        pending_cmd: &mut Option<EngineCommand>,
+        open_crop_for_idx: &mut Option<usize>,
+    ) {
+        let t = self.tokens;
+        let row_resp = row_resp
+            .on_hover_cursor(egui::CursorIcon::Grab)
+            .on_hover_text(
+                "In den Bogen oder auf eine Bildstelle ziehen (Doppelklick zum Platzieren, Rechtsklick für Aktionen)",
+            );
+
+        let bg_fill = if is_sel {
+            t.accent.gamma_multiply(0.20)
+        } else if row_resp.hovered() {
+            t.hover.gamma_multiply(0.65)
+        } else {
+            Color32::TRANSPARENT
+        };
+
+        let painter = ui.painter();
+        if bg_fill != Color32::TRANSPARENT {
+            painter.rect_filled(full_row_rect, CornerRadius::same(4), bg_fill);
+        }
+
+        let thumb_rect = Rect::from_min_size(
+            Pos2::new(full_row_rect.min.x + 3.0, full_row_rect.min.y + 3.0),
+            thumb_size,
+        );
+        painter.rect_filled(thumb_rect, CornerRadius::same(2), t.canvas);
+
+        if let Some(tex) = self.thumbnail_textures.get(&img.id) {
+            let inner = thumb_rect.shrink(2.0);
+            let iw = (img.meta.width.max(1)) as f32;
+            let ih = (img.meta.height.max(1)) as f32;
+            let scale = (inner.width() / iw).min(inner.height() / ih);
+            let draw_size = Vec2::new(iw * scale, ih * scale);
+            let draw_rect = Rect::from_center_size(inner.center(), draw_size);
+            painter.image(
+                tex.id(),
+                draw_rect,
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                Color32::WHITE,
+            );
+        }
+
+        let border_stroke = if is_sel {
+            Stroke::new(1.5_f32, t.accent)
+        } else if usage_count > 0 {
+            Stroke::new(1.2_f32, Color32::from_rgb(70, 190, 120))
+        } else {
+            Stroke::new(1.0_f32, t.field_border)
+        };
+        painter.rect_stroke(
+            thumb_rect,
+            CornerRadius::same(2),
+            border_stroke,
+            StrokeKind::Middle,
+        );
+
+        let text_x = thumb_rect.max.x + 8.0;
+        let text_top = thumb_rect.min.y + 2.0;
+        let short_name = truncate_combo_label(&img.display_name, 18);
+        painter.text(
+            Pos2::new(text_x, text_top),
+            egui::Align2::LEFT_TOP,
+            short_name,
+            FontId::proportional(12.0),
+            if is_sel { t.accent } else { t.text },
+        );
+        painter.text(
+            Pos2::new(text_x, text_top + 16.0),
+            egui::Align2::LEFT_TOP,
+            format!(
+                "{}×{} · {}-Bit",
+                img.meta.width, img.meta.height, img.meta.bit_depth_per_channel
+            ),
+            FontId::proportional(10.5),
+            t.text_dim,
+        );
+
+        let (badge_txt, badge_col) = if usage_count == 0 {
+            (String::from("○ Nicht platziert"), t.text_faint)
+        } else if usage_count == 1 {
+            (
+                format!("● Platziert ({usage_pages})"),
+                Color32::from_rgb(80, 210, 130),
+            )
+        } else {
+            (
+                format!("● {usage_count}× ({usage_pages})"),
+                Color32::from_rgb(90, 195, 255),
+            )
+        };
+        painter.text(
+            Pos2::new(text_x, text_top + 31.0),
+            egui::Align2::LEFT_TOP,
+            badge_txt,
+            FontId::proportional(10.5),
+            badge_col,
+        );
+
+        if row_resp.clicked() {
+            *clicked_idx = Some(idx);
+        }
+        if row_resp.double_clicked() {
+            let active_page = self.session.doc.active_page_index;
+            *pending_cmd = Some(EngineCommand::PlacePoolImageOnSheet {
+                image_id: img.id,
+                page_index: active_page,
+                slot_index: None,
+            });
+        }
+        if row_resp.drag_started() || row_resp.dragged() {
+            let payload = DragPayload::PoolImage(img.id);
+            self.active_drag = Some(payload);
+            egui::DragAndDrop::set_payload(ui.ctx(), payload);
+        }
+
+        row_resp.context_menu(|ui| {
+            let active_page = self.session.doc.active_page_index;
+            let active_slot = self.session.doc.active_slot_index;
+            if ui
+                .button(format!(
+                    "📥 Auf Bogen {} · Slot {} legen",
+                    active_page + 1,
+                    active_slot + 1
+                ))
+                .clicked()
+            {
+                *pending_cmd = Some(EngineCommand::AssignImageToPageSlot {
+                    page_index: active_page,
+                    slot_index: active_slot,
+                    image_id: Some(img.id),
+                });
+                ui.close_menu();
+            }
+            if ui.button("📄 Auf neuen Bogen legen").clicked() {
+                *pending_cmd = Some(EngineCommand::AddPage {
+                    initial_image_id: Some(img.id),
+                });
+                ui.close_menu();
+            }
+            ui.separator();
+            if ui.button("✂ Bildbeschnitt…").clicked() {
+                *open_crop_for_idx = Some(idx);
+                ui.close_menu();
+            }
+            if ui.button("↻ 90° rechts drehen").clicked() {
+                self.rotate_image_by(img.id, 90);
+                ui.close_menu();
+            }
+            if ui.button("↔ Horizontal spiegeln").clicked() {
+                self.toggle_flip_horizontal(img.id);
+                ui.close_menu();
+            }
+            if ui.button("↕ Vertikal spiegeln").clicked() {
+                self.toggle_flip_vertical(img.id);
+                ui.close_menu();
+            }
+            ui.separator();
+            if ui.button("🗑 Aus Bilder-Pool entfernen").clicked() {
+                *pending_cmd = Some(EngineCommand::RemoveImage { image_id: img.id });
+                ui.close_menu();
+            }
+        });
+    }
+
     fn draw_central_canvas(&mut self, ctx: &Context) {
         let backdrop_rgb = self.session.doc.canvas_backdrop.rgb8();
-        let panel_frame = egui::Frame::central_panel(&ctx.style())
-            .fill(Color32::from_rgb(backdrop_rgb.r, backdrop_rgb.g, backdrop_rgb.b));
+        let panel_frame = egui::Frame::new()
+            .fill(Color32::from_rgb(backdrop_rgb.r, backdrop_rgb.g, backdrop_rgb.b))
+            .inner_margin(egui::Margin::ZERO)
+            .stroke(Stroke::NONE);
+
+        let page_pos = self.session.doc.page_list_position;
+        let pool_pos = self.session.doc.filmstrip_position;
+        let in_canvas_pages = page_pos == PageListPosition::BottomInCanvas;
+        let in_canvas_pool =
+            pool_pos == FilmstripPosition::Bottom && page_pos != PageListPosition::BottomFullWidth;
 
         egui::CentralPanel::default()
             .frame(panel_frame)
             .show(ctx, |ui| {
-                // 1. Bottom Page-Thumbnail Navigator Strip inside Central Workspace
-                egui::TopBottomPanel::bottom("central_page_navigator_strip")
-                    .resizable(false)
-                    .exact_height(104.0)
-                    .frame(
-                        egui::Frame::new()
-                            .fill(self.tokens.dock.gamma_multiply(0.95))
-                            .inner_margin(egui::Margin::symmetric(12, 8))
-                            .stroke(Stroke::new(1.0_f32, self.tokens.separator)),
-                    )
-                    .show_inside(ui, |ui| {
-                        self.draw_page_navigator_strip(ui);
-                    });
+                // 1. Optional Bottom Dock inside the Bogen Workspace (separated from the Bogen above by a 1px line, without box)
+                if in_canvas_pages || in_canvas_pool {
+                    self.draw_bottom_dock_panel(ctx, Some(ui), in_canvas_pages, in_canvas_pool);
+                }
 
                 // 2. Top Icon Action Strip above the Sheet (only icons without text, larger, no button frames)
                 egui::TopBottomPanel::top("canvas_top_icon_action_strip")
                     .resizable(false)
                     .exact_height(42.0)
+                    .show_separator_line(false)
                     .frame(
                         egui::Frame::new()
                             .fill(Color32::from_black_alpha(55))
-                            .inner_margin(egui::Margin::symmetric(16, 5)),
+                            .inner_margin(egui::Margin::symmetric(16, 5))
+                            .stroke(Stroke::NONE),
                     )
                     .show_inside(ui, |ui| {
                         self.draw_canvas_top_icon_strip(ui);
@@ -3472,181 +4007,203 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         }
     }
 
-    fn draw_page_navigator_strip(&mut self, ui: &mut Ui) {
+    fn draw_page_navigator_strip(&mut self, ui: &mut Ui, vertical: bool) {
+        let mut pending_cmd: Option<EngineCommand> = None;
+
+        if vertical {
+            let card_w = (ui.available_width() - 10.0).clamp(110.0, 210.0);
+            let card_size = Vec2::new(card_w, 96.0);
+            egui::ScrollArea::vertical()
+                .drag_to_scroll(false)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.spacing_mut().item_spacing.y = 8.0;
+                        self.paint_and_interact_page_cards(ui, card_size, &mut pending_cmd);
+                    });
+                });
+        } else {
+            let card_size = Vec2::new(98.0, 76.0);
+            egui::ScrollArea::horizontal()
+                .drag_to_scroll(false)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 10.0;
+                        self.paint_and_interact_page_cards(ui, card_size, &mut pending_cmd);
+                    });
+                });
+        }
+
+        if let Some(cmd) = pending_cmd {
+            self.exec(cmd);
+        }
+    }
+
+    fn paint_and_interact_page_cards(
+        &mut self,
+        ui: &mut Ui,
+        card_size: Vec2,
+        pending_cmd: &mut Option<EngineCommand>,
+    ) {
         let t = self.tokens;
         let total_pages = self.session.doc.page_count();
         let active_page = self.session.doc.active_page_index;
-        let mut pending_cmd: Option<EngineCommand> = None;
 
-        egui::ScrollArea::horizontal()
-            .drag_to_scroll(false)
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 10.0;
+        for pi in 0..total_pages {
+            let is_active = pi == active_page;
+            let (card_rect, card_resp) =
+                ui.allocate_exact_size(card_size, Sense::click_and_drag());
+            self.last_nav_card_rects.push((pi, card_rect));
 
-                    for pi in 0..total_pages {
-                        let is_active = pi == active_page;
-                        let card_size = Vec2::new(98.0, 86.0);
-                        let (card_rect, card_resp) =
-                            ui.allocate_exact_size(card_size, Sense::click_and_drag());
-                        self.last_nav_card_rects.push((pi, card_rect));
+            let p = ui.painter();
+            let bg = if is_active {
+                t.accent.gamma_multiply(0.22)
+            } else if card_resp.hovered() {
+                t.hover
+            } else {
+                t.field
+            };
+            p.rect_filled(card_rect, CornerRadius::same(4), bg);
+            let border = if is_active {
+                Stroke::new(2.0_f32, t.accent)
+            } else {
+                Stroke::new(1.0_f32, t.field_border)
+            };
+            p.rect_stroke(card_rect, CornerRadius::same(4), border, StrokeKind::Middle);
 
-                        let p = ui.painter();
-                        let bg = if is_active {
-                            t.accent.gamma_multiply(0.22)
-                        } else if card_resp.hovered() {
-                            t.hover
-                        } else {
-                            t.field
-                        };
-                        p.rect_filled(card_rect, CornerRadius::same(4), bg);
-                        let border = if is_active {
-                            Stroke::new(2.0_f32, t.accent)
-                        } else {
-                            Stroke::new(1.0_f32, t.field_border)
-                        };
-                        p.rect_stroke(card_rect, CornerRadius::same(4), border, StrokeKind::Middle);
+            // Miniature rendered page thumbnail inside navigator card
+            let thumb_box = Rect::from_min_max(
+                Pos2::new(card_rect.min.x + 8.0, card_rect.min.y + 5.0),
+                Pos2::new(card_rect.max.x - 8.0, card_rect.max.y - 20.0),
+            );
+            if let Some(tex) = self.page_thumb_textures.get(&pi) {
+                let sz = tex.size_vec2().max(Vec2::splat(1.0));
+                let sc = (thumb_box.width() / sz.x).min(thumb_box.height() / sz.y);
+                let r = Rect::from_center_size(thumb_box.center(), sz * sc);
+                p.image(
+                    tex.id(),
+                    r,
+                    Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                    Color32::WHITE,
+                );
+                p.rect_stroke(
+                    r,
+                    CornerRadius::ZERO,
+                    Stroke::new(1.0_f32, t.field_border),
+                    StrokeKind::Middle,
+                );
+            } else {
+                p.rect_filled(thumb_box, CornerRadius::ZERO, Color32::WHITE);
+            }
 
-                        // Miniature rendered page thumbnail inside navigator card
-                        let thumb_box = Rect::from_min_max(
-                            Pos2::new(card_rect.min.x + 8.0, card_rect.min.y + 5.0),
-                            Pos2::new(card_rect.max.x - 8.0, card_rect.max.y - 20.0),
-                        );
-                        if let Some(tex) = self.page_thumb_textures.get(&pi) {
-                            let sz = tex.size_vec2().max(Vec2::splat(1.0));
-                            let sc = (thumb_box.width() / sz.x).min(thumb_box.height() / sz.y);
-                            let r = Rect::from_center_size(thumb_box.center(), sz * sc);
-                            p.image(
-                                tex.id(),
-                                r,
-                                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-                                Color32::WHITE,
-                            );
-                            p.rect_stroke(
-                                r,
-                                CornerRadius::ZERO,
-                                Stroke::new(1.0_f32, t.field_border),
-                                StrokeKind::Middle,
-                            );
-                        } else {
-                            p.rect_filled(thumb_box, CornerRadius::ZERO, Color32::WHITE);
-                        }
+            let assigned_cnt = self
+                .session
+                .doc
+                .page_slots(pi)
+                .iter()
+                .filter(|s| s.is_some())
+                .count();
+            let total_slots = self.session.doc.page_slots(pi).len().max(1);
+            p.text(
+                Pos2::new(card_rect.center().x, card_rect.max.y - 9.0),
+                egui::Align2::CENTER_CENTER,
+                format!("Bogen {} ({assigned_cnt}/{total_slots})", pi + 1),
+                FontId::proportional(10.5),
+                if is_active { t.accent } else { t.text },
+            );
 
-                        let assigned_cnt = self
-                            .session
-                            .doc
-                            .page_slots(pi)
-                            .iter()
-                            .filter(|s| s.is_some())
-                            .count();
-                        let total_slots = self.session.doc.page_slots(pi).len().max(1);
-                        p.text(
-                            Pos2::new(card_rect.center().x, card_rect.max.y - 9.0),
-                            egui::Align2::CENTER_CENTER,
-                            format!("Bogen {} ({assigned_cnt}/{total_slots})", pi + 1),
-                            FontId::proportional(10.5),
-                            if is_active { t.accent } else { t.text },
-                        );
+            if card_resp.clicked() {
+                *pending_cmd = Some(EngineCommand::SelectPage { page_index: pi });
+            }
+            if card_resp.drag_started() || card_resp.dragged() {
+                let payload = DragPayload::ReorderPage(pi);
+                self.active_drag = Some(payload);
+                egui::DragAndDrop::set_payload(ui.ctx(), payload);
+            }
 
-                        if card_resp.clicked() {
-                            pending_cmd = Some(EngineCommand::SelectPage { page_index: pi });
-                        }
-                        if card_resp.drag_started() || card_resp.dragged() {
-                            let payload = DragPayload::ReorderPage(pi);
-                            self.active_drag = Some(payload);
-                            egui::DragAndDrop::set_payload(ui.ctx(), payload);
-                        }
-
-                        // Highlight on hover during drag
-                        if let Some(payload) = self
-                            .active_drag
-                            .or_else(|| egui::DragAndDrop::payload::<DragPayload>(ui.ctx()).map(|p| *p))
-                        {
-                            let hovered = ui.ctx().input(|i| {
-                                i.pointer
-                                    .hover_pos()
-                                    .or(self.last_drag_pos)
-                                    .is_some_and(|pos| card_rect.contains(pos))
-                            });
-                            if hovered {
-                                match payload {
-                                    DragPayload::PoolImage(_) => {
-                                        ui.painter().rect_stroke(
-                                            card_rect,
-                                            CornerRadius::same(4),
-                                            Stroke::new(2.0_f32, t.accent),
-                                            StrokeKind::Middle,
-                                        );
-                                    }
-                                    DragPayload::ReorderPage(from_idx) if from_idx != pi => {
-                                        ui.painter().rect_stroke(
-                                            card_rect,
-                                            CornerRadius::same(4),
-                                            Stroke::new(2.0_f32, Color32::from_rgb(80, 210, 130)),
-                                            StrokeKind::Middle,
-                                        );
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-
-                        self.attach_page_context_menu(&card_resp, pi, total_pages);
-                    }
-
-                    // "+ Neuer Bogen" tile at the right end of the strip
-                    let add_size = Vec2::new(98.0, 86.0);
-                    let (add_rect, add_resp) = ui.allocate_exact_size(add_size, Sense::click());
-                    self.last_nav_add_rect = Some(add_rect);
-                    let p = ui.painter();
-                    p.rect_filled(add_rect, CornerRadius::same(4), t.field.gamma_multiply(0.6));
-                    draw_dashed_rect(
-                        p,
-                        add_rect.shrink(3.0),
-                        Stroke::new(1.2_f32, t.field_border),
-                        6.0,
-                        4.0,
-                    );
-                    p.text(
-                        add_rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        "+ Neuer\nBogen",
-                        FontId::proportional(11.5),
-                        t.text_dim,
-                    );
-                    if add_resp
-                        .on_hover_text("Leeren Bogen anlegen (oder Bild aus dem Pool hierher ziehen)")
-                        .clicked()
-                    {
-                        pending_cmd = Some(EngineCommand::AddPage {
-                            initial_image_id: None,
-                        });
-                    }
-                    if let Some(DragPayload::PoolImage(_)) = self
-                        .active_drag
-                        .or_else(|| egui::DragAndDrop::payload::<DragPayload>(ui.ctx()).map(|p| *p))
-                    {
-                        let hovered = ui.ctx().input(|i| {
-                            i.pointer
-                                .hover_pos()
-                                .or(self.last_drag_pos)
-                                .is_some_and(|pos| add_rect.contains(pos))
-                        });
-                        if hovered {
+            // Highlight on hover during drag
+            if let Some(payload) = self
+                .active_drag
+                .or_else(|| egui::DragAndDrop::payload::<DragPayload>(ui.ctx()).map(|p| *p))
+            {
+                let hovered = ui.ctx().input(|i| {
+                    i.pointer
+                        .hover_pos()
+                        .or(self.last_drag_pos)
+                        .is_some_and(|pos| card_rect.contains(pos))
+                });
+                if hovered {
+                    match payload {
+                        DragPayload::PoolImage(_) => {
                             ui.painter().rect_stroke(
-                                add_rect,
+                                card_rect,
                                 CornerRadius::same(4),
                                 Stroke::new(2.0_f32, t.accent),
                                 StrokeKind::Middle,
                             );
                         }
+                        DragPayload::ReorderPage(from_idx) if from_idx != pi => {
+                            ui.painter().rect_stroke(
+                                card_rect,
+                                CornerRadius::same(4),
+                                Stroke::new(2.0_f32, Color32::from_rgb(80, 210, 130)),
+                                StrokeKind::Middle,
+                            );
+                        }
+                        _ => {}
                     }
-                });
-            });
+                }
+            }
 
-        if let Some(cmd) = pending_cmd {
-            self.exec(cmd);
+            self.attach_page_context_menu(&card_resp, pi, total_pages);
+        }
+
+        // "+ Neuer Bogen" tile at the end of the strip
+        let (add_rect, add_resp) = ui.allocate_exact_size(card_size, Sense::click());
+        self.last_nav_add_rect = Some(add_rect);
+        let p = ui.painter();
+        p.rect_filled(add_rect, CornerRadius::same(4), t.field.gamma_multiply(0.6));
+        draw_dashed_rect(
+            p,
+            add_rect.shrink(3.0),
+            Stroke::new(1.2_f32, t.field_border),
+            6.0,
+            4.0,
+        );
+        p.text(
+            add_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "+ Neuer\nBogen",
+            FontId::proportional(11.5),
+            t.text_dim,
+        );
+        if add_resp
+            .on_hover_text("Leeren Bogen anlegen (oder Bild aus dem Pool hierher ziehen)")
+            .clicked()
+        {
+            *pending_cmd = Some(EngineCommand::AddPage {
+                initial_image_id: None,
+            });
+        }
+        if let Some(DragPayload::PoolImage(_)) = self
+            .active_drag
+            .or_else(|| egui::DragAndDrop::payload::<DragPayload>(ui.ctx()).map(|p| *p))
+        {
+            let hovered = ui.ctx().input(|i| {
+                i.pointer
+                    .hover_pos()
+                    .or(self.last_drag_pos)
+                    .is_some_and(|pos| add_rect.contains(pos))
+            });
+            if hovered {
+                ui.painter().rect_stroke(
+                    add_rect,
+                    CornerRadius::same(4),
+                    Stroke::new(2.0_f32, t.accent),
+                    StrokeKind::Middle,
+                );
+            }
         }
     }
 
@@ -3756,17 +4313,111 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
     fn draw_right_settings_panel(&mut self, ctx: &Context) {
         let t = self.tokens;
-        egui::SidePanel::right("right_settings_panel")
+        let has_right_pool = self.session.doc.filmstrip_position == FilmstripPosition::RightTabbed;
+        let is_collapsed =
+            !self.session.doc.show_settings_panel || self.session.doc.right_dock_collapsed;
+
+        if is_collapsed {
+            egui::SidePanel::right("right_dock_collapsed_strip")
+                .exact_width(24.0)
+                .resizable(false)
+                .frame(
+                    egui::Frame::new()
+                        .fill(t.dock)
+                        .inner_margin(egui::Margin::symmetric(2, 6))
+                        .stroke(Stroke::NONE),
+                )
+                .show(ctx, |ui| {
+                    let r = ui.max_rect();
+                    ui.painter()
+                        .vline(r.min.x, r.y_range(), Stroke::new(1.0_f32, t.separator));
+                    let tooltip = if has_right_pool {
+                        "Rechtes Dock (Druck-Einstellungen & Bilder-Pool) ausklappen (F10)"
+                    } else {
+                        "Druck-Einstellungen ausklappen (F10)"
+                    };
+                    ui.vertical_centered(|ui| {
+                        if ui
+                            .button(RichText::new("◀").size(11.0).strong())
+                            .on_hover_text(tooltip)
+                            .clicked()
+                        {
+                            self.session.doc.show_settings_panel = true;
+                            self.session.doc.right_dock_collapsed = false;
+                        }
+                        ui.add_space(8.0);
+                        ui.label(RichText::new("⚙").size(12.0).color(t.text_dim));
+                        if has_right_pool {
+                            ui.add_space(4.0);
+                            ui.label(RichText::new("🖼").size(12.0).color(t.text_dim));
+                        }
+                    });
+                });
+            return;
+        }
+
+        let resp = egui::SidePanel::right("right_settings_panel")
             .default_width(430.0)
             .min_width(395.0)
             .resizable(true)
             .frame(
                 egui::Frame::new()
                     .fill(t.dock)
-                    .inner_margin(egui::Margin::symmetric(16, 12))
+                    .inner_margin(egui::Margin::symmetric(16, 10))
                     .stroke(Stroke::new(1.0_f32, t.separator)),
             )
             .show(ctx, |ui| {
+                // Dock Header Bar: Tabs (when Pool is docked right) + Placement Menu + Collapse Button
+                ui.horizontal(|ui| {
+                    if has_right_pool {
+                        if ui
+                            .selectable_label(
+                                self.right_dock_tab == RightDockTab::Settings,
+                                RichText::new("⚙ Druck-Einstellungen").strong(),
+                            )
+                            .clicked()
+                        {
+                            self.right_dock_tab = RightDockTab::Settings;
+                        }
+                        let pool_lbl = format!("🖼 Bilder-Pool ({})", self.session.doc.images.len());
+                        if ui
+                            .selectable_label(
+                                self.right_dock_tab == RightDockTab::Pool,
+                                RichText::new(pool_lbl).strong(),
+                            )
+                            .clicked()
+                        {
+                            self.right_dock_tab = RightDockTab::Pool;
+                        }
+                    } else {
+                        self.right_dock_tab = RightDockTab::Settings;
+                        ui.label(
+                            RichText::new("⚙ Druck-Einstellungen")
+                                .strong()
+                                .color(t.text),
+                        );
+                    }
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .small_button("▶")
+                            .on_hover_text("Rechtes Dock an den Rand einklappen (F10)")
+                            .clicked()
+                        {
+                            self.session.doc.right_dock_collapsed = true;
+                        }
+                        self.draw_dock_placement_menu(ui);
+                    });
+                });
+                ui.add_space(4.0);
+                ui.separator();
+                ui.add_space(4.0);
+
+                if has_right_pool && self.right_dock_tab == RightDockTab::Pool {
+                    self.draw_filmstrip_contents(ui, false);
+                    return;
+                }
+
                 // Sticky Bottom Print & Export Footer inside the Right Dock
                 egui::TopBottomPanel::bottom("right_dock_sticky_print_footer")
                     .resizable(false)
@@ -3927,6 +4578,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         );
                     });
             });
+
+        if has_right_pool && self.right_dock_tab == RightDockTab::Pool {
+            self.last_pool_rect = resp.response.rect;
+        }
     }
 
     fn draw_dock_section(
@@ -8972,4 +9627,90 @@ mod tests {
         assert!((solved.slots[0].slot_rect_mm.width_mm - 100.0).abs() < 0.01);
         assert!((solved.slots[0].slot_rect_mm.height_mm - 150.0).abs() < 0.01);
     }
+
+    #[test]
+    fn dock_placements_tabs_and_collapsible_edges_render_cleanly() {
+        let ctx = Context::default();
+        let mut app = LumaPrintApp::new();
+
+        // 1. Default: Pool Left, Bogenliste BottomInCanvas
+        assert_eq!(app.session.doc.filmstrip_position, FilmstripPosition::Left);
+        assert_eq!(
+            app.session.doc.page_list_position,
+            PageListPosition::BottomInCanvas
+        );
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            app.render_ui(ctx);
+        });
+        assert!(!app.last_nav_card_rects.is_empty());
+
+        // 2. Bogenliste BottomFullWidth + Pool Bottom (shared Bottom Dock with tabs)
+        app.set_page_list_position(PageListPosition::BottomFullWidth);
+        app.set_pool_position(FilmstripPosition::Bottom);
+        assert_eq!(app.bottom_dock_tab, SharedDockTab::Pool);
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            app.render_ui(ctx);
+        });
+        app.bottom_dock_tab = SharedDockTab::PageList;
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            app.render_ui(ctx);
+        });
+        assert!(!app.last_nav_card_rects.is_empty());
+
+        // 3. Both Pool and Bogenliste on Left (shared Left Dock with tabs)
+        app.set_pool_position(FilmstripPosition::Left);
+        app.set_page_list_position(PageListPosition::Left);
+        assert_eq!(app.left_dock_tab, SharedDockTab::PageList);
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            app.render_ui(ctx);
+        });
+        assert!(!app.last_nav_card_rects.is_empty());
+
+        // 4. Pool in Right Dock as Tab next to Druck-Einstellungen
+        app.set_pool_position(FilmstripPosition::RightTabbed);
+        assert_eq!(app.right_dock_tab, RightDockTab::Pool);
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            app.render_ui(ctx);
+        });
+        assert!(app.last_pool_rect.width() > 100.0);
+
+        // 5. Collapse Left, Right, and Bottom docks -> slim edge handles render cleanly
+        app.set_page_list_position(PageListPosition::BottomInCanvas);
+        app.set_pool_position(FilmstripPosition::Left);
+        app.session.doc.left_dock_collapsed = true;
+        app.session.doc.right_dock_collapsed = true;
+        app.session.doc.bottom_dock_collapsed = true;
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            app.render_ui(ctx);
+            assert!(
+                egui::containers::panel::PanelState::load(
+                    ctx,
+                    egui::Id::new("left_dock_collapsed_strip")
+                )
+                .is_some()
+            );
+            assert!(
+                egui::containers::panel::PanelState::load(
+                    ctx,
+                    egui::Id::new("right_dock_collapsed_strip")
+                )
+                .is_some()
+            );
+        });
+        assert!(app.last_nav_card_rects.is_empty());
+
+        app.set_page_list_position(PageListPosition::BottomFullWidth);
+        app.session.doc.bottom_dock_collapsed = true;
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            app.render_ui(ctx);
+            assert!(
+                egui::containers::panel::PanelState::load(
+                    ctx,
+                    egui::Id::new("bottom_dock_collapsed_strip")
+                )
+                .is_some()
+            );
+        });
+    }
 }
+

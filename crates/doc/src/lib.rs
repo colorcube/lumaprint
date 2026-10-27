@@ -976,8 +976,44 @@ impl Default for TestStripSpec {
 pub enum FilmstripPosition {
     #[default]
     Left,
+    RightTabbed,
     Bottom,
     Hidden,
+}
+
+impl FilmstripPosition {
+    pub fn label_de(self) -> &'static str {
+        match self {
+            Self::Left => "Links am Rand",
+            Self::RightTabbed => "Rechts (Tab bei Druck-Einstellungen)",
+            Self::Bottom => "Unten",
+            Self::Hidden => "Ausgeblendet",
+        }
+    }
+}
+
+/// Dock placement for the Page List (`Bogenliste`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum PageListPosition {
+    /// Bottom strip inside the central Bogen area (between left and right docks).
+    #[default]
+    BottomInCanvas,
+    /// Full-width bottom strip across the entire window width.
+    BottomFullWidth,
+    /// Vertical strip on the left edge.
+    Left,
+}
+
+impl PageListPosition {
+    pub const ALL: [Self; 3] = [Self::BottomInCanvas, Self::BottomFullWidth, Self::Left];
+
+    pub fn label_de(self) -> &'static str {
+        match self {
+            Self::BottomInCanvas => "Nur im Bogen unten",
+            Self::BottomFullWidth => "Auf volle Breite unten",
+            Self::Left => "Links am Rand",
+        }
+    }
 }
 
 /// Central workspace view mode (`Einzelbogen` vs. `Alle Bögen Übersicht`).
@@ -1121,6 +1157,14 @@ pub struct PrintJobDocument {
     pub display_unit: DisplayUnit,
     pub filmstrip_position: FilmstripPosition,
     #[serde(default)]
+    pub page_list_position: PageListPosition,
+    #[serde(default)]
+    pub left_dock_collapsed: bool,
+    #[serde(default)]
+    pub right_dock_collapsed: bool,
+    #[serde(default)]
+    pub bottom_dock_collapsed: bool,
+    #[serde(default)]
     pub canvas_view_mode: CanvasViewMode,
     #[serde(default)]
     pub print_scope: PrintScope,
@@ -1159,6 +1203,10 @@ impl Default for PrintJobDocument {
             test_strip: TestStripSpec::default(),
             display_unit: DisplayUnit::Mm,
             filmstrip_position: FilmstripPosition::Left,
+            page_list_position: PageListPosition::BottomInCanvas,
+            left_dock_collapsed: false,
+            right_dock_collapsed: false,
+            bottom_dock_collapsed: false,
             canvas_view_mode: CanvasViewMode::SinglePage,
             print_scope: PrintScope::AllPages,
             pool_filter_unassigned_only: false,
