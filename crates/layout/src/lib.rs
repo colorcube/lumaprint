@@ -641,26 +641,42 @@ pub fn solve_page_layout_at(doc: &PrintJobDocument, page_index: usize) -> Solved
                 BorderlessExpandLevel::None,
                 &mut warnings,
             );
-            let page_images: Vec<SourceImageEntry> = page_slots
+            let margin = comp_spec.page_margin_mm.max(0.0);
+            let pack_x = printable_rect_mm.x_mm.max(margin);
+            let pack_y = printable_rect_mm.y_mm.max(margin);
+            let pack_r = (paper_size_mm.width_mm - margin).min(printable_rect_mm.right_mm());
+            let pack_b = (paper_size_mm.height_mm - margin).min(printable_rect_mm.bottom_mm());
+            let pack_rect_mm = if pack_r > pack_x + 10.0 && pack_b > pack_y + 10.0 {
+                RectMm::new(pack_x, pack_y, pack_r - pack_x, pack_b - pack_y)
+            } else {
+                printable_rect_mm
+            };
+
+            let indexed_images: Vec<(usize, SourceImageEntry)> = page_slots
                 .iter()
-                .copied()
-                .flatten()
-                .filter_map(|id| doc.images.iter().find(|img| img.id == id).cloned())
+                .enumerate()
+                .filter_map(|(slot_idx, maybe_id)| {
+                    let id = (*maybe_id)?;
+                    let mut entry = doc.images.iter().find(|img| img.id == id)?.clone();
+                    entry.composer_size_mm = comp_spec.effective_slot_size_mm(slot_idx, &entry);
+                    Some((slot_idx, entry))
+                })
                 .collect();
 
-            let mut slots = solve_auto_nested_slots(
-                &page_images,
-                printable_rect_mm,
+            let mut slots = solve_auto_nested_slots_indexed(
+                &indexed_images,
+                pack_rect_mm,
                 comp_spec.nest_gap_mm,
                 comp_spec.allow_rotation_in_nest,
                 comp_spec.frame_line,
+                comp_spec.cut_marks,
                 &mut warnings,
             );
             if slots.is_empty() {
                 slots.push(SolvedImageSlot {
                     slot_index: 0,
-                    slot_rect_mm: printable_rect_mm,
-                    image_draw_rect_mm: printable_rect_mm,
+                    slot_rect_mm: pack_rect_mm,
+                    image_draw_rect_mm: pack_rect_mm,
                     uv_rect: [0.0, 0.0, 1.0, 1.0],
                     assigned_image_id: None,
                     effective_ppi: None,
@@ -690,15 +706,41 @@ pub fn solve_auto_nested_slots(
     frame_line: FrameLineSpec,
     warnings: &mut Vec<String>,
 ) -> Vec<SolvedImageSlot> {
-    let mut slots = Vec::with_capacity(images.len());
+    let indexed: Vec<(usize, SourceImageEntry)> = images
+        .iter()
+        .cloned()
+        .enumerate()
+        .collect();
+    solve_auto_nested_slots_indexed(
+        &indexed,
+        printable,
+        gap_mm,
+        allow_rotate,
+        frame_line,
+        false,
+        warnings,
+    )
+}
+
+/// Smart 2D shelf bin-packer preserving explicit `(slot_index, SourceImageEntry)` pairs.
+pub fn solve_auto_nested_slots_indexed(
+    indexed_images: &[(usize, SourceImageEntry)],
+    printable: RectMm,
+    gap_mm: f64,
+    allow_rotate: bool,
+    frame_line: FrameLineSpec,
+    cut_marks: bool,
+    warnings: &mut Vec<String>,
+) -> Vec<SolvedImageSlot> {
+    let mut slots = Vec::with_capacity(indexed_images.len());
     let gap = gap_mm.max(0.0);
     let mut cur_x = printable.x_mm;
     let mut cur_y = printable.y_mm;
     let mut shelf_h = 0.0f64;
 
-    for (idx, img) in images.iter().enumerate() {
-        let mut w = img.composer_size_mm.width_mm.min(printable.width_mm);
-        let mut h = img.composer_size_mm.height_mm.min(printable.height_mm);
+    for (orig_slot_idx, img) in indexed_images {
+        let mut w = img.composer_size_mm.width_mm.clamp(10.0, printable.width_mm);
+        let mut h = img.composer_size_mm.height_mm.clamp(10.0, printable.height_mm);
         let mut rotated_90 = false;
 
         // If rotated fits on current shelf and unrotated doesn't, rotate 90 deg
@@ -717,17 +759,32 @@ pub fn solve_auto_nested_slots(
             shelf_h = 0.0;
         }
 
+        // If starting a new shelf and unrotated exceeds right/bottom while rotated fits better, rotate 90 deg
+        if allow_rotate
+            && !rotated_90
+            && (cur_x + w > printable.right_mm() || cur_y + h > printable.bottom_mm())
+            && cur_x + h <= printable.right_mm()
+            && cur_y + w <= printable.bottom_mm()
+        {
+            std::mem::swap(&mut w, &mut h);
+            rotated_90 = true;
+        }
+
         if cur_y + h > printable.bottom_mm() {
             warnings.push(format!(
-                "Bild '{}' ragt über den unteren Seitenrand hinaus (größeres Papier wählen oder Bild verkleinern).",
+                "Bild '{}' ragt über den unteren Seitenrand hinaus (größeres Papier wählen oder Bildmaße verkleinern).",
                 img.display_name
             ));
         }
 
         let rect = RectMm::new(cur_x, cur_y, w, h);
+        let mut img_for_solve = img.clone();
+        if rotated_90 {
+            img_for_solve.crop.rotation_deg = (img_for_solve.crop.rotation_deg + 90) % 360;
+        }
         let (draw_rect, uv_rect, ppi) = solve_slot_draw_and_uv(
             rect,
-            img,
+            &img_for_solve,
             false,
             true,
             CenteringMode::Center,
@@ -735,7 +792,7 @@ pub fn solve_auto_nested_slots(
         );
 
         slots.push(SolvedImageSlot {
-            slot_index: idx,
+            slot_index: *orig_slot_idx,
             slot_rect_mm: rect,
             image_draw_rect_mm: draw_rect,
             uv_rect,
@@ -743,7 +800,7 @@ pub fn solve_auto_nested_slots(
             effective_ppi: Some(ppi),
             frame_line,
             rotated_90,
-            cut_marks: false,
+            cut_marks,
             caption_text: None,
         });
 
@@ -857,9 +914,31 @@ fn effective_cropped_pixels(img: &SourceImageEntry) -> (u32, u32) {
     }
 }
 
-fn effective_cropped_aspect(img: &SourceImageEntry) -> f64 {
+/// Returns the effective aspect ratio (`width / height`) of `img` after crop and rotation.
+pub fn effective_cropped_aspect(img: &SourceImageEntry) -> f64 {
     let (w, h) = effective_cropped_pixels(img);
     f64::from(w) / f64::from(h.max(1))
+}
+
+/// Orients `size` so its long/short side matches `img`'s cropped orientation (landscape vs portrait).
+pub fn orient_size_for_image(size: SizeMm, img: &SourceImageEntry) -> SizeMm {
+    let short = size.width_mm.min(size.height_mm);
+    let long = size.width_mm.max(size.height_mm);
+    if (long - short).abs() <= 0.5 {
+        return size;
+    }
+    let aspect = effective_cropped_aspect(img);
+    if aspect >= 1.0 {
+        SizeMm {
+            width_mm: long,
+            height_mm: short,
+        }
+    } else {
+        SizeMm {
+            width_mm: short,
+            height_mm: long,
+        }
+    }
 }
 
 #[cfg(test)]

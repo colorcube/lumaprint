@@ -28,12 +28,118 @@ use lumaprint_engine::{EngineCommand, Session, scan_folder_for_images};
 use lumaprint_geom::{
     BorderlessExpandLevel, DisplayUnit, MarginsMm, Orientation, PAPER_SIZES, RectMm, SizeMm,
 };
-use lumaprint_layout::{SolvedPageLayout, builtin_templates, resolve_paper_and_printable_area};
+use lumaprint_layout::{
+    SolvedPageLayout, builtin_templates, effective_cropped_aspect,
+    resolve_paper_and_printable_area,
+};
 use std::collections::HashMap;
 use std::path::Path;
 pub use theme::{
     KdeTypography, ThemeKind, Tokens, apply_theme_and_typography, install_kde_system_fonts,
 };
+
+/// Standard photo & Fine-Art print size presets (`mm`) selectable per image in `"Sammel"` and `"Standard"` modes.
+const PHOTO_SIZE_PRESETS_MM: &[(&str, SizeMm)] = &[
+    (
+        "9 × 13 cm (89 × 127 mm)",
+        SizeMm {
+            width_mm: 89.0,
+            height_mm: 127.0,
+        },
+    ),
+    (
+        "10 × 15 cm (102 × 152 mm)",
+        SizeMm {
+            width_mm: 102.0,
+            height_mm: 152.0,
+        },
+    ),
+    (
+        "13 × 18 cm (127 × 178 mm)",
+        SizeMm {
+            width_mm: 127.0,
+            height_mm: 178.0,
+        },
+    ),
+    (
+        "15 × 20 cm (152 × 203 mm)",
+        SizeMm {
+            width_mm: 152.0,
+            height_mm: 203.0,
+        },
+    ),
+    (
+        "18 × 24 cm (178 × 240 mm)",
+        SizeMm {
+            width_mm: 178.0,
+            height_mm: 240.0,
+        },
+    ),
+    (
+        "20 × 30 cm (203 × 305 mm)",
+        SizeMm {
+            width_mm: 203.0,
+            height_mm: 305.0,
+        },
+    ),
+    (
+        "DIN A6 (105 × 148 mm)",
+        SizeMm {
+            width_mm: 105.0,
+            height_mm: 148.0,
+        },
+    ),
+    (
+        "DIN A5 (148 × 210 mm)",
+        SizeMm {
+            width_mm: 148.0,
+            height_mm: 210.0,
+        },
+    ),
+    (
+        "DIN A4 (210 × 297 mm)",
+        SizeMm {
+            width_mm: 210.0,
+            height_mm: 297.0,
+        },
+    ),
+    (
+        "Quadrat 10 × 10 cm",
+        SizeMm {
+            width_mm: 100.0,
+            height_mm: 100.0,
+        },
+    ),
+    (
+        "Quadrat 15 × 15 cm",
+        SizeMm {
+            width_mm: 150.0,
+            height_mm: 150.0,
+        },
+    ),
+    (
+        "Quadrat 20 × 20 cm",
+        SizeMm {
+            width_mm: 200.0,
+            height_mm: 200.0,
+        },
+    ),
+];
+
+fn matches_photo_size_preset(a: SizeMm, b: SizeMm) -> bool {
+    let a_min = a.width_mm.min(a.height_mm);
+    let a_max = a.width_mm.max(a.height_mm);
+    let b_min = b.width_mm.min(b.height_mm);
+    let b_max = b.width_mm.max(b.height_mm);
+    (a_min - b_min).abs() < 1.2 && (a_max - b_max).abs() < 1.2
+}
+
+fn match_photo_size_preset_label(size: SizeMm) -> Option<&'static str> {
+    PHOTO_SIZE_PRESETS_MM
+        .iter()
+        .find(|(_, p)| matches_photo_size_preset(size, *p))
+        .map(|(lbl, _)| *lbl)
+}
 
 /// Drag & Drop payload shared between the Image Pool, Page Slots, and Page Navigator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1135,11 +1241,24 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         {
             match payload {
                 DragPayload::PoolImage(img_id) => {
-                    self.exec(EngineCommand::AssignImageToPageSlot {
-                        page_index: pi,
-                        slot_index: si,
-                        image_id: Some(img_id),
-                    });
+                    let is_sammel = matches!(
+                        self.session.doc.page_layout(pi),
+                        LayoutMode::FreeComposer(_)
+                    );
+                    let alt_held = ctx.input(|i| i.modifiers.alt);
+                    if is_sammel && !alt_held {
+                        self.exec(EngineCommand::PlacePoolImageOnSheet {
+                            image_id: img_id,
+                            page_index: pi,
+                            slot_index: None,
+                        });
+                    } else {
+                        self.exec(EngineCommand::AssignImageToPageSlot {
+                            page_index: pi,
+                            slot_index: si,
+                            image_id: Some(img_id),
+                        });
+                    }
                     return;
                 }
                 DragPayload::PageSlot {
@@ -2555,7 +2674,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             }
 
             if let Some(img_id) = slot.assigned_image_id {
-                // Check if this page is in Standard layout (resize handles active in all CenteringModes, Move active when not Center)
+                // Resize handles are active in Standard layout (all CenteringModes) and on the active slot in Sammel (FreeComposer) layout
                 let (std_can_resize, std_can_move) = match self.session.doc.page_layout(page_index) {
                     LayoutMode::Standard(std_spec) => {
                         let can_resize = !(self.session.doc.printer.borderless
@@ -2563,6 +2682,13 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             && self.session.doc.canvas_view_mode == CanvasViewMode::SinglePage;
                         let can_move = can_resize && std_spec.centering != CenteringMode::Center;
                         (can_resize, can_move)
+                    }
+                    LayoutMode::FreeComposer(_) => {
+                        let can_resize =
+                            self.session.doc.canvas_view_mode == CanvasViewMode::SinglePage
+                                && is_active_slot
+                                && self.slot_selected;
+                        (can_resize, false)
                     }
                     _ => (false, false),
                 };
@@ -2589,7 +2715,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     open_crop_for_id = Some(img_id);
                 }
 
-                // Draw selection frame (+ 8 resize handles in Standard layout)
+                // Draw selection frame (+ 8 resize handles in Standard and Sammel layout)
                 if is_active_slot && self.slot_selected {
                     let accent_col = Color32::from_rgb(0, 145, 255);
                     ui.painter().rect_stroke(
@@ -2646,7 +2772,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 if std_can_resize && !shift_held {
                     let hover_pos = ui.ctx().input(|i| i.pointer.hover_pos());
                     let active_or_hover_kind = if let Some(drag) = self.active_std_drag {
-                        Some(drag.kind)
+                        (drag.slot_index == slot.slot_index).then_some(drag.kind)
                     } else if let Some(hpos) = hover_pos
                         && interact_r.contains(hpos)
                     {
@@ -2737,42 +2863,91 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             }
                         }
 
-                        if resp.dragged()
-                            && let Some(drag) = self.active_std_drag
-                            && let Some(cur_pos) = resp.interact_pointer_pos()
-                            && let LayoutMode::Standard(mut std_spec) =
-                                self.session.doc.page_layout(page_index).clone()
+                        if let Some(drag) = self.active_std_drag
+                            && drag.slot_index == slot.slot_index
                         {
-                            let cur_x_mm = f64::from((cur_pos.x - sheet_rect.min.x) / scale);
-                            let cur_y_mm = f64::from((cur_pos.y - sheet_rect.min.y) / scale);
-                            let dx = cur_x_mm - drag.start_pointer_mm.0;
-                            let dy = cur_y_mm - drag.start_pointer_mm.1;
-                            let pw = solved.paper_size_mm.width_mm;
-                            let ph = solved.paper_size_mm.height_mm;
+                            if resp.dragged()
+                                && let Some(cur_pos) = resp.interact_pointer_pos()
+                            {
+                                let cur_x_mm = f64::from((cur_pos.x - sheet_rect.min.x) / scale);
+                                let cur_y_mm = f64::from((cur_pos.y - sheet_rect.min.y) / scale);
+                                let dx = cur_x_mm - drag.start_pointer_mm.0;
+                                let dy = cur_y_mm - drag.start_pointer_mm.1;
+                                let pw = solved.paper_size_mm.width_mm;
+                                let ph = solved.paper_size_mm.height_mm;
 
-                            let next = compute_std_free_drag_rect(
-                                drag.initial_rect_mm,
-                                drag.kind,
-                                dx,
-                                dy,
-                                pw,
-                                ph,
-                                std_spec.keep_aspect_ratio,
-                                std_spec.centering,
-                            );
+                                match self.session.doc.page_layout(page_index).clone() {
+                                    LayoutMode::Standard(mut std_spec) => {
+                                        let next = compute_std_free_drag_rect(
+                                            drag.initial_rect_mm,
+                                            drag.kind,
+                                            dx,
+                                            dy,
+                                            pw,
+                                            ph,
+                                            std_spec.keep_aspect_ratio,
+                                            std_spec.centering,
+                                        );
 
-                            std_spec.manual_rect_mm = next;
-                            std_spec.margins_mm.left_mm = next.x_mm;
-                            std_spec.margins_mm.top_mm = next.y_mm;
-                            std_spec.margins_mm.right_mm = (pw - next.right_mm()).max(0.0);
-                            std_spec.margins_mm.bottom_mm = (ph - next.bottom_mm()).max(0.0);
+                                        std_spec.manual_rect_mm = next;
+                                        std_spec.margins_mm.left_mm = next.x_mm;
+                                        std_spec.margins_mm.top_mm = next.y_mm;
+                                        std_spec.margins_mm.right_mm =
+                                            (pw - next.right_mm()).max(0.0);
+                                        std_spec.margins_mm.bottom_mm =
+                                            (ph - next.bottom_mm()).max(0.0);
 
-                            if !is_active_page {
-                                self.exec(EngineCommand::SelectPage { page_index });
+                                        if !is_active_page {
+                                            self.exec(EngineCommand::SelectPage { page_index });
+                                        }
+                                        pending_cmd = Some(EngineCommand::SetLayoutMode(
+                                            LayoutMode::Standard(std_spec),
+                                        ));
+                                    }
+                                    LayoutMode::FreeComposer(comp) => {
+                                        let next = compute_std_free_drag_rect(
+                                            drag.initial_rect_mm,
+                                            drag.kind,
+                                            dx,
+                                            dy,
+                                            pw,
+                                            ph,
+                                            comp.keep_aspect_ratio,
+                                            CenteringMode::None,
+                                        );
+                                        let new_size = if slot.rotated_90 {
+                                            SizeMm {
+                                                width_mm: next.height_mm,
+                                                height_mm: next.width_mm,
+                                            }
+                                        } else {
+                                            SizeMm {
+                                                width_mm: next.width_mm,
+                                                height_mm: next.height_mm,
+                                            }
+                                        };
+                                        if !is_active_page {
+                                            self.exec(EngineCommand::SelectPage { page_index });
+                                        }
+                                        pending_cmd = Some(EngineCommand::SetComposerSlotSize {
+                                            page_index,
+                                            slot_index: Some(slot.slot_index),
+                                            size_mm: new_size,
+                                            orient_to_image: false,
+                                        });
+                                    }
+                                    _ => {}
+                                }
                             }
-                            pending_cmd = Some(EngineCommand::SetLayoutMode(
-                                LayoutMode::Standard(std_spec),
-                            ));
+                        } else {
+                            // Interior drag in Sammel mode -> allow slot swapping or dragging back to pool
+                            let payload = DragPayload::PageSlot {
+                                page_index,
+                                slot_index: slot.slot_index,
+                                image_id: img_id,
+                            };
+                            self.active_drag = Some(payload);
+                            egui::DragAndDrop::set_payload(ui.ctx(), payload);
                         }
                     } else {
                         let payload = DragPayload::PageSlot {
@@ -2791,6 +2966,188 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 resp.context_menu(|ui| {
                     self.session.doc.active_slot_index = slot.slot_index;
                     self.slot_selected = true;
+
+                    let page_layout_clone = self.session.doc.page_layout(page_index).clone();
+                    let is_sammel = matches!(page_layout_clone, LayoutMode::FreeComposer(_));
+                    let is_std = matches!(page_layout_clone, LayoutMode::Standard(_));
+
+                    if is_sammel || is_std {
+                        let img_entry_opt = self
+                            .session
+                            .doc
+                            .images
+                            .iter()
+                            .find(|i| i.id == img_id)
+                            .cloned();
+                        let mut cur_size = match &page_layout_clone {
+                            LayoutMode::FreeComposer(comp) => img_entry_opt
+                                .as_ref()
+                                .map(|img| comp.effective_slot_size_mm(slot.slot_index, img))
+                                .unwrap_or(SizeMm {
+                                    width_mm: slot.slot_rect_mm.width_mm,
+                                    height_mm: slot.slot_rect_mm.height_mm,
+                                }),
+                            _ => SizeMm {
+                                width_mm: slot.image_draw_rect_mm.width_mm,
+                                height_mm: slot.image_draw_rect_mm.height_mm,
+                            },
+                        };
+                        let img_aspect = img_entry_opt
+                            .as_ref()
+                            .map(effective_cropped_aspect)
+                            .unwrap_or(1.5)
+                            .max(0.05);
+                        let keep_aspect = match &page_layout_clone {
+                            LayoutMode::FreeComposer(comp) => comp.keep_aspect_ratio,
+                            LayoutMode::Standard(s) => s.keep_aspect_ratio,
+                            _ => true,
+                        };
+
+                        ui.menu_button(
+                            format!(
+                                "📏 Bildmaße ({:.0} × {:.0} mm)…",
+                                cur_size.width_mm, cur_size.height_mm
+                            ),
+                            |ui| {
+                                ui.set_min_width(230.0);
+                                ui.label(
+                                    RichText::new("Eigene Maße (Breite × Höhe):")
+                                        .small()
+                                        .color(self.tokens.text_dim),
+                                );
+                                ui.horizontal(|ui| {
+                                    let w_changed = ui
+                                        .add(
+                                            egui::DragValue::new(&mut cur_size.width_mm)
+                                                .range(10.0..=800.0)
+                                                .speed(0.5)
+                                                .suffix(" mm"),
+                                        )
+                                        .changed();
+                                    ui.label("×");
+                                    let h_changed = ui
+                                        .add(
+                                            egui::DragValue::new(&mut cur_size.height_mm)
+                                                .range(10.0..=800.0)
+                                                .speed(0.5)
+                                                .suffix(" mm"),
+                                        )
+                                        .changed();
+                                    if ui
+                                        .button("⇄")
+                                        .on_hover_text("Breite und Höhe tauschen (Hoch-/Querformat)")
+                                        .clicked()
+                                    {
+                                        std::mem::swap(
+                                            &mut cur_size.width_mm,
+                                            &mut cur_size.height_mm,
+                                        );
+                                        pending_cmd = Some(EngineCommand::SetComposerSlotSize {
+                                            page_index,
+                                            slot_index: Some(slot.slot_index),
+                                            size_mm: cur_size,
+                                            orient_to_image: false,
+                                        });
+                                    } else if w_changed {
+                                        if keep_aspect {
+                                            cur_size.height_mm =
+                                                (cur_size.width_mm / img_aspect).clamp(10.0, 800.0);
+                                        }
+                                        pending_cmd = Some(EngineCommand::SetComposerSlotSize {
+                                            page_index,
+                                            slot_index: Some(slot.slot_index),
+                                            size_mm: cur_size,
+                                            orient_to_image: false,
+                                        });
+                                    } else if h_changed {
+                                        if keep_aspect {
+                                            cur_size.width_mm =
+                                                (cur_size.height_mm * img_aspect).clamp(10.0, 800.0);
+                                        }
+                                        pending_cmd = Some(EngineCommand::SetComposerSlotSize {
+                                            page_index,
+                                            slot_index: Some(slot.slot_index),
+                                            size_mm: cur_size,
+                                            orient_to_image: false,
+                                        });
+                                    }
+                                });
+
+                                let mut lock_aspect = keep_aspect;
+                                if ui
+                                    .checkbox(&mut lock_aspect, "🔒 Seitenverhältnis sperren")
+                                    .changed()
+                                {
+                                    match page_layout_clone.clone() {
+                                        LayoutMode::FreeComposer(mut comp) => {
+                                            comp.keep_aspect_ratio = lock_aspect;
+                                            pending_cmd = Some(EngineCommand::SetLayoutMode(
+                                                LayoutMode::FreeComposer(comp),
+                                            ));
+                                        }
+                                        LayoutMode::Standard(mut s) => {
+                                            s.keep_aspect_ratio = lock_aspect;
+                                            pending_cmd = Some(EngineCommand::SetLayoutMode(
+                                                LayoutMode::Standard(s),
+                                            ));
+                                        }
+                                        _ => {}
+                                    }
+                                }
+
+                                ui.separator();
+                                ui.label(
+                                    RichText::new("Standard-Fotogrößen (auto Hoch/Quer):")
+                                        .small()
+                                        .color(self.tokens.text_dim),
+                                );
+                                for &(lbl, preset_sz) in PHOTO_SIZE_PRESETS_MM {
+                                    let is_match =
+                                        matches_photo_size_preset(cur_size, preset_sz);
+                                    if ui.selectable_label(is_match, lbl).clicked() {
+                                        pending_cmd = Some(EngineCommand::SetComposerSlotSize {
+                                            page_index,
+                                            slot_index: Some(slot.slot_index),
+                                            size_mm: preset_sz,
+                                            orient_to_image: true,
+                                        });
+                                        ui.close_menu();
+                                    }
+                                }
+
+                                if is_sammel {
+                                    ui.separator();
+                                    if ui
+                                        .button("📦 Größe auf alle Bilder des Bogens anwenden")
+                                        .clicked()
+                                    {
+                                        pending_cmd = Some(EngineCommand::SetComposerSlotSize {
+                                            page_index,
+                                            slot_index: None,
+                                            size_mm: cur_size,
+                                            orient_to_image: true,
+                                        });
+                                        ui.close_menu();
+                                    }
+                                }
+                            },
+                        );
+
+                        if is_sammel
+                            && ui
+                                .button("➕ Bild nochmals auf Sammelbogen hinzufügen")
+                                .clicked()
+                        {
+                            pending_cmd = Some(EngineCommand::PlacePoolImageOnSheet {
+                                image_id: img_id,
+                                page_index,
+                                slot_index: None,
+                            });
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                    }
+
                     if ui.button("📐 Bild einpassen (Standard)").clicked() {
                         self.set_image_fit_mode(img_id, false);
                         ui.close_menu();
@@ -3810,8 +4167,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             }
 
             let is_free = matches!(self.session.doc.layout, LayoutMode::FreeComposer(_));
-            if draw_layout_type_tile(ui, &t, LayoutTypeIcon::FreeComposer, "Frei", is_free)
-                .on_hover_text("Freies Layout / Auto-Nesting (Composer für platzsparende Anordnung)")
+            if draw_layout_type_tile(ui, &t, LayoutTypeIcon::FreeComposer, "Sammel", is_free)
+                .on_hover_text("Sammelbogen / Auto-Nesting (Mehrere Bilder in eigenen Zielgrößen platzsparend auf einen Bogen packen)")
                 .clicked()
                 && !is_free
             {
@@ -4440,15 +4797,126 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
             LayoutMode::FreeComposer(mut comp) => {
                 let mut changed = false;
+                let mut size_cmd: Option<EngineCommand> = None;
+
+                let active_page = self.session.doc.active_page_index;
+                let active_slot = self.session.doc.active_slot_index;
+                let assigned_slot_id = self
+                    .session
+                    .doc
+                    .slot_assignments
+                    .get(active_slot)
+                    .copied()
+                    .flatten()
+                    .or_else(|| {
+                        self.session
+                            .doc
+                            .slot_assignments
+                            .iter()
+                            .copied()
+                            .flatten()
+                            .next()
+                    });
+                let target_img = assigned_slot_id
+                    .and_then(|id| self.session.doc.images.iter().find(|i| i.id == id))
+                    .or_else(|| {
+                        self.session
+                            .doc
+                            .images
+                            .get(self.session.doc.active_image_index)
+                    })
+                    .cloned();
+                let mut cur_size = target_img
+                    .as_ref()
+                    .map(|img| comp.effective_slot_size_mm(active_slot, img))
+                    .unwrap_or(SizeMm {
+                        width_mm: 152.0,
+                        height_mm: 102.0,
+                    });
+                let img_aspect = target_img
+                    .as_ref()
+                    .map(effective_cropped_aspect)
+                    .unwrap_or(1.5)
+                    .max(0.05);
+                let preset_lbl = match_photo_size_preset_label(cur_size)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| {
+                        format!("Frei ({:.0} × {:.0} mm)", cur_size.width_mm, cur_size.height_mm)
+                    });
+
                 egui::Grid::new("grid_layout_composer")
                     .num_columns(2)
                     .spacing([14.0, 10.0])
                     .min_col_width(130.0)
                     .show(ui, |ui| {
-                        ui.label(RichText::new("Schnittabstand:").color(t.text_dim));
+                        ui.label(RichText::new("Ausrichtung:").color(t.text_dim));
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            if draw_orientation_tile(
+                                ui,
+                                &t,
+                                Orientation::Portrait,
+                                comp.orientation == Orientation::Portrait,
+                            )
+                            .on_hover_text("Hochformat (Portrait)")
+                            .clicked()
+                                && comp.orientation != Orientation::Portrait
+                            {
+                                comp.orientation = Orientation::Portrait;
+                                changed = true;
+                            }
+                            if draw_orientation_tile(
+                                ui,
+                                &t,
+                                Orientation::Landscape,
+                                comp.orientation == Orientation::Landscape,
+                            )
+                            .on_hover_text("Querformat (Landscape)")
+                            .clicked()
+                                && comp.orientation != Orientation::Landscape
+                            {
+                                comp.orientation = Orientation::Landscape;
+                                changed = true;
+                            }
+                        });
+                        ui.end_row();
+
+                        ui.label(RichText::new("Rand / Abstand:").color(t.text_dim));
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut comp.page_margin_mm)
+                                        .range(0.0..=50.0)
+                                        .speed(0.5)
+                                        .prefix("Rand ")
+                                        .suffix(" mm"),
+                                )
+                                .on_hover_text("Mindest-Seitenrand des Sammelbogens")
+                                .changed()
+                            {
+                                changed = true;
+                            }
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut comp.nest_gap_mm)
+                                        .range(0.0..=30.0)
+                                        .speed(0.5)
+                                        .prefix("Abst. ")
+                                        .suffix(" mm"),
+                                )
+                                .on_hover_text("Schnittabstand zwischen den verschachtelten Bildern")
+                                .changed()
+                            {
+                                changed = true;
+                            }
+                        });
+                        ui.end_row();
+
+                        ui.label(RichText::new("Auto-Nesting:").color(t.text_dim));
                         if ui
-                            .add(
-                                egui::Slider::new(&mut comp.nest_gap_mm, 0.0..=20.0).suffix(" mm"),
+                            .checkbox(&mut comp.allow_rotation_in_nest, "90°-Drehung erlauben")
+                            .on_hover_text(
+                                "Dreht Bilder bei Bedarf automatisch um 90°, um mehr Fotos platzsparend auf den Bogen zu packen",
                             )
                             .changed()
                         {
@@ -4456,17 +4924,185 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
                         ui.end_row();
 
-                        ui.label(RichText::new("Auto-Nesting:").color(t.text_dim));
+                        ui.label(RichText::new("Schnittmarken:").color(t.text_dim));
                         if ui
-                            .checkbox(&mut comp.allow_rotation_in_nest, "90°-Drehung erlauben")
+                            .checkbox(&mut comp.cut_marks, "✂ Eck-Schnittmarken an Bildern")
+                            .changed()
+                        {
+                            changed = true;
+                        }
+                        ui.end_row();
+
+                        ui.label(RichText::new("Rahmenlinie:").color(t.text_dim));
+                        ui.horizontal(|ui| {
+                            if ui
+                                .checkbox(&mut comp.frame_line.enabled, "Aktiv")
+                                .changed()
+                            {
+                                changed = true;
+                            }
+                            if comp.frame_line.enabled
+                                && ui
+                                    .add(
+                                        egui::DragValue::new(&mut comp.frame_line.thickness_mm)
+                                            .range(0.1..=5.0)
+                                            .speed(0.1)
+                                            .suffix(" mm"),
+                                    )
+                                    .changed()
+                            {
+                                changed = true;
+                            }
+                        });
+                        ui.end_row();
+
+                        ui.label(
+                            RichText::new(format!("Bildmaße (#{}):", active_slot + 1))
+                                .color(t.text_dim),
+                        );
+                        egui::ComboBox::from_id_salt("comp_size_preset_combo")
+                            .selected_text(preset_lbl)
+                            .width(245.0)
+                            .truncate()
+                            .show_ui(ui, |ui| {
+                                for &(lbl, preset_sz) in PHOTO_SIZE_PRESETS_MM {
+                                    let is_match =
+                                        matches_photo_size_preset(cur_size, preset_sz);
+                                    if ui.selectable_label(is_match, lbl).clicked() {
+                                        size_cmd = Some(EngineCommand::SetComposerSlotSize {
+                                            page_index: active_page,
+                                            slot_index: Some(active_slot),
+                                            size_mm: preset_sz,
+                                            orient_to_image: true,
+                                        });
+                                    }
+                                }
+                            });
+                        ui.end_row();
+
+                        ui.label(RichText::new("Breite / Höhe:").color(t.text_dim));
+                        ui.horizontal(|ui| {
+                            let w_changed = ui
+                                .add(
+                                    egui::DragValue::new(&mut cur_size.width_mm)
+                                        .range(10.0..=800.0)
+                                        .speed(0.5)
+                                        .suffix(" mm"),
+                                )
+                                .changed();
+                            ui.label("×");
+                            let h_changed = ui
+                                .add(
+                                    egui::DragValue::new(&mut cur_size.height_mm)
+                                        .range(10.0..=800.0)
+                                        .speed(0.5)
+                                        .suffix(" mm"),
+                                )
+                                .changed();
+                            if ui
+                                .button("⇄")
+                                .on_hover_text("Breite und Höhe tauschen")
+                                .clicked()
+                            {
+                                std::mem::swap(&mut cur_size.width_mm, &mut cur_size.height_mm);
+                                size_cmd = Some(EngineCommand::SetComposerSlotSize {
+                                    page_index: active_page,
+                                    slot_index: Some(active_slot),
+                                    size_mm: cur_size,
+                                    orient_to_image: false,
+                                });
+                            } else if w_changed {
+                                if comp.keep_aspect_ratio {
+                                    cur_size.height_mm =
+                                        (cur_size.width_mm / img_aspect).clamp(10.0, 800.0);
+                                }
+                                size_cmd = Some(EngineCommand::SetComposerSlotSize {
+                                    page_index: active_page,
+                                    slot_index: Some(active_slot),
+                                    size_mm: cur_size,
+                                    orient_to_image: false,
+                                });
+                            } else if h_changed {
+                                if comp.keep_aspect_ratio {
+                                    cur_size.width_mm =
+                                        (cur_size.height_mm * img_aspect).clamp(10.0, 800.0);
+                                }
+                                size_cmd = Some(EngineCommand::SetComposerSlotSize {
+                                    page_index: active_page,
+                                    slot_index: Some(active_slot),
+                                    size_mm: cur_size,
+                                    orient_to_image: false,
+                                });
+                            }
+                        });
+                        ui.end_row();
+
+                        ui.label(RichText::new("Proportionen:").color(t.text_dim));
+                        if ui
+                            .checkbox(&mut comp.keep_aspect_ratio, "Seitenverhältnis sperren")
                             .changed()
                         {
                             changed = true;
                         }
                         ui.end_row();
                     });
+
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .button("📏 Größe auf alle Bilder")
+                        .on_hover_text(
+                            "Übernimmt die aktuelle Bildgröße für alle Bilder auf diesem Sammelbogen",
+                        )
+                        .clicked()
+                    {
+                        size_cmd = Some(EngineCommand::SetComposerSlotSize {
+                            page_index: active_page,
+                            slot_index: None,
+                            size_mm: cur_size,
+                            orient_to_image: true,
+                        });
+                    }
+                    if let Some(pool_img) = self
+                        .session
+                        .doc
+                        .images
+                        .get(self.session.doc.active_image_index)
+                    {
+                        let pid = pool_img.id;
+                        if ui
+                            .button("➕ Pool-Bild hinzufügen")
+                            .on_hover_text(
+                                "Fügt das im Bilder-Pool markierte Bild als weiteres Foto auf diesem Sammelbogen hinzu",
+                            )
+                            .clicked()
+                        {
+                            size_cmd = Some(EngineCommand::PlacePoolImageOnSheet {
+                                image_id: pid,
+                                page_index: active_page,
+                                slot_index: None,
+                            });
+                        }
+                    }
+                    if self.session.doc.images.len() > 1
+                        && ui
+                            .button("📦 Alle packen")
+                            .on_hover_text(
+                                "Packt alle Bilder aus dem Bilder-Pool platzsparend auf den Sammelbogen",
+                            )
+                            .clicked()
+                    {
+                        size_cmd = Some(EngineCommand::AutoDistributePoolImages {
+                            only_unassigned: false,
+                        });
+                    }
+                });
+
                 if changed {
                     self.exec(EngineCommand::SetLayoutMode(LayoutMode::FreeComposer(comp)));
+                }
+                if let Some(cmd) = size_cmd {
+                    self.exec(cmd);
                 }
             }
         }

@@ -23,14 +23,14 @@ use lumaprint_doc::{
     CanvasViewMode, CenteringMode, ColorManagementMode, CropSpec, CustomMediaSpec,
     DetailedPrinterSettings, DocError, FrameLineSpec, GalleryWrapSpec, LayoutMode,
     LayoutTemplate, OutputSharpening, PaperSource, PlatenGap, PrintJobDocument, PrintPreset,
-    PrintQuality, PrintScope, PrintSheetPage, SourceImageEntry, TemplateLayoutSpec,
-    find_media_type,
+    PrintQuality, PrintScope, PrintSheetPage, SizingCriterion, SourceImageEntry,
+    TemplateLayoutSpec, find_media_type,
 };
 use lumaprint_geom::{MarginsMm, Orientation, RectMm, SizeMm};
 use lumaprint_ipp::{IppError, PrinterStatus, query_printer_status_ipp};
 use lumaprint_layout::{
-    SolvedPageLayout, build_grid_template, slots_capacity_for_layout, solve_page_layout,
-    solve_page_layout_at,
+    SolvedPageLayout, build_grid_template, orient_size_for_image, slots_capacity_for_layout,
+    solve_page_layout, solve_page_layout_at,
 };
 use lumaprint_render::{RenderError, render_page_16bit, render_page_at_16bit};
 use serde::{Deserialize, Serialize};
@@ -256,6 +256,12 @@ pub enum EngineCommand {
         cols: usize,
     },
     SaveCustomTemplate(LayoutTemplate),
+    SetComposerSlotSize {
+        page_index: usize,
+        slot_index: Option<usize>,
+        size_mm: SizeMm,
+        orient_to_image: bool,
+    },
     AssignImageToSlot {
         slot_index: usize,
         image_id: Option<u64>,
@@ -1072,6 +1078,120 @@ impl Session {
                     tpl_name, slot_count
                 );
             }
+            EngineCommand::SetComposerSlotSize {
+                page_index,
+                slot_index,
+                size_mm,
+                orient_to_image,
+            } => {
+                self.doc.sync_active_page_to_list();
+                let clamped = SizeMm {
+                    width_mm: size_mm.width_mm.clamp(10.0, 800.0),
+                    height_mm: size_mm.height_mm.clamp(10.0, 800.0),
+                };
+                let pi = page_index.min(self.doc.pages.len().saturating_sub(1));
+                if let Some(page) = self.doc.pages.get_mut(pi) {
+                    match &mut page.layout {
+                        LayoutMode::FreeComposer(comp) => {
+                            if let Some(si) = slot_index {
+                                let assigned_id = page
+                                    .slot_assignments
+                                    .get(si)
+                                    .copied()
+                                    .flatten()
+                                    .or_else(|| {
+                                        self.doc.images.get(self.doc.active_image_index).map(|i| i.id)
+                                    });
+                                let eff = if orient_to_image
+                                    && let Some(id) = assigned_id
+                                    && let Some(img) = self.doc.images.iter().find(|i| i.id == id)
+                                {
+                                    orient_size_for_image(clamped, img)
+                                } else {
+                                    clamped
+                                };
+                                if si >= comp.slot_sizes_mm.len() {
+                                    comp.slot_sizes_mm.resize(si + 1, None);
+                                }
+                                comp.slot_sizes_mm[si] = Some(eff);
+                                if let Some(id) = assigned_id
+                                    && let Some(img) =
+                                        self.doc.images.iter_mut().find(|i| i.id == id)
+                                {
+                                    img.composer_size_mm = eff;
+                                }
+                                self.status_message = format!(
+                                    "Bildmaße auf {:.1} × {:.1} mm gesetzt (Bogen {}, Slot {}).",
+                                    eff.width_mm,
+                                    eff.height_mm,
+                                    pi + 1,
+                                    si + 1
+                                );
+                            } else {
+                                // Apply to all slots on this Sammelbogen and all pool images
+                                let slot_len = page.slot_assignments.len().max(25);
+                                comp.slot_sizes_mm.resize(slot_len, None);
+                                for (si, maybe_id) in
+                                    page.slot_assignments.iter().copied().enumerate()
+                                {
+                                    let eff = if orient_to_image
+                                        && let Some(id) = maybe_id
+                                        && let Some(img) =
+                                            self.doc.images.iter().find(|i| i.id == id)
+                                    {
+                                        orient_size_for_image(clamped, img)
+                                    } else {
+                                        clamped
+                                    };
+                                    comp.slot_sizes_mm[si] = Some(eff);
+                                }
+                                for img in &mut self.doc.images {
+                                    img.composer_size_mm = if orient_to_image {
+                                        orient_size_for_image(clamped, img)
+                                    } else {
+                                        clamped
+                                    };
+                                }
+                                self.status_message = format!(
+                                    "Bildmaße {:.1} × {:.1} mm auf alle Bilder des Sammelbogens angewendet.",
+                                    clamped.width_mm, clamped.height_mm
+                                );
+                            }
+                        }
+                        LayoutMode::Standard(std_spec) => {
+                            let assigned_id = page
+                                .slot_assignments
+                                .first()
+                                .copied()
+                                .flatten()
+                                .or_else(|| {
+                                    self.doc.images.get(self.doc.active_image_index).map(|i| i.id)
+                                });
+                            let eff = if orient_to_image
+                                && let Some(id) = assigned_id
+                                && let Some(img) = self.doc.images.iter().find(|i| i.id == id)
+                            {
+                                orient_size_for_image(clamped, img)
+                            } else {
+                                clamped
+                            };
+                            std_spec.criterion = SizingCriterion::ImageSize;
+                            std_spec.manual_rect_mm.width_mm = eff.width_mm;
+                            std_spec.manual_rect_mm.height_mm = eff.height_mm;
+                            if orient_to_image {
+                                std_spec.keep_aspect_ratio = false;
+                            }
+                            self.status_message = format!(
+                                "Bildgröße auf {:.1} × {:.1} mm gesetzt.",
+                                eff.width_mm, eff.height_mm
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+                self.doc.load_active_page_from_list();
+                return Ok(());
+            }
             EngineCommand::AssignImageToSlot {
                 slot_index,
                 image_id,
@@ -1102,9 +1222,32 @@ impl Session {
                     if let Some(slot) = page.slot_assignments.get_mut(slot_index) {
                         *slot = image_id;
                     }
+                    if image_id.is_none()
+                        && let LayoutMode::FreeComposer(comp) = &mut page.layout
+                    {
+                        let mut new_slots = Vec::with_capacity(25);
+                        let mut new_sizes = Vec::with_capacity(25);
+                        for (idx, maybe_id) in
+                            page.slot_assignments.iter().copied().enumerate()
+                        {
+                            if let Some(id) = maybe_id {
+                                new_slots.push(Some(id));
+                                new_sizes.push(
+                                    comp.slot_sizes_mm.get(idx).copied().flatten(),
+                                );
+                            }
+                        }
+                        new_slots.resize(25, None);
+                        page.slot_assignments = new_slots;
+                        comp.slot_sizes_mm = new_sizes;
+                    }
                 }
                 self.doc.active_page_index = page_index.min(self.doc.pages.len().saturating_sub(1));
-                self.doc.active_slot_index = slot_index;
+                self.doc.active_slot_index = if image_id.is_some() {
+                    slot_index
+                } else {
+                    slot_index.saturating_sub(1)
+                };
                 self.doc.load_active_page_from_list();
                 if let Some(id) = image_id {
                     self.auto_orient_image_for_slot(id, page_index, slot_index);
@@ -1158,6 +1301,15 @@ impl Session {
                         pa.slot_assignments.resize(slot_a + 1, None);
                     }
                     pa.slot_assignments[slot_a] = val_b;
+                    if page_a == page_b
+                        && let LayoutMode::FreeComposer(comp) = &mut pa.layout
+                    {
+                        let max_idx = slot_a.max(slot_b);
+                        if comp.slot_sizes_mm.len() <= max_idx {
+                            comp.slot_sizes_mm.resize(max_idx + 1, None);
+                        }
+                        comp.slot_sizes_mm.swap(slot_a, slot_b);
+                    }
                 }
                 if let Some(pb) = self.doc.pages.get_mut(page_b) {
                     if slot_b >= pb.slot_assignments.len() {
@@ -1364,8 +1516,31 @@ impl Session {
                 self.doc.print_scope = scope;
             }
             EngineCommand::SetImageCrop { image_id, crop } => {
+                let mut swapped_90 = false;
                 if let Some(img) = self.doc.images.iter_mut().find(|i| i.id == image_id) {
+                    swapped_90 = (img.crop.rotation_deg % 180) != (crop.rotation_deg % 180);
                     img.crop = crop;
+                    if swapped_90 {
+                        std::mem::swap(
+                            &mut img.composer_size_mm.width_mm,
+                            &mut img.composer_size_mm.height_mm,
+                        );
+                    }
+                }
+                if swapped_90 {
+                    for page in &mut self.doc.pages {
+                        if let LayoutMode::FreeComposer(comp) = &mut page.layout {
+                            for (si, maybe_id) in page.slot_assignments.iter().copied().enumerate()
+                            {
+                                if maybe_id == Some(image_id)
+                                    && let Some(Some(sz)) = comp.slot_sizes_mm.get_mut(si)
+                                {
+                                    std::mem::swap(&mut sz.width_mm, &mut sz.height_mm);
+                                }
+                            }
+                        }
+                    }
+                    self.doc.load_active_page_from_list();
                 }
             }
             EngineCommand::SetTestStrip { enabled, norm_rect } => {
@@ -1456,7 +1631,33 @@ impl Session {
 
     /// Automatically rotates `image_id` by 90° if its current cropped aspect orientation
     /// (landscape vs. portrait) does not match the target slot's orientation on `page_index`.
+    /// In `FreeComposer` (`Sammelbogen`) mode, the slot size instead adapts to the image's orientation.
     fn auto_orient_image_for_slot(&mut self, image_id: u64, page_index: usize, slot_index: usize) {
+        let is_composer = self
+            .doc
+            .pages
+            .get(page_index)
+            .map(|p| matches!(p.layout, LayoutMode::FreeComposer(_)))
+            .unwrap_or_else(|| matches!(self.doc.layout, LayoutMode::FreeComposer(_)));
+
+        if is_composer {
+            if let Some(img) = self.doc.images.iter_mut().find(|i| i.id == image_id) {
+                img.composer_size_mm = orient_size_for_image(img.composer_size_mm, img);
+                let oriented = img.composer_size_mm;
+                if let Some(page) = self.doc.pages.get_mut(page_index)
+                    && let LayoutMode::FreeComposer(comp) = &mut page.layout
+                {
+                    if slot_index >= comp.slot_sizes_mm.len() {
+                        comp.slot_sizes_mm.resize(slot_index + 1, None);
+                    }
+                    if comp.slot_sizes_mm[slot_index].is_none() {
+                        comp.slot_sizes_mm[slot_index] = Some(oriented);
+                    }
+                }
+            }
+            return;
+        }
+
         let solved = solve_page_layout_at(&self.doc, page_index);
         let Some(slot) = solved
             .slots

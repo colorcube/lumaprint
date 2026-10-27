@@ -721,7 +721,7 @@ impl Default for TemplateLayoutSpec {
     }
 }
 
-/// Free multi-image composer & Auto-Nesting layout settings (TurboPrint / Qimage Pro concept).
+/// Multi-image Sammelbogen & Auto-Nesting layout settings (Qimage / Mirage Fine-Art RIP concept).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FreeComposerSpec {
     pub orientation: Orientation,
@@ -730,6 +730,12 @@ pub struct FreeComposerSpec {
     pub allow_rotation_in_nest: bool,
     pub cut_marks: bool,
     pub frame_line: FrameLineSpec,
+    /// Optional per-slot target print size (`mm`) overriding `SourceImageEntry::composer_size_mm`.
+    #[serde(default)]
+    pub slot_sizes_mm: Vec<Option<SizeMm>>,
+    /// Keeps the cropped image aspect ratio locked when adjusting width/height in mm.
+    #[serde(default = "default_true")]
+    pub keep_aspect_ratio: bool,
 }
 
 impl Default for FreeComposerSpec {
@@ -741,7 +747,20 @@ impl Default for FreeComposerSpec {
             allow_rotation_in_nest: true,
             cut_marks: true,
             frame_line: FrameLineSpec::default(),
+            slot_sizes_mm: Vec::new(),
+            keep_aspect_ratio: true,
         }
+    }
+}
+
+impl FreeComposerSpec {
+    /// Returns the effective target size (`mm`) for `slot_index`, falling back to `img.composer_size_mm`.
+    pub fn effective_slot_size_mm(&self, slot_index: usize, img: &SourceImageEntry) -> SizeMm {
+        self.slot_sizes_mm
+            .get(slot_index)
+            .copied()
+            .flatten()
+            .unwrap_or(img.composer_size_mm)
     }
 }
 
@@ -768,7 +787,7 @@ impl LayoutMode {
             Self::Panorama(_) => "Panorama (Rollenpapier / Banner)",
             Self::GalleryWrap(_) => "Gallerie Wrap (Leinwand-Keilrahmen)",
             Self::Template(_) => "Vorlage (Mehrere Bilder)",
-            Self::FreeComposer(_) => "Freies Layout / Auto-Nesting (Composer)",
+            Self::FreeComposer(_) => "Sammelbogen (Auto-Nesting)",
         }
     }
 }
