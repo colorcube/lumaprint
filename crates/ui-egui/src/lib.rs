@@ -35,7 +35,7 @@ use lumaprint_geom::{
     BorderlessExpandLevel, DisplayUnit, MarginsMm, Orientation, PAPER_SIZES, RectMm, SizeMm,
 };
 use lumaprint_layout::{
-    SolvedPageLayout, builtin_templates, effective_cropped_aspect,
+    SolvedPageLayout, adjust_margins_for_aspect, builtin_templates, effective_cropped_aspect,
     resolve_paper_and_printable_area,
 };
 use std::collections::HashMap;
@@ -719,8 +719,7 @@ impl Default for LumaPrintApp {
 
 impl LumaPrintApp {
     pub fn new() -> Self {
-        let mut session = Session::new();
-        let _ = session.execute(EngineCommand::AddDemoImages);
+        let session = Session::new();
         let theme_kind = ThemeKind::BreezeDark;
         Self {
             session,
@@ -757,12 +756,25 @@ impl LumaPrintApp {
             pending_os_dropped_paths: None,
             dialog_rx: None,
             last_rendered_preview_dpi: 0,
-            slot_selected: true,
+            slot_selected: false,
             last_visible_pool_position: FilmstripPosition::Left,
             right_dock_tab: RightDockTab::Settings,
             left_dock_tab: SharedDockTab::Pool,
             bottom_dock_tab: SharedDockTab::PageList,
         }
+    }
+
+    /// Creates a `LumaPrintApp` pre-populated with the two synthetic 16-bit test images and
+    /// places the landscape image onto `Bogen 1`.
+    pub fn new_with_demo() -> Self {
+        let mut app = Self::new();
+        app.exec(EngineCommand::AddDemoImages);
+        app.exec(EngineCommand::PlacePoolImageOnSheet {
+            image_id: 2,
+            page_index: 0,
+            slot_index: Some(0),
+        });
+        app
     }
 
     pub fn set_pool_position(&mut self, pos: FilmstripPosition) {
@@ -2064,7 +2076,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             ui.close_menu();
                         }
                         ui.separator();
-                        if ui.button("Demo-Kalibrierungsbilder hinzufügen").clicked() {
+                        if ui.button("🧪 Testbilder in Pool laden").clicked() {
                             self.exec(EngineCommand::AddDemoImages);
                             ui.close_menu();
                         }
@@ -2648,11 +2660,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 (false, true) => "▲  Bilder-Pool ausklappen (F8)",
                 (false, false) => "▲  Ausklappen (F8)",
             };
-            let fill_col = if is_in_canvas {
-                Color32::TRANSPARENT
-            } else {
-                t.dock
-            };
+            let fill_col = t.dock;
             let collapsed_id = if is_in_canvas {
                 "central_bottom_dock_collapsed_strip"
             } else {
@@ -2711,12 +2719,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             has_pool
         };
 
-        // No 4-sided box around the Bogenliste: separated from the Bogen above only by a 1px horizontal line!
-        let fill_col = if is_in_canvas && !show_pool {
-            Color32::TRANSPARENT
-        } else {
-            t.dock
-        };
+        let fill_col = t.dock;
 
         let mut panel = egui::TopBottomPanel::bottom(panel_id)
             .show_separator_line(false)
@@ -2733,7 +2736,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 .max_height(300.0)
                 .resizable(true)
         } else {
-            panel.exact_height(114.0).resizable(false)
+            panel.exact_height(130.0).resizable(false)
         };
 
         let resp = if let Some(parent_ui) = in_canvas_ui {
@@ -4726,6 +4729,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         let resp = egui::SidePanel::right("right_settings_panel")
             .default_width(430.0)
             .min_width(395.0)
+            .max_width(470.0)
             .resizable(true)
             .frame(
                 egui::Frame::new()
@@ -4925,6 +4929,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
+                        ui.set_max_width(ui.available_width());
                         self.draw_dock_section(
                             ui,
                             "★ Voreinstellungen (Presets)",
@@ -5009,8 +5014,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             .show(ui, |ui| {
                 ui.label(RichText::new("Vorlage laden:").color(t.text_dim));
                 egui::ComboBox::from_id_salt("preset_selector")
-                    .selected_text(current_lbl)
-                    .width(245.0)
+                    .selected_text(truncate_combo_label(&current_lbl, 28))
+                    .width(240.0)
+                    .truncate()
                     .show_ui(ui, |ui| {
                         for p in &presets {
                             let is_sel = self.session.doc.active_preset_name.as_deref()
@@ -5027,7 +5033,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 ui.label(RichText::new("Neu speichern:").color(t.text_dim));
                 ui.horizontal(|ui| {
                     ui.add(
-                        egui::TextEdit::singleline(&mut self.new_preset_name).desired_width(155.0),
+                        egui::TextEdit::singleline(&mut self.new_preset_name)
+                            .desired_width(150.0)
+                            .clip_text(true),
                     );
                     if ui.button("+ Speichern").clicked() {
                         let name = self.new_preset_name.clone();
@@ -5086,8 +5094,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 }
                 ui.horizontal(|ui| {
                     egui::ComboBox::from_id_salt("printer_queue_combo")
-                        .selected_text(selected_printer_label)
+                        .selected_text(truncate_combo_label(&selected_printer_label, 25))
                         .width(205.0)
+                        .truncate()
                         .show_ui(ui, |ui| {
                             for p in &printers {
                                 if ui
@@ -5127,9 +5136,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             .unwrap_or_else(|| cur_media.name.to_string())
                     };
                     egui::ComboBox::from_id_salt("media_combo")
-                        .selected_text(media_display)
+                        .selected_text(truncate_combo_label(&media_display, 25))
                         .width(205.0)
                         .height(480.0)
+                        .truncate()
                         .show_ui(ui, |ui| {
                             if !custom_media_list.is_empty() {
                                 for cm in &custom_media_list {
@@ -5202,9 +5212,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     })
                     .unwrap_or_else(|| cur_size_key.clone());
                 egui::ComboBox::from_id_salt("paper_size_combo")
-                    .selected_text(size_display)
-                    .width(245.0)
+                    .selected_text(truncate_combo_label(&size_display, 28))
+                    .width(240.0)
                     .height(440.0)
+                    .truncate()
                     .show_ui(ui, |ui| {
                         let has_ppd_sizes = active_printer
                             .as_ref()
@@ -5254,8 +5265,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     })
                     .unwrap_or_else(|| src.label_de(bl).to_string());
                 egui::ComboBox::from_id_salt("paper_src_combo")
-                    .selected_text(slot_display)
-                    .width(245.0)
+                    .selected_text(truncate_combo_label(&slot_display, 28))
+                    .width(240.0)
+                    .truncate()
                     .show_ui(ui, |ui| {
                         if let Some(ref ap) = active_printer {
                             if has_ppd_slots {
@@ -5313,8 +5325,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     })
                     .unwrap_or_else(|| qual.label_de().to_string());
                 egui::ComboBox::from_id_salt("quality_combo")
-                    .selected_text(res_display)
-                    .width(245.0)
+                    .selected_text(truncate_combo_label(&res_display, 28))
+                    .width(240.0)
+                    .truncate()
                     .show_ui(ui, |ui| {
                         if let Some(ref ap) = active_printer {
                             if has_ppd_res {
@@ -5513,6 +5526,52 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         match layout_clone {
             LayoutMode::Standard(mut std_spec) => {
                 let mut changed = false;
+
+                // Determine active image aspect ratio & whether proportional margin coupling applies
+                let active_img = self
+                    .session
+                    .doc
+                    .slot_assignments
+                    .first()
+                    .copied()
+                    .flatten()
+                    .and_then(|id| self.session.doc.images.iter().find(|img| img.id == id));
+                let active_aspect = active_img.map(effective_cropped_aspect);
+                let fill_active = active_img.map(|img| img.crop.fill_slot).unwrap_or(false)
+                    || (self.session.doc.printer.borderless && std_spec.fit_to_scale);
+                let proportional_margins =
+                    !fill_active && std_spec.keep_aspect_ratio && active_aspect.is_some();
+
+                let paper_size_mm = self
+                    .cached_solved
+                    .as_ref()
+                    .map(|s| s.paper_size_mm)
+                    .unwrap_or(SizeMm {
+                        width_mm: 210.0,
+                        height_mm: 297.0,
+                    });
+                let cur_draw_rect = self
+                    .cached_solved
+                    .as_ref()
+                    .and_then(|s| s.slots.first().map(|sl| sl.image_draw_rect_mm));
+
+                // When an image is placed in proportional Fit mode under SizingCriterion::Margin,
+                // display the actual resulting image margins in the spinboxes so they always match
+                // the live image edges on the Bogen.
+                if std_spec.criterion == SizingCriterion::Margin
+                    && proportional_margins
+                    && let Some(cur_r) = cur_draw_rect
+                {
+                    std_spec.margins_mm.left_mm = (cur_r.x_mm * 10.0).round() / 10.0;
+                    std_spec.margins_mm.top_mm = (cur_r.y_mm * 10.0).round() / 10.0;
+                    std_spec.margins_mm.right_mm =
+                        (((paper_size_mm.width_mm - cur_r.right_mm()).max(0.0)) * 10.0).round()
+                            / 10.0;
+                    std_spec.margins_mm.bottom_mm =
+                        (((paper_size_mm.height_mm - cur_r.bottom_mm()).max(0.0)) * 10.0).round()
+                            / 10.0;
+                }
+
                 egui::Grid::new("grid_layout_standard")
                     .num_columns(2)
                     .spacing([14.0, 10.0])
@@ -5595,20 +5654,31 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                     && !is_sel
                                 {
                                     std_spec.centering = c;
-                                    if c != CenteringMode::Center {
-                                        if let Some(ref solved) = self.cached_solved {
-                                            if let Some(slot) = solved.slots.first() {
-                                                let cur_r = slot.image_draw_rect_mm;
-                                                let pw = solved.paper_size_mm.width_mm;
-                                                let ph = solved.paper_size_mm.height_mm;
-                                                std_spec.manual_rect_mm = cur_r;
-                                                std_spec.margins_mm.left_mm = cur_r.x_mm;
-                                                std_spec.margins_mm.top_mm = cur_r.y_mm;
-                                                std_spec.margins_mm.right_mm =
-                                                    (pw - cur_r.right_mm()).max(0.0);
-                                                std_spec.margins_mm.bottom_mm =
-                                                    (ph - cur_r.bottom_mm()).max(0.0);
-                                            }
+                                    if let Some(cur_r) = cur_draw_rect {
+                                        let pw = paper_size_mm.width_mm;
+                                        let ph = paper_size_mm.height_mm;
+                                        std_spec.manual_rect_mm = cur_r;
+                                        if c == CenteringMode::Center
+                                            || c == CenteringMode::Horizontal
+                                        {
+                                            let mx = ((pw - cur_r.width_mm).max(0.0)) * 0.5;
+                                            std_spec.margins_mm.left_mm = mx;
+                                            std_spec.margins_mm.right_mm = mx;
+                                        } else {
+                                            std_spec.margins_mm.left_mm = cur_r.x_mm;
+                                            std_spec.margins_mm.right_mm =
+                                                (pw - cur_r.right_mm()).max(0.0);
+                                        }
+                                        if c == CenteringMode::Center
+                                            || c == CenteringMode::Vertical
+                                        {
+                                            let my = ((ph - cur_r.height_mm).max(0.0)) * 0.5;
+                                            std_spec.margins_mm.top_mm = my;
+                                            std_spec.margins_mm.bottom_mm = my;
+                                        } else {
+                                            std_spec.margins_mm.top_mm = cur_r.y_mm;
+                                            std_spec.margins_mm.bottom_mm =
+                                                (ph - cur_r.bottom_mm()).max(0.0);
                                         }
                                     }
                                     changed = true;
@@ -5617,13 +5687,19 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         });
                         ui.end_row();
 
-                        ui.label(RichText::new("Kriterium:").color(t.text_dim));
+                        // Visual vertical breathing room between Zentrieren tiles and Maße
+                        ui.allocate_exact_size(Vec2::new(1.0, 2.0), Sense::hover());
+                        ui.allocate_exact_size(Vec2::new(1.0, 2.0), Sense::hover());
+                        ui.end_row();
+
+                        ui.label(RichText::new("Maße:").color(t.text_dim));
                         ui.horizontal(|ui| {
+                            let prev_crit = std_spec.criterion;
                             if ui
                                 .selectable_value(
                                     &mut std_spec.criterion,
                                     SizingCriterion::Margin,
-                                    "Ränder (Margin)",
+                                    "Ränder",
                                 )
                                 .changed()
                                 || ui
@@ -5634,6 +5710,35 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                     )
                                     .changed()
                             {
+                                // Seamless conversion between Ränder and Bildgröße so the image
+                                // never jumps when toggling between the two modes!
+                                if let Some(cur_r) = cur_draw_rect {
+                                    let pw = paper_size_mm.width_mm;
+                                    let ph = paper_size_mm.height_mm;
+                                    if prev_crit == SizingCriterion::Margin
+                                        && std_spec.criterion == SizingCriterion::ImageSize
+                                    {
+                                        std_spec.manual_rect_mm = RectMm::new(
+                                            (cur_r.x_mm * 10.0).round() / 10.0,
+                                            (cur_r.y_mm * 10.0).round() / 10.0,
+                                            (cur_r.width_mm * 10.0).round() / 10.0,
+                                            (cur_r.height_mm * 10.0).round() / 10.0,
+                                        );
+                                    } else if prev_crit == SizingCriterion::ImageSize
+                                        && std_spec.criterion == SizingCriterion::Margin
+                                    {
+                                        std_spec.margins_mm.left_mm =
+                                            (cur_r.x_mm * 10.0).round() / 10.0;
+                                        std_spec.margins_mm.top_mm =
+                                            (cur_r.y_mm * 10.0).round() / 10.0;
+                                        std_spec.margins_mm.right_mm =
+                                            (((pw - cur_r.right_mm()).max(0.0)) * 10.0).round()
+                                                / 10.0;
+                                        std_spec.margins_mm.bottom_mm =
+                                            (((ph - cur_r.bottom_mm()).max(0.0)) * 10.0).round()
+                                                / 10.0;
+                                    }
+                                }
                                 changed = true;
                             }
                         });
@@ -5642,27 +5747,48 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         if std_spec.criterion == SizingCriterion::Margin {
                             ui.label(RichText::new("Oben / Unten:").color(t.text_dim));
                             ui.horizontal(|ui| {
-                                if ui
+                                let top_changed = ui
                                     .add(
                                         egui::DragValue::new(&mut std_spec.margins_mm.top_mm)
                                             .range(0.0..=800.0)
                                             .speed(0.5)
+                                            .max_decimals(1)
                                             .suffix(" mm"),
                                     )
-                                    .changed()
-                                {
-                                    changed = true;
-                                }
+                                    .changed();
                                 ui.label("×");
-                                if ui
+                                let bottom_changed = ui
                                     .add(
                                         egui::DragValue::new(&mut std_spec.margins_mm.bottom_mm)
                                             .range(0.0..=800.0)
                                             .speed(0.5)
+                                            .max_decimals(1)
                                             .suffix(" mm"),
                                     )
-                                    .changed()
-                                {
+                                    .changed();
+                                if top_changed {
+                                    if proportional_margins
+                                        && let Some(aspect) = active_aspect
+                                    {
+                                        std_spec.margins_mm = adjust_margins_for_aspect(
+                                            std_spec.margins_mm,
+                                            paper_size_mm,
+                                            aspect,
+                                            0,
+                                        );
+                                    }
+                                    changed = true;
+                                } else if bottom_changed {
+                                    if proportional_margins
+                                        && let Some(aspect) = active_aspect
+                                    {
+                                        std_spec.margins_mm = adjust_margins_for_aspect(
+                                            std_spec.margins_mm,
+                                            paper_size_mm,
+                                            aspect,
+                                            1,
+                                        );
+                                    }
                                     changed = true;
                                 }
                             });
@@ -5670,27 +5796,48 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
                             ui.label(RichText::new("Links / Rechts:").color(t.text_dim));
                             ui.horizontal(|ui| {
-                                if ui
+                                let left_changed = ui
                                     .add(
                                         egui::DragValue::new(&mut std_spec.margins_mm.left_mm)
                                             .range(0.0..=800.0)
                                             .speed(0.5)
+                                            .max_decimals(1)
                                             .suffix(" mm"),
                                     )
-                                    .changed()
-                                {
-                                    changed = true;
-                                }
+                                    .changed();
                                 ui.label("×");
-                                if ui
+                                let right_changed = ui
                                     .add(
                                         egui::DragValue::new(&mut std_spec.margins_mm.right_mm)
                                             .range(0.0..=800.0)
                                             .speed(0.5)
+                                            .max_decimals(1)
                                             .suffix(" mm"),
                                     )
-                                    .changed()
-                                {
+                                    .changed();
+                                if left_changed {
+                                    if proportional_margins
+                                        && let Some(aspect) = active_aspect
+                                    {
+                                        std_spec.margins_mm = adjust_margins_for_aspect(
+                                            std_spec.margins_mm,
+                                            paper_size_mm,
+                                            aspect,
+                                            2,
+                                        );
+                                    }
+                                    changed = true;
+                                } else if right_changed {
+                                    if proportional_margins
+                                        && let Some(aspect) = active_aspect
+                                    {
+                                        std_spec.margins_mm = adjust_margins_for_aspect(
+                                            std_spec.margins_mm,
+                                            paper_size_mm,
+                                            aspect,
+                                            3,
+                                        );
+                                    }
                                     changed = true;
                                 }
                             });
@@ -5698,29 +5845,46 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         } else {
                             ui.label(RichText::new("Breite / Höhe:").color(t.text_dim));
                             ui.horizontal(|ui| {
-                                if ui
+                                let w_changed = ui
                                     .add(
                                         egui::DragValue::new(&mut std_spec.manual_rect_mm.width_mm)
                                             .range(10.0..=600.0)
                                             .speed(1.0)
+                                            .max_decimals(1)
                                             .suffix(" mm"),
                                     )
-                                    .changed()
-                                {
-                                    changed = true;
-                                }
+                                    .changed();
                                 ui.label("×");
-                                if ui
+                                let h_changed = ui
                                     .add(
                                         egui::DragValue::new(
                                             &mut std_spec.manual_rect_mm.height_mm,
                                         )
                                         .range(10.0..=800.0)
                                         .speed(1.0)
+                                        .max_decimals(1)
                                         .suffix(" mm"),
                                     )
-                                    .changed()
-                                {
+                                    .changed();
+                                if w_changed {
+                                    if std_spec.keep_aspect_ratio
+                                        && let Some(aspect) = active_aspect
+                                    {
+                                        std_spec.manual_rect_mm.height_mm =
+                                            ((std_spec.manual_rect_mm.width_mm / aspect) * 10.0)
+                                                .round()
+                                                / 10.0;
+                                    }
+                                    changed = true;
+                                } else if h_changed {
+                                    if std_spec.keep_aspect_ratio
+                                        && let Some(aspect) = active_aspect
+                                    {
+                                        std_spec.manual_rect_mm.width_mm =
+                                            ((std_spec.manual_rect_mm.height_mm * aspect) * 10.0)
+                                                .round()
+                                                / 10.0;
+                                    }
                                     changed = true;
                                 }
                             });
@@ -5743,6 +5907,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                             egui::DragValue::new(&mut std_spec.manual_rect_mm.x_mm)
                                                 .range(0.0..=800.0)
                                                 .speed(0.5)
+                                                .max_decimals(1)
                                                 .suffix(" mm"),
                                         )
                                         .on_hover_text("Abstand vom linken Blattrand")
@@ -5757,6 +5922,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                             egui::DragValue::new(&mut std_spec.manual_rect_mm.y_mm)
                                                 .range(0.0..=800.0)
                                                 .speed(0.5)
+                                                .max_decimals(1)
                                                 .suffix(" mm"),
                                         )
                                         .on_hover_text("Abstand vom oberen Blattrand")
@@ -10039,9 +10205,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn headless_egui_frame_runs_without_panicking_and_dock_width_stays_stable() {
+    fn empty_startup_and_menu_demo_images_load_into_pool_only() {
         let ctx = Context::default();
         let mut app = LumaPrintApp::new();
+        assert!(app.session.doc.images.is_empty());
+        assert_eq!(app.session.doc.page_slots(0)[0], None);
+        assert!(!app.slot_selected);
+
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            app.render_ui(ctx);
+        });
+        assert!(app.cached_solved.is_some());
+
+        // Menu action: Testbilder in Pool laden -> adds to pool without auto-placing onto Bogen 1
+        app.exec(EngineCommand::AddDemoImages);
+        assert_eq!(app.session.doc.images.len(), 2);
+        assert_eq!(app.session.doc.page_slots(0)[0], None);
+    }
+
+    #[test]
+    fn headless_egui_frame_runs_without_panicking_and_dock_width_stays_stable() {
+        let ctx = Context::default();
+        let mut app = LumaPrintApp::new_with_demo();
         let mut widths = Vec::new();
         for frame in 0..10 {
             let mut input = egui::RawInput::default();
@@ -10073,7 +10258,7 @@ mod tests {
     #[test]
     fn headless_all_pages_overview_and_multi_page_navigator_render_cleanly() {
         let ctx = Context::default();
-        let mut app = LumaPrintApp::new();
+        let mut app = LumaPrintApp::new_with_demo();
         app.exec(EngineCommand::AutoDistributePoolImages {
             only_unassigned: true,
         });
@@ -10147,7 +10332,7 @@ mod tests {
     #[test]
     fn ctrl_wheel_and_shift_wheel_and_fit_fill_flip_work_cleanly() {
         let ctx = Context::default();
-        let mut app = LumaPrintApp::new();
+        let mut app = LumaPrintApp::new_with_demo();
 
         // Run initial frame to populate last_canvas_rect and last_slot_screen_rects
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
@@ -10212,7 +10397,7 @@ mod tests {
     #[test]
     fn internal_drag_from_pool_to_sheet_places_and_adds_pages() {
         let ctx = Context::default();
-        let mut app = LumaPrintApp::new();
+        let mut app = LumaPrintApp::new_with_demo();
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             app.render_ui(ctx);
         });
@@ -10237,7 +10422,7 @@ mod tests {
         lumaprint_codecs::save_png16(&chart.buffer, &img_path).unwrap();
 
         let ctx = Context::default();
-        let mut app = LumaPrintApp::new();
+        let mut app = LumaPrintApp::new_with_demo();
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             app.render_ui(ctx);
         });
@@ -10284,7 +10469,7 @@ mod tests {
     #[test]
     fn clicking_sheet_outside_image_deselects_slot_and_clicking_image_reselects_it() {
         let ctx = Context::default();
-        let mut app = LumaPrintApp::new();
+        let mut app = LumaPrintApp::new_with_demo();
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             app.render_ui(ctx);
         });

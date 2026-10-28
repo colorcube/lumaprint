@@ -1697,15 +1697,37 @@ impl Session {
                 }
                 if swapped_90 {
                     for page in &mut self.doc.pages {
-                        if let LayoutMode::FreeComposer(comp) = &mut page.layout {
-                            for (si, maybe_id) in page.slot_assignments.iter().copied().enumerate()
-                            {
-                                if maybe_id == Some(image_id)
-                                    && let Some(Some(sz)) = comp.slot_sizes_mm.get_mut(si)
+                        match &mut page.layout {
+                            LayoutMode::FreeComposer(comp) => {
+                                for (si, maybe_id) in
+                                    page.slot_assignments.iter().copied().enumerate()
                                 {
-                                    std::mem::swap(&mut sz.width_mm, &mut sz.height_mm);
+                                    if maybe_id == Some(image_id)
+                                        && let Some(Some(sz)) = comp.slot_sizes_mm.get_mut(si)
+                                    {
+                                        std::mem::swap(&mut sz.width_mm, &mut sz.height_mm);
+                                    }
                                 }
                             }
+                            LayoutMode::Standard(std_spec)
+                                if page.slot_assignments.first().copied().flatten()
+                                    == Some(image_id) =>
+                            {
+                                std::mem::swap(
+                                    &mut std_spec.manual_rect_mm.width_mm,
+                                    &mut std_spec.manual_rect_mm.height_mm,
+                                );
+                                if !crop.fill_slot && std_spec.keep_aspect_ratio {
+                                    let m = std_spec
+                                        .margins_mm
+                                        .left_mm
+                                        .min(std_spec.margins_mm.right_mm)
+                                        .min(std_spec.margins_mm.top_mm)
+                                        .min(std_spec.margins_mm.bottom_mm);
+                                    std_spec.margins_mm = lumaprint_geom::MarginsMm::uniform(m);
+                                }
+                            }
+                            _ => {}
                         }
                     }
                     self.doc.load_active_page_from_list();
@@ -2091,20 +2113,25 @@ impl Session {
             return;
         }
 
-        let solved = solve_page_layout_at(&self.doc, page_index);
-        let Some(slot) = solved
-            .slots
-            .get(slot_index)
-            .or_else(|| solved.slots.first())
-        else {
-            return;
-        };
-        let slot_w = slot.slot_rect_mm.width_mm;
-        let slot_h = slot.slot_rect_mm.height_mm;
-        if (slot_w - slot_h).abs() <= 1.0 {
-            return;
-        }
-        let slot_is_landscape = slot_w > slot_h;
+        let slot_is_landscape =
+            if let LayoutMode::Standard(std_spec) = self.doc.page_layout(page_index) {
+                std_spec.orientation == Orientation::Landscape
+            } else {
+                let solved = solve_page_layout_at(&self.doc, page_index);
+                let Some(slot) = solved
+                    .slots
+                    .get(slot_index)
+                    .or_else(|| solved.slots.first())
+                else {
+                    return;
+                };
+                let slot_w = slot.slot_rect_mm.width_mm;
+                let slot_h = slot.slot_rect_mm.height_mm;
+                if (slot_w - slot_h).abs() <= 1.0 {
+                    return;
+                }
+                slot_w > slot_h
+            };
         if let Some(img) = self.doc.images.iter_mut().find(|i| i.id == image_id) {
             let base_w = f64::from(img.meta.width.max(1)) * img.crop.norm_w.clamp(0.05, 1.0);
             let base_h = f64::from(img.meta.height.max(1)) * img.crop.norm_h.clamp(0.05, 1.0);
@@ -2334,12 +2361,8 @@ impl Session {
             },
             composer_pos_mm: (15.0, 105.0),
         });
-        self.doc.active_image_index = 1;
-        if self.doc.slot_assignments.first().copied().flatten().is_none() {
-            self.doc.slot_assignments[0] = Some(id2);
-            self.doc.sync_active_page_to_list();
-            self.auto_orient_image_for_slot(id2, 0, 0);
-        }
+        self.doc.active_image_index = self.doc.images.len().saturating_sub(1);
+        self.status_message = String::from("2 Testbilder in den Bilder-Pool geladen.");
         Ok(())
     }
 
@@ -2784,9 +2807,20 @@ mod tests {
     fn auto_orient_image_matches_slot_orientation_on_placement() {
         let mut session = Session::new();
         // Default sheet is Portrait (A4 Portrait), single slot is portrait.
-        // Add demo images (both are 6000x4000 / 480x320 landscape).
-        // Image 2 is placed on slot 0 of Bogen 1 during AddDemoImages -> should be auto-rotated to 90 deg!
+        // AddDemoImages only loads the 2 test images into the Pool; Bogen 1 stays empty.
         session.execute(EngineCommand::AddDemoImages).unwrap();
+        assert_eq!(session.doc.images.len(), 2);
+        assert!(session.doc.slot_assignments[0].is_none());
+
+        // Place Image 2 (6000x4000 landscape) onto slot 0 of Bogen 1 -> should be auto-rotated to 90 deg!
+        let img2_id = session.doc.images[1].id;
+        session
+            .execute(EngineCommand::PlacePoolImageOnSheet {
+                image_id: img2_id,
+                page_index: 0,
+                slot_index: Some(0),
+            })
+            .unwrap();
         let img2 = &session.doc.images[1];
         assert_eq!(img2.crop.rotation_deg % 180, 90);
 

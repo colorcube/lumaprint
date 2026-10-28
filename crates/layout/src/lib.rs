@@ -287,7 +287,7 @@ pub fn solve_page_layout_at(doc: &PrintJobDocument, page_index: usize) -> Solved
                 .map(effective_cropped_aspect)
                 .unwrap_or(3.0 / 2.0);
 
-            let slot_rect_mm = if doc.printer.borderless && std_spec.fit_to_scale {
+            let base_slot_rect_mm = if doc.printer.borderless && std_spec.fit_to_scale {
                 printable_rect_mm
             } else {
                 match std_spec.criterion {
@@ -301,7 +301,10 @@ pub fn solve_page_layout_at(doc: &PrintJobDocument, page_index: usize) -> Solved
                     }),
                     SizingCriterion::ImageSize => {
                         let mut r = std_spec.manual_rect_mm;
-                        if std_spec.keep_aspect_ratio && img_aspect > 0.0 {
+                        if std_spec.keep_aspect_ratio
+                            && img_aspect > 0.0
+                            && (r.width_mm / r.height_mm.max(0.1) - img_aspect).abs() > 0.02
+                        {
                             r.height_mm = r.width_mm / img_aspect;
                         }
                         apply_centering(r, paper_size_mm, std_spec.centering)
@@ -309,26 +312,38 @@ pub fn solve_page_layout_at(doc: &PrintJobDocument, page_index: usize) -> Solved
                 }
             };
 
-            let (image_draw_rect_mm, uv_rect, effective_ppi) = if let Some(img) = active_img {
-                let force_fill = doc.printer.borderless && std_spec.fit_to_scale;
-                let (draw_r, uv, ppi) = solve_slot_draw_and_uv(
-                    slot_rect_mm,
-                    img,
-                    force_fill,
-                    std_spec.keep_aspect_ratio,
-                    std_spec.centering,
-                    Some(paper_size_mm),
-                );
-                if ppi < 180.0 {
-                    warnings.push(format!(
-                        "Niedrige Bildauflösung: {:.0} ppi (empfohlen >= 240 ppi für Fine-Art-Druck).",
-                        ppi
-                    ));
-                }
-                (draw_r, uv, Some(ppi))
-            } else {
-                (slot_rect_mm, [0.0, 0.0, 1.0, 1.0], None)
-            };
+            let (slot_rect_mm, image_draw_rect_mm, uv_rect, effective_ppi) =
+                if let Some(img) = active_img {
+                    let force_fill = doc.printer.borderless && std_spec.fit_to_scale;
+                    let (draw_r, uv, ppi) = solve_slot_draw_and_uv(
+                        base_slot_rect_mm,
+                        img,
+                        force_fill,
+                        std_spec.keep_aspect_ratio,
+                        std_spec.centering,
+                        Some(paper_size_mm),
+                    );
+                    if ppi < 180.0 {
+                        warnings.push(format!(
+                            "Niedrige Bildauflösung: {:.0} ppi (empfohlen >= 240 ppi für Fine-Art-Druck).",
+                            ppi
+                        ));
+                    }
+                    let eff_slot_r =
+                        if !force_fill && !img.crop.fill_slot && std_spec.keep_aspect_ratio {
+                            draw_r
+                        } else {
+                            base_slot_rect_mm
+                        };
+                    (eff_slot_r, draw_r, uv, Some(ppi))
+                } else {
+                    (
+                        base_slot_rect_mm,
+                        base_slot_rect_mm,
+                        [0.0, 0.0, 1.0, 1.0],
+                        None,
+                    )
+                };
 
             SolvedPageLayout {
                 paper_size_mm,
@@ -1009,21 +1024,19 @@ fn solve_slot_draw_and_uv(
         draw_w,
         draw_h,
     );
-    if let Some(page) = page_size_mm {
-        if !force_fill {
-            draw_rect.x_mm = match centering {
-                CenteringMode::Center | CenteringMode::Horizontal => {
-                    (page.width_mm - draw_rect.width_mm) * 0.5
-                }
-                CenteringMode::None | CenteringMode::Vertical => slot_rect_mm.x_mm,
-            };
-            draw_rect.y_mm = match centering {
-                CenteringMode::Center | CenteringMode::Vertical => {
-                    (page.height_mm - draw_rect.height_mm) * 0.5
-                }
-                CenteringMode::None | CenteringMode::Horizontal => slot_rect_mm.y_mm,
-            };
-        }
+    if page_size_mm.is_some() && !force_fill {
+        draw_rect.x_mm = match centering {
+            CenteringMode::Center | CenteringMode::Horizontal => {
+                slot_rect_mm.x_mm + (slot_rect_mm.width_mm - draw_rect.width_mm) * 0.5
+            }
+            CenteringMode::None | CenteringMode::Vertical => slot_rect_mm.x_mm,
+        };
+        draw_rect.y_mm = match centering {
+            CenteringMode::Center | CenteringMode::Vertical => {
+                slot_rect_mm.y_mm + (slot_rect_mm.height_mm - draw_rect.height_mm) * 0.5
+            }
+            CenteringMode::None | CenteringMode::Horizontal => slot_rect_mm.y_mm,
+        };
     }
 
     let uw = (draw_w / virt_w).clamp(0.05, 1.0);
@@ -1073,6 +1086,107 @@ pub fn effective_cropped_aspect(img: &SourceImageEntry) -> f64 {
     f64::from(w) / f64::from(h.max(1))
 }
 
+/// Adjusts `margins` proportionally after editing one of the four margins (`edited_edge`:
+/// `0 = top`, `1 = bottom`, `2 = left`, `3 = right`) so that the resulting margin box on
+/// `paper_size_mm` has the exact aspect ratio `aspect` (`width / height`).
+pub fn adjust_margins_for_aspect(
+    mut margins: MarginsMm,
+    paper_size_mm: SizeMm,
+    aspect: f64,
+    edited_edge: u8,
+) -> MarginsMm {
+    let pw = paper_size_mm.width_mm.max(20.0);
+    let ph = paper_size_mm.height_mm.max(20.0);
+    let aspect = aspect.clamp(0.05, 20.0);
+
+    match edited_edge {
+        0 | 1 => {
+            if edited_edge == 0 {
+                margins.top_mm = margins.top_mm.clamp(0.0, ph - 10.0);
+                margins.bottom_mm =
+                    margins.bottom_mm.clamp(0.0, (ph - margins.top_mm - 10.0).max(0.0));
+            } else {
+                margins.bottom_mm = margins.bottom_mm.clamp(0.0, ph - 10.0);
+                margins.top_mm =
+                    margins.top_mm.clamp(0.0, (ph - margins.bottom_mm - 10.0).max(0.0));
+            }
+
+            let mut h = (ph - margins.top_mm - margins.bottom_mm).max(10.0);
+            let mut w = h * aspect;
+
+            if w > pw {
+                w = pw;
+                h = (w / aspect).clamp(10.0, ph);
+                if edited_edge == 0 {
+                    margins.top_mm = margins.top_mm.min(ph - h);
+                    margins.bottom_mm = (ph - margins.top_mm - h).max(0.0);
+                } else {
+                    margins.bottom_mm = margins.bottom_mm.min(ph - h);
+                    margins.top_mm = (ph - margins.bottom_mm - h).max(0.0);
+                }
+            } else if w < 10.0 {
+                w = 10.0;
+                h = (w / aspect).clamp(10.0, ph);
+                if edited_edge == 0 {
+                    margins.top_mm = margins.top_mm.min(ph - h);
+                    margins.bottom_mm = (ph - margins.top_mm - h).max(0.0);
+                } else {
+                    margins.bottom_mm = margins.bottom_mm.min(ph - h);
+                    margins.top_mm = (ph - margins.bottom_mm - h).max(0.0);
+                }
+            }
+
+            let rem_w = (pw - w).max(0.0);
+            let diff_x = (margins.left_mm - margins.right_mm).clamp(-rem_w, rem_w);
+            margins.left_mm = ((rem_w + diff_x) * 0.5).max(0.0);
+            margins.right_mm = (rem_w - margins.left_mm).max(0.0);
+        }
+        _ => {
+            if edited_edge == 2 {
+                margins.left_mm = margins.left_mm.clamp(0.0, pw - 10.0);
+                margins.right_mm =
+                    margins.right_mm.clamp(0.0, (pw - margins.left_mm - 10.0).max(0.0));
+            } else {
+                margins.right_mm = margins.right_mm.clamp(0.0, pw - 10.0);
+                margins.left_mm =
+                    margins.left_mm.clamp(0.0, (pw - margins.right_mm - 10.0).max(0.0));
+            }
+
+            let mut w = (pw - margins.left_mm - margins.right_mm).max(10.0);
+            let mut h = w / aspect;
+
+            if h > ph {
+                h = ph;
+                w = (h * aspect).clamp(10.0, pw);
+                if edited_edge == 2 {
+                    margins.left_mm = margins.left_mm.min(pw - w);
+                    margins.right_mm = (pw - margins.left_mm - w).max(0.0);
+                } else {
+                    margins.right_mm = margins.right_mm.min(pw - w);
+                    margins.left_mm = (pw - margins.right_mm - w).max(0.0);
+                }
+            } else if h < 10.0 {
+                h = 10.0;
+                w = (h * aspect).clamp(10.0, pw);
+                if edited_edge == 2 {
+                    margins.left_mm = margins.left_mm.min(pw - w);
+                    margins.right_mm = (pw - margins.left_mm - w).max(0.0);
+                } else {
+                    margins.right_mm = margins.right_mm.min(pw - w);
+                    margins.left_mm = (pw - margins.right_mm - w).max(0.0);
+                }
+            }
+
+            let rem_h = (ph - h).max(0.0);
+            let diff_y = (margins.top_mm - margins.bottom_mm).clamp(-rem_h, rem_h);
+            margins.top_mm = ((rem_h + diff_y) * 0.5).max(0.0);
+            margins.bottom_mm = (rem_h - margins.top_mm).max(0.0);
+        }
+    }
+
+    margins
+}
+
 /// Orients `size` so its long/short side matches `img`'s cropped orientation (landscape vs portrait).
 pub fn orient_size_for_image(size: SizeMm, img: &SourceImageEntry) -> SizeMm {
     let short = size.width_mm.min(size.height_mm);
@@ -1097,7 +1211,7 @@ pub fn orient_size_for_image(size: SizeMm, img: &SourceImageEntry) -> SizeMm {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lumaprint_doc::GalleryWrapSpec;
+    use lumaprint_doc::{CropSpec, GalleryWrapSpec};
 
     #[test]
     fn gallery_wrap_detects_insufficient_paper_and_builds_cut_marks() {
@@ -1167,6 +1281,80 @@ mod tests {
             assert!(r.right_mm() <= printable.right_mm() + 1e-3);
             assert!(r.bottom_mm() <= printable.bottom_mm() + 1e-3);
         }
+    }
+
+    #[test]
+    fn proportional_margin_adjustment_and_tight_slot_rect_work() {
+        let paper = SizeMm {
+            width_mm: 210.0,
+            height_mm: 297.0,
+        };
+        let aspect = 2.0 / 3.0; // Portrait 2:3
+        let init = MarginsMm {
+            top_mm: 21.0,
+            bottom_mm: 21.0,
+            left_mm: 20.0,
+            right_mm: 20.0,
+        };
+
+        // 1. Change Oben from 21.0 to 36.0 (Unten stays 21.0) -> h = 297 - 36 - 21 = 240 mm, w = 160 mm -> Links = Rechts = 25.0 mm
+        let m1 = adjust_margins_for_aspect(
+            MarginsMm {
+                top_mm: 36.0,
+                ..init
+            },
+            paper,
+            aspect,
+            0,
+        );
+        assert!((m1.top_mm - 36.0).abs() < 1e-4);
+        assert!((m1.bottom_mm - 21.0).abs() < 1e-4);
+        assert!((m1.left_mm - 25.0).abs() < 1e-4);
+        assert!((m1.right_mm - 25.0).abs() < 1e-4);
+
+        // 2. Change Links from 25.0 to 35.0 (Rechts stays 25.0) -> w = 210 - 35 - 25 = 150 mm, h = 225 mm
+        // diff_y = 36 - 21 = 15 mm -> rem_h = 297 - 225 = 72 mm -> top = (72+15)/2 = 43.5, bottom = (72-15)/2 = 28.5
+        let m2 = adjust_margins_for_aspect(
+            MarginsMm {
+                left_mm: 35.0,
+                ..m1
+            },
+            paper,
+            aspect,
+            2,
+        );
+        assert!((m2.left_mm - 35.0).abs() < 1e-4);
+        assert!((m2.right_mm - 25.0).abs() < 1e-4);
+        assert!((m2.top_mm - 43.5).abs() < 1e-4);
+        assert!((m2.bottom_mm - 28.5).abs() < 1e-4);
+
+        // 3. Verify that solve_page_layout sets slot_rect_mm == image_draw_rect_mm when fill_slot == false
+        let mut doc = PrintJobDocument::default();
+        doc.printer.paper_size_key = "A4".into();
+        doc.images.push(SourceImageEntry {
+            id: 1,
+            path: "test.tif".into(),
+            display_name: "test.tif".into(),
+            meta: lumaprint_doc::ImageMetadata {
+                width: 4000,
+                height: 6000,
+                ..Default::default()
+            },
+            crop: CropSpec {
+                fill_slot: false,
+                ..Default::default()
+            },
+            composer_size_mm: SizeMm {
+                width_mm: 100.0,
+                height_mm: 150.0,
+            },
+            composer_pos_mm: (10.0, 10.0),
+        });
+        doc.slot_assignments[0] = Some(1);
+        doc.sync_active_page_to_list();
+        let solved = solve_page_layout(&doc);
+        let slot = &solved.slots[0];
+        assert_eq!(slot.slot_rect_mm, slot.image_draw_rect_mm);
     }
 }
 

@@ -11,7 +11,7 @@
 )]
 
 use lumaprint_cms::{RenderingIntent, SoftproofConfig, WorkingColorSpace};
-use lumaprint_codecs::ImageMetadata;
+pub use lumaprint_codecs::ImageMetadata;
 use lumaprint_color::{AbwSettings, ColorAdjustments, Rgb8};
 use lumaprint_geom::{BorderlessExpandLevel, DisplayUnit, MarginsMm, Orientation, RectMm, SizeMm};
 use serde::{Deserialize, Serialize};

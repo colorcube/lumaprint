@@ -23,6 +23,12 @@ fn main() -> ExitCode {
             .get(idx + 1)
             .map_or_else(|| PathBuf::from("/tmp/lumaprint_snapshot.png"), PathBuf::from);
         let mut app = LumaPrintApp::new();
+        let _ = app.session.execute(EngineCommand::AddDemoImages);
+        let _ = app.session.execute(EngineCommand::PlacePoolImageOnSheet {
+            image_id: 2,
+            page_index: 0,
+            slot_index: Some(0),
+        });
         // Run two headless UI frames to verify full widget layout + texture generation
         let ctx = egui::Context::default();
         for _ in 0..2 {

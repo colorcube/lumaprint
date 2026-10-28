@@ -465,6 +465,11 @@ fn configure_session_from_args(
 
     if !has_inputs {
         session.execute(EngineCommand::AddDemoImages)?;
+        session.execute(EngineCommand::PlacePoolImageOnSheet {
+            image_id: 2,
+            page_index: 0,
+            slot_index: Some(0),
+        })?;
     } else {
         session.execute(EngineCommand::AutoDistributePoolImages {
             only_unassigned: true,
