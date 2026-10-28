@@ -2362,35 +2362,37 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     });
 
                     ui.menu_button("Einstellungen", |ui| {
-                        ui.label(RichText::new("Oberflächen-Theme").strong());
-                        for tk in ThemeKind::ALL {
-                            if ui.radio(self.theme_kind == tk, tk.label()).clicked() {
-                                self.theme_kind = tk;
-                                ui.close_menu();
+                        ui.menu_button("Darstellung", |ui| {
+                            ui.label(RichText::new("Oberflächen-Theme").strong());
+                            for tk in ThemeKind::ALL {
+                                if ui.radio(self.theme_kind == tk, tk.label()).clicked() {
+                                    self.theme_kind = tk;
+                                    ui.close_menu();
+                                }
                             }
-                        }
-                        ui.separator();
-                        ui.label(
-                            RichText::new(format!(
-                                "Schrift & Skalierung (KDE: {} {:.0} pt)",
-                                self.kde_typography.family_name, self.kde_typography.point_size
-                            ))
-                            .strong(),
-                        );
-                        for (scale, lbl) in [
-                            (0.90_f32, "90 % (Kompakt)"),
-                            (1.00_f32, "100 % (KDE-Standard)"),
-                            (1.10_f32, "110 % (Größer)"),
-                            (1.25_f32, "125 % (Groß)"),
-                        ] {
-                            if ui
-                                .radio((self.ui_scale - scale).abs() < 0.02, lbl)
-                                .clicked()
-                            {
-                                self.ui_scale = scale;
-                                ui.close_menu();
+                            ui.separator();
+                            ui.label(
+                                RichText::new(format!(
+                                    "Schrift & Skalierung (KDE: {} {:.0} pt)",
+                                    self.kde_typography.family_name, self.kde_typography.point_size
+                                ))
+                                .strong(),
+                            );
+                            for (scale, lbl) in [
+                                (0.90_f32, "90 % (Kompakt)"),
+                                (1.00_f32, "100 % (KDE-Standard)"),
+                                (1.10_f32, "110 % (Größer)"),
+                                (1.25_f32, "125 % (Groß)"),
+                            ] {
+                                if ui
+                                    .radio((self.ui_scale - scale).abs() < 0.02, lbl)
+                                    .clicked()
+                                {
+                                    self.ui_scale = scale;
+                                    ui.close_menu();
+                                }
                             }
-                        }
+                        });
                         ui.separator();
                         ui.label(RichText::new("Maßeinheit").strong());
                         for unit in [DisplayUnit::Mm, DisplayUnit::Inch] {
