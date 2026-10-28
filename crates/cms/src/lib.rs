@@ -41,6 +41,7 @@ mod lcms2 {
     pub const INTENT_ABSOLUTE_COLORIMETRIC: u32 = 3;
 
     pub const CMS_FLAGS_NOCACHE: u32 = 0x0040;
+    pub const CMS_FLAGS_NOOPTIMIZE: u32 = 0x0100;
     pub const CMS_FLAGS_HIGHRESPRECALC: u32 = 0x0400;
     pub const CMS_FLAGS_GAMUTCHECK: u32 = 0x1000;
     pub const CMS_FLAGS_BLACKPOINTCOMPENSATION: u32 = 0x2000;
@@ -313,6 +314,32 @@ mod lcms2 {
                     output.0,
                     TYPE_RGB_16,
                     intent,
+                    flags,
+                )
+            };
+            if transform.is_null() {
+                None
+            } else {
+                Some(Self {
+                    transform,
+                    context: ptr::null_mut(),
+                })
+            }
+        }
+
+        pub fn new_matrix_shaper_rgb16(
+            input: &ProfileHandle,
+            output: &ProfileHandle,
+        ) -> Option<Self> {
+            let flags = CMS_FLAGS_NOOPTIMIZE | CMS_FLAGS_NOCACHE | CMS_FLAGS_BLACKPOINTCOMPENSATION;
+            let transform = unsafe {
+                cmsCreateTransformTHR(
+                    ptr::null_mut(),
+                    input.0,
+                    TYPE_RGB_16,
+                    output.0,
+                    TYPE_RGB_16,
+                    INTENT_RELATIVE_COLORIMETRIC,
                     flags,
                 )
             };
@@ -981,12 +1008,9 @@ impl IccProfile {
         let Some(dst_prof) = dst_space.lcms_profile() else {
             return false;
         };
-        let Some(xform) = lcms2::TransformHandle::new_rgb16(
-            &self.inner.handle,
-            dst_prof,
-            lcms2::INTENT_RELATIVE_COLORIMETRIC,
-            true,
-        ) else {
+        let Some(xform) =
+            lcms2::TransformHandle::new_matrix_shaper_rgb16(&self.inner.handle, dst_prof)
+        else {
             return false;
         };
         buf.data.par_chunks_mut(3 * 1024).for_each(|chunk| {
@@ -1397,5 +1421,184 @@ mod tests {
         );
         let p = buf.get_pixel(0, 0).unwrap();
         assert!(p.r > 0 && p.b > 0);
+    }
+
+    #[test]
+    fn lcms2_virtual_working_spaces_match_analytical_d50_matrices() {
+        // Verify that our 4 virtual liblcms2 profiles (sRGB, AdobeRGB, ProPhoto, DisplayP3)
+        // agree closely with our analytical D50 Bradford matrices across test colors.
+        let test_colors = [
+            Rgb16::new(65535, 65535, 65535),
+            Rgb16::new(32768, 32768, 32768),
+            Rgb16::new(50000, 20000, 15000),
+            Rgb16::new(15000, 45000, 20000),
+            Rgb16::new(12000, 18000, 52000),
+        ];
+        for src in WorkingColorSpace::ALL {
+            for dst in WorkingColorSpace::ALL {
+                let src_h = src.lcms_profile().expect("src profile");
+                let dst_h = dst.lcms_profile().expect("dst profile");
+                let xform =
+                    lcms2::TransformHandle::new_matrix_shaper_rgb16(src_h, dst_h).expect("transform");
+
+                for &px in &test_colors {
+                    let [lr, lg, lb] = xform.transform_pixel([px.r, px.g, px.b]);
+                    let analytical = src.convert_pixel_to(px, dst);
+                    assert!(
+                        (i32::from(lr) - i32::from(analytical.r)).abs() <= 32
+                            && (i32::from(lg) - i32::from(analytical.g)).abs() <= 32
+                            && (i32::from(lb) - i32::from(analytical.b)).abs() <= 32,
+                        "{src:?} -> {dst:?} for {px:?}: lcms2=({lr},{lg},{lb}) vs analytical={analytical:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn lcms2_gray_ramp_monotonicity_bpc_shadow_separation_and_rayon_bit_identity() {
+        let icc_path = Path::new(
+            "/home/rene/Projekte/Spielwiese/Drucker-Epson-SC-P900/Code/Epson-SC-P900-Treiber/extracted/icc/mac_Epson_SC-P900_700_EpsonPremiumGlossy.icc",
+        );
+        if !icc_path.exists() {
+            return;
+        }
+        let prof = IccProfile::from_file(icc_path).expect("valid Epson SC-P900 ICC profile");
+
+        // 1. 256-step neutral gray ramp must be monotonically non-decreasing in R, G, B
+        // and reach exact (65535, 65535, 65535) at step 255.
+        let mut ramp_buf = ImageBuffer16::new_solid(256, 8, Rgb16::BLACK).unwrap();
+        for y in 0..8 {
+            for x in 0..256u32 {
+                let v = (x as u16) * 257;
+                ramp_buf.set_pixel(x, y, Rgb16::new(v, v, v));
+            }
+        }
+
+        // Compare single-pixel transform vs parallel rayon buffer transform for bit-exact identity
+        let expected_row: Vec<Rgb16> = (0..256u32)
+            .map(|x| {
+                let v = (x as u16) * 257;
+                prof.transform_pixel(
+                    WorkingColorSpace::Srgb,
+                    Rgb16::new(v, v, v),
+                    RenderingIntent::RelativeColorimetric,
+                    true,
+                )
+            })
+            .collect();
+
+        prof.transform_buffer_in_place(
+            WorkingColorSpace::Srgb,
+            &mut ramp_buf,
+            RenderingIntent::RelativeColorimetric,
+            true,
+        );
+
+        for x in 0..256u32 {
+            let actual = ramp_buf.get_pixel(x, 0).unwrap();
+            assert_eq!(
+                actual, expected_row[x as usize],
+                "rayon buffer transform must be bit-identical to single-pixel transform at x={x}"
+            );
+            if x > 0 {
+                let prev = expected_row[(x - 1) as usize];
+                assert!(
+                    actual.r >= prev.r && actual.g >= prev.g && actual.b >= prev.b,
+                    "gray ramp non-monotonic at step {x}: prev={prev:?}, curr={actual:?}"
+                );
+            }
+        }
+        assert_eq!(expected_row[255], Rgb16::WHITE);
+
+        // 2. Verify Black Point Compensation (BPC) lifts deep shadows in Relative Colorimetric
+        // compared to BPC=false (where L* below media black gets clipped).
+        let deep_shadow = Rgb16::new(1500, 1500, 1500);
+        let with_bpc = prof.transform_pixel(
+            WorkingColorSpace::Srgb,
+            deep_shadow,
+            RenderingIntent::RelativeColorimetric,
+            true,
+        );
+        let without_bpc = prof.transform_pixel(
+            WorkingColorSpace::Srgb,
+            deep_shadow,
+            RenderingIntent::RelativeColorimetric,
+            false,
+        );
+        assert!(
+            with_bpc.g > without_bpc.g,
+            "Expected BPC=true ({with_bpc:?}) to preserve lighter shadow step than BPC=false ({without_bpc:?})"
+        );
+
+        // 3. Verify softproof gamut warning overlay replaces out-of-gamut pixels with warning color
+        let mut proof_buf = ImageBuffer16::new_solid(2, 1, Rgb16::new(32768, 32768, 32768)).unwrap();
+        proof_buf.set_pixel(1, 0, Rgb16::new(65535, 0, 65535)); // out-of-gamut in ProPhotoRGB
+        let warn_color = Rgb8::new(255, 0, 200);
+        prof.apply_softproof_to_display(
+            WorkingColorSpace::ProPhotoRgb,
+            WorkingColorSpace::Srgb,
+            &mut proof_buf,
+            RenderingIntent::RelativeColorimetric,
+            true,
+            SoftproofConfig {
+                enabled: true,
+                simulate_paper_white: true,
+                viewing_light: ViewingLight::D50,
+                gamut_warning: true,
+                gamut_warning_color: warn_color,
+            },
+        );
+        let in_gamut_px = proof_buf.get_pixel(0, 0).unwrap();
+        let oog_px = proof_buf.get_pixel(1, 0).unwrap();
+        assert_eq!(oog_px, warn_color.to_rgb16());
+        assert_ne!(in_gamut_px, warn_color.to_rgb16());
+
+        // 4. Verify all 4 Rendering Intents across multiple Epson SC-P900/P700 paper ICC profiles
+        let icc_dir = Path::new(
+            "/home/rene/Projekte/Spielwiese/Drucker-Epson-SC-P900/Code/Epson-SC-P900-Treiber/extracted/icc",
+        );
+        if let Ok(entries) = std::fs::read_dir(icc_dir) {
+            let mut tested_profiles = 0usize;
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.extension().and_then(|e| e.to_str()) != Some("icc") {
+                    continue;
+                }
+                let paper_prof = IccProfile::from_file(&p).expect("load Epson paper ICC");
+                for intent in RenderingIntent::ALL {
+                    let w = paper_prof.transform_pixel(
+                        WorkingColorSpace::Srgb,
+                        Rgb16::WHITE,
+                        intent,
+                        true,
+                    );
+                    if intent != RenderingIntent::AbsoluteColorimetric {
+                        assert_eq!(
+                            w,
+                            Rgb16::WHITE,
+                            "Pure white must remain (65535,65535,65535) for {:?} in {}",
+                            intent,
+                            paper_prof.description
+                        );
+                    }
+                    let mid = paper_prof.transform_pixel(
+                        WorkingColorSpace::AdobeRgb1998,
+                        Rgb16::new(32768, 32768, 32768),
+                        intent,
+                        true,
+                    );
+                    assert!(
+                        mid.r > 10_000 && mid.r < 55_000,
+                        "Mid-gray out of expected range for {:?} in {}: {:?}",
+                        intent,
+                        paper_prof.description,
+                        mid
+                    );
+                }
+                tested_profiles += 1;
+            }
+            assert!(tested_profiles >= 5, "Expected at least 5 Epson ICC profiles, found {tested_profiles}");
+        }
     }
 }
