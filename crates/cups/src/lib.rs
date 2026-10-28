@@ -32,6 +32,8 @@ pub enum CupsError {
     VirtualQueueCannotSpool(String),
     #[error("print file '{0}' does not exist")]
     MissingSpoolFile(String),
+    #[error("Drucker '{queue}' ist nicht erreichbar: {reason}")]
+    PrinterUnreachable { queue: String, reason: String },
 }
 
 /// Auto-detected printer driver family for disabling driver color correction ("Application Manages Colors").
@@ -1087,7 +1089,153 @@ pub fn build_lp_command_args(req: &CupsSpoolRequest, file_path: &Path) -> Vec<St
     args
 }
 
-/// Submits a rendered print file (e.g. 16-bit TIFF) to CUPS using `lp`.
+/// Extracts `(host, port)` from a network CUPS device URI (`ipp://`, `ipps://`, `socket://`, `http://`, `https://`, `lpd://`).
+pub fn extract_network_host_port(uri: &str) -> Option<(String, u16)> {
+    let trimmed = uri.trim();
+    let (rest, default_port) = if let Some(r) = trimmed.strip_prefix("ipp://") {
+        (r, 631u16)
+    } else if let Some(r) = trimmed.strip_prefix("ipps://") {
+        (r, 631u16)
+    } else if let Some(r) = trimmed.strip_prefix("http://") {
+        (r, 631u16)
+    } else if let Some(r) = trimmed.strip_prefix("https://") {
+        (r, 443u16)
+    } else if let Some(r) = trimmed.strip_prefix("socket://") {
+        (r, 9100u16)
+    } else {
+        let r = trimmed.strip_prefix("lpd://")?;
+        (r, 515u16)
+    };
+
+    let authority = rest.split(['/', '?']).next().unwrap_or("").trim();
+    if authority.is_empty() {
+        return None;
+    }
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, hp)| hp);
+    if let Some(after_bracket) = host_port.strip_prefix('[') {
+        let (ipv6, port_part) = after_bracket.split_once(']')?;
+        let port = if let Some(p_str) = port_part.strip_prefix(':') {
+            p_str.parse::<u16>().ok()?
+        } else {
+            default_port
+        };
+        if ipv6.is_empty() {
+            None
+        } else {
+            Some((ipv6.to_string(), port))
+        }
+    } else if let Some((h, p_str)) = host_port.rsplit_once(':') {
+        let port = p_str.parse::<u16>().ok()?;
+        if h.is_empty() {
+            None
+        } else {
+            Some((h.to_string(), port))
+        }
+    } else {
+        Some((host_port.to_string(), default_port))
+    }
+}
+
+/// Verifies before rendering/spooling that `queue_name` exists in CUPS, is enabled, and—if backed
+/// by a network URI (`ipp://`, `socket://`, etc.)—accepts a TCP connection within `1200 ms`.
+pub fn verify_printer_reachable(
+    queue_name: &str,
+    known_uri: Option<&str>,
+) -> Result<(), CupsError> {
+    let q = queue_name.trim();
+    if q.is_empty() || q == VIRTUAL_EXPORT_QUEUE {
+        return Err(CupsError::VirtualQueueCannotSpool(q.to_string()));
+    }
+
+    if let Ok(out_p) = Command::new("lpstat")
+        .args(["-p", q])
+        .env("LC_ALL", "C")
+        .output()
+    {
+        let stdout = String::from_utf8_lossy(&out_p.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&out_p.stderr).to_string();
+        let combined_low = format!("{stdout}\n{stderr}").to_ascii_lowercase();
+        if !out_p.status.success()
+            || combined_low.contains("unknown destination")
+            || combined_low.contains("does not exist")
+            || combined_low.contains("non-existent")
+        {
+            return Err(CupsError::PrinterUnreachable {
+                queue: q.to_string(),
+                reason: format!("Die CUPS-Druckerwarteschlange '{q}' existiert nicht."),
+            });
+        }
+        if combined_low.contains("disabled") || combined_low.contains("rejecting jobs") {
+            return Err(CupsError::PrinterUnreachable {
+                queue: q.to_string(),
+                reason: String::from(
+                    "Druckerwarteschlange ist in CUPS angehalten / deaktiviert.",
+                ),
+            });
+        }
+    }
+
+    let resolved_uri = if let Some(u) = known_uri.filter(|s| !s.trim().is_empty()) {
+        u.trim().to_string()
+    } else if let Ok(out_v) = Command::new("lpstat")
+        .args(["-v", q])
+        .env("LC_ALL", "C")
+        .output()
+    {
+        let stdout = String::from_utf8_lossy(&out_v.stdout);
+        stdout
+            .lines()
+            .find_map(|l| l.split_once(": ").map(|(_, uri)| uri.trim().to_string()))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    if let Some((host, port)) = extract_network_host_port(&resolved_uri) {
+        use std::net::{TcpStream, ToSocketAddrs};
+        use std::time::Duration;
+
+        let timeout = Duration::from_millis(1200);
+        let addrs: Vec<_> = (host.as_str(), port)
+            .to_socket_addrs()
+            .map(|it| it.collect())
+            .unwrap_or_default();
+        if addrs.is_empty() {
+            return Err(CupsError::PrinterUnreachable {
+                queue: q.to_string(),
+                reason: format!(
+                    "Netzwerkadresse '{host}:{port}' konnte nicht aufgelöst werden."
+                ),
+            });
+        }
+        let connected = addrs
+            .iter()
+            .any(|addr| TcpStream::connect_timeout(addr, timeout).is_ok());
+        if !connected {
+            return Err(CupsError::PrinterUnreachable {
+                queue: q.to_string(),
+                reason: format!(
+                    "Netzwerkdrucker unter '{host}:{port}' antwortet nicht (ausgeschaltet oder nicht im Netzwerk erreichbar)."
+                ),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+fn parse_lp_job_id(lp_stdout: &str) -> Option<String> {
+    // Standard `LC_ALL=C lp` output: "request id is Epson_SC_P900-42 (1 file(s))"
+    let after = lp_stdout.split("request id is ").nth(1)?;
+    let job_id = after.split_whitespace().next()?.trim();
+    if job_id.is_empty() {
+        None
+    } else {
+        Some(job_id.to_string())
+    }
+}
+
+/// Submits a rendered print file (e.g. 16-bit TIFF or PNG) to CUPS using `lp`.
 pub fn submit_cups_job(req: &CupsSpoolRequest, file_path: &Path) -> Result<String, CupsError> {
     if req.queue_name == VIRTUAL_EXPORT_QUEUE {
         return Err(CupsError::VirtualQueueCannotSpool(req.queue_name.clone()));
@@ -1097,6 +1245,8 @@ pub fn submit_cups_job(req: &CupsSpoolRequest, file_path: &Path) -> Result<Strin
             file_path.to_string_lossy().into_owned(),
         ));
     }
+
+    verify_printer_reachable(&req.queue_name, None)?;
 
     let args = build_lp_command_args(req, file_path);
     let out = Command::new("lp")
@@ -1121,8 +1271,40 @@ pub fn submit_cups_job(req: &CupsSpoolRequest, file_path: &Path) -> Result<Strin
     }
 
     let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let job_id = parse_lp_job_id(&stdout);
+
+    // Post-spool check: if CUPS backend immediately reports that a local/USB/IPP printer is offline
+    // or waiting to become available, cancel the stuck job and surface a clear error to the user.
+    std::thread::sleep(std::time::Duration::from_millis(220));
+    if let Ok(out_p) = Command::new("lpstat")
+        .args(["-p", &req.queue_name])
+        .env("LC_ALL", "C")
+        .output()
+    {
+        let status_low = String::from_utf8_lossy(&out_p.stdout).to_ascii_lowercase();
+        let backend_offline = status_low.contains("waiting for printer to become available")
+            || status_low.contains("unable to locate printer")
+            || status_low.contains("unable to connect")
+            || status_low.contains("printer is unreachable")
+            || status_low.contains("no such device")
+            || status_low.contains("offline");
+        if backend_offline {
+            if let Some(ref jid) = job_id {
+                let _ = Command::new("cancel").arg(jid).output();
+            }
+            return Err(CupsError::PrinterUnreachable {
+                queue: req.queue_name.clone(),
+                reason: String::from(
+                    "Drucker ist ausgeschaltet oder nicht verbunden (Auftrag wurde aus der Warteschlange entfernt).",
+                ),
+            });
+        }
+    }
+
     Ok(if stdout.is_empty() {
         format!("Druckauftrag an '{}' gesendet.", req.queue_name)
+    } else if let Some(jid) = job_id {
+        format!("Druckauftrag '{jid}' an '{}' übergeben.", req.queue_name)
     } else {
         stdout
     })
@@ -1131,6 +1313,24 @@ pub fn submit_cups_job(req: &CupsSpoolRequest, file_path: &Path) -> Result<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extracts_network_host_and_port_and_detects_unreachable_printer() {
+        assert_eq!(
+            extract_network_host_port("ipp://10.10.10.124:631/ipp/print"),
+            Some((String::from("10.10.10.124"), 631))
+        );
+        assert_eq!(
+            extract_network_host_port("socket://192.168.178.45"),
+            Some((String::from("192.168.178.45"), 9100))
+        );
+        assert_eq!(extract_network_host_port("usb://EPSON/SC-P900"), None);
+
+        // Unreachable local port must return PrinterUnreachable
+        let err =
+            verify_printer_reachable("Test_Queue", Some("socket://127.0.0.1:9")).unwrap_err();
+        assert!(matches!(err, CupsError::PrinterUnreachable { .. }));
+    }
 
     #[test]
     fn parses_lpstat_and_lpoptions_and_ppd_with_cups_icc_profiles() {

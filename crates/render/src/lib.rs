@@ -16,8 +16,8 @@
 use lumaprint_cms::{IccProfile, WorkingColorSpace};
 use lumaprint_color::{AbwHighlightShift, ColorError, ImageBuffer16, Rgb16};
 use lumaprint_doc::{
-    ColorManagementMode, GalleryWrapEffect, LayoutMode, OutputSharpening, PrintJobDocument,
-    find_media_type,
+    ColorManagementMode, ExportColorSpace, GalleryWrapEffect, LayoutMode, OutputSharpening,
+    PrintJobDocument, find_media_type,
 };
 use lumaprint_geom::{RectMm, mm_to_dots};
 use lumaprint_layout::{SolvedPageLayout, solve_page_layout_at};
@@ -46,6 +46,42 @@ pub fn render_page_16bit(
         icc_profile,
         target_dpi,
         for_screen_preview,
+    )
+}
+
+/// Renders a specific sheet (`page_index`) for 16-bit file export at `target_dpi`, honoring `doc.export.color_space`.
+pub fn render_export_page_at_16bit(
+    doc: &PrintJobDocument,
+    page_index: usize,
+    image_buffers: &HashMap<u64, (ImageBuffer16, WorkingColorSpace)>,
+    icc_profile: Option<&IccProfile>,
+    target_dpi: u32,
+) -> Result<(ImageBuffer16, SolvedPageLayout), RenderError> {
+    let mut export_doc = doc.clone();
+    match doc.export.color_space {
+        ExportColorSpace::PrinterPipeline => {}
+        ExportColorSpace::Srgb => {
+            export_doc.color.mode = ColorManagementMode::PrinterManagesColor {
+                space: WorkingColorSpace::Srgb,
+            };
+        }
+        ExportColorSpace::AdobeRgb1998 => {
+            export_doc.color.mode = ColorManagementMode::PrinterManagesColor {
+                space: WorkingColorSpace::AdobeRgb1998,
+            };
+        }
+        ExportColorSpace::Unchanged => {
+            export_doc.color.mode = ColorManagementMode::NoColorAdjustment;
+            export_doc.color.adjustments = Default::default();
+        }
+    }
+    render_page_at_16bit(
+        &export_doc,
+        page_index,
+        image_buffers,
+        icc_profile,
+        target_dpi,
+        false,
     )
 }
 

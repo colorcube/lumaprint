@@ -18,14 +18,14 @@ use lumaprint_codecs::{
 use lumaprint_color::{AbwSettings, AbwTonePreset, ImageBuffer16, Rgb8, Rgb16};
 use lumaprint_cups::{
     CupsError, CupsSpoolRequest, DriverColorControl, SystemPrinter, discover_custom_media_json,
-    discover_system_printers, sn_id_to_base_media_key, submit_cups_job,
+    discover_system_printers, sn_id_to_base_media_key, submit_cups_job, verify_printer_reachable,
 };
 use lumaprint_doc::{
     CanvasViewMode, CenteringMode, ColorManagementMode, CropSpec, CustomMediaSpec,
-    DetailedPrinterSettings, DisplayColorSpaceMode, DocError, FrameLineSpec, GalleryWrapSpec,
-    LayoutMode, LayoutTemplate, OutputSharpening, PaperSource, PlatenGap, PrintJobDocument,
-    PrintPreset, PrintQuality, PrintScope, PrintSheetPage, SizingCriterion, SourceImageEntry,
-    TemplateLayoutSpec, find_media_type,
+    DetailedPrinterSettings, DisplayColorSpaceMode, DocError, ExportSettings, FrameLineSpec,
+    GalleryWrapSpec, LayoutMode, LayoutTemplate, OutputSharpening, PaperSource, PlatenGap,
+    PrintJobDocument, PrintPreset, PrintQuality, PrintScope, PrintSheetPage, SizingCriterion,
+    SourceImageEntry, TemplateLayoutSpec, find_media_type,
 };
 use lumaprint_geom::{MarginsMm, Orientation, RectMm, SizeMm};
 use lumaprint_ipp::{IppError, PrinterStatus, query_printer_status_ipp};
@@ -34,7 +34,8 @@ use lumaprint_layout::{
     slots_capacity_for_layout, solve_page_layout, solve_page_layout_at,
 };
 use lumaprint_render::{
-    RenderError, render_cups_spool_page_at_16bit, render_page_16bit, render_page_at_16bit,
+    RenderError, render_cups_spool_page_at_16bit, render_export_page_at_16bit, render_page_16bit,
+    render_page_at_16bit,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -335,6 +336,7 @@ pub enum EngineCommand {
     SetSoftproof(SoftproofConfig),
     SetOutputSharpening(OutputSharpening),
     SetDisplayColorSpace(DisplayColorSpaceMode),
+    SetExportSettings(ExportSettings),
     SavePreset { name: String },
     LoadPreset { name: String },
     DeletePreset { name: String },
@@ -1851,6 +1853,9 @@ impl Session {
                     DisplayColorSpaceMode::AdobeRgb1998 => WorkingColorSpace::AdobeRgb1998,
                 };
             }
+            EngineCommand::SetExportSettings(exp) => {
+                self.doc.export = exp;
+            }
             EngineCommand::SavePreset { name } => {
                 let clean = name.trim().to_string();
                 if clean.is_empty() {
@@ -2438,7 +2443,8 @@ impl Session {
         )?)
     }
 
-    /// Exports the rendered 16-bit print sheet to a `.tif` / `.tiff` or `.png` file.
+    /// Exports the rendered 16-bit print sheet(s) to `.tif` / `.tiff` or `.png` file(s),
+    /// honoring `doc.export.color_space` and `doc.print_scope`.
     pub fn export_print_file(
         &self,
         output_path: impl AsRef<Path>,
@@ -2448,12 +2454,47 @@ impl Session {
         let ext = p
             .extension()
             .and_then(|e| e.to_str())
-            .unwrap_or("tif")
+            .unwrap_or_else(|| self.doc.export.format.extension())
             .to_ascii_lowercase();
-        let (buf, _) = self.render_page(dpi, false)?;
-        match ext.as_str() {
-            "png" => save_png16(&buf, p)?,
-            _ => save_tiff16(&buf, p)?,
+        let icc = self.active_icc_profile();
+
+        let page_indices: Vec<usize> = match self.doc.print_scope {
+            PrintScope::CurrentPage => vec![self.doc.active_page_index],
+            PrintScope::AllPages => {
+                let total = self.doc.page_count();
+                let non_empty: Vec<usize> = (0..total)
+                    .filter(|&pi| self.doc.page_slots(pi).iter().any(Option::is_some))
+                    .collect();
+                if non_empty.is_empty() {
+                    vec![self.doc.active_page_index]
+                } else {
+                    non_empty
+                }
+            }
+        };
+
+        for (idx, &pi) in page_indices.iter().enumerate() {
+            let (buf, _) = render_export_page_at_16bit(
+                &self.doc,
+                pi,
+                &self.image_buffers,
+                icc,
+                dpi,
+            )?;
+            let target_path = if idx == 0 {
+                p.to_path_buf()
+            } else {
+                let stem = p
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("lumaprint_sheet");
+                let parent = p.parent().unwrap_or_else(|| Path::new("."));
+                parent.join(format!("{stem}_bogen{}.{ext}", pi + 1))
+            };
+            match ext.as_str() {
+                "png" => save_png16(&buf, &target_path)?,
+                _ => save_tiff16(&buf, &target_path)?,
+            }
         }
         Ok(())
     }
@@ -2595,6 +2636,22 @@ impl Session {
                 }
             }
         };
+
+        let has_placed_image = page_indices
+            .iter()
+            .any(|&pi| self.doc.page_slots(pi).iter().any(Option::is_some));
+        if !has_placed_image {
+            return Err(EngineError::InvalidParam(String::from(
+                "Auf dem gewählten Druckbogen ist noch kein Bild platziert.",
+            )));
+        }
+
+        let known_uri = self
+            .system_printers
+            .iter()
+            .find(|p| p.queue_name == self.doc.printer.printer_queue)
+            .map(|p| p.device_uri.as_str());
+        verify_printer_reachable(&self.doc.printer.printer_queue, known_uri)?;
 
         let mut last_msg = String::new();
         for &pi in &page_indices {
@@ -2985,4 +3042,80 @@ mod tests {
         assert_eq!(session.doc.color.mode, ColorManagementMode::UseIccProfile);
         assert!(session.doc.color.auto_select_icc_for_media);
     }
+
+    #[test]
+    fn test_export_settings_and_print_job_reachability_guards() {
+        use lumaprint_doc::{ExportColorSpace, ExportFileFormat};
+
+        let mut session = Session::new();
+
+        // 1. Empty sheet guard when trying to print
+        session.doc.printer.printer_queue = "nonexistent_test_printer_queue_999".into();
+        let empty_err = session
+            .send_print_job_to_printer(72)
+            .expect_err("empty sheet must be rejected before spooling");
+        assert!(
+            empty_err.to_string().contains("kein Bild platziert"),
+            "unexpected error for empty sheet: {empty_err}"
+        );
+
+        // 2. Load demo image onto Sheet 1 and verify unreachable printer error
+        session.execute(EngineCommand::AddDemoImages).unwrap();
+        let img_id = session.doc.images[0].id;
+        session
+            .execute(EngineCommand::PlacePoolImageOnSheet {
+                image_id: img_id,
+                page_index: 0,
+                slot_index: Some(0),
+            })
+            .unwrap();
+
+        let unreachable_err = session
+            .send_print_job_to_printer(72)
+            .expect_err("non-existent queue must fail pre-flight reachability check");
+        assert!(
+            unreachable_err
+                .to_string()
+                .contains("nonexistent_test_printer_queue_999"),
+            "unexpected error for unreachable queue: {unreachable_err}"
+        );
+
+        // 3. Configure ExportSettings and export 16-bit files in sRGB and Unchanged modes
+        let tmp_dir = std::env::temp_dir().join("lumaprint_paket_b_test");
+        let _ = std::fs::create_dir_all(&tmp_dir);
+
+        let exp_srgb = ExportSettings {
+            dpi: 72,
+            color_space: ExportColorSpace::Srgb,
+            format: ExportFileFormat::Png16,
+        };
+        session
+            .execute(EngineCommand::SetExportSettings(exp_srgb))
+            .unwrap();
+        assert_eq!(session.doc.export, exp_srgb);
+
+        let out_png = tmp_dir.join("exported_sheet.png");
+        session
+            .export_print_file(&out_png, session.doc.export.dpi)
+            .unwrap();
+        assert!(out_png.exists());
+
+        let exp_unchanged = ExportSettings {
+            dpi: 72,
+            color_space: ExportColorSpace::Unchanged,
+            format: ExportFileFormat::Tiff16,
+        };
+        session
+            .execute(EngineCommand::SetExportSettings(exp_unchanged))
+            .unwrap();
+        let out_tif = tmp_dir.join("exported_sheet.tif");
+        session
+            .export_print_file(&out_tif, session.doc.export.dpi)
+            .unwrap();
+        assert!(out_tif.exists());
+
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
 }
+
+

@@ -25,10 +25,10 @@ use lumaprint_cms::{RenderingIntent, ViewingLight, WorkingColorSpace};
 use lumaprint_color::{AbwHighlightShift, AbwMidtone, AbwTonePreset, ImageBuffer16, Rgb8};
 use lumaprint_doc::{
     CanvasBackdropTone, CanvasViewMode, CenteringMode, ColorManagementMode, DisplayColorSpaceMode,
-    FilmstripPosition, FrameLineSpec, GalleryWrapEffect, GalleryWrapSpec, LayoutMode,
-    LayoutTemplate, MEDIA_TYPES, OutputSharpening, PageListPosition, PaperSource, PrintQuality,
-    PrintScope, SizingCriterion, SlotCaptionMode, StandardLayoutSpec, TemplateLayoutSpec,
-    find_media_type,
+    ExportColorSpace, ExportFileFormat, ExportSettings, FilmstripPosition, FrameLineSpec,
+    GalleryWrapEffect, GalleryWrapSpec, LayoutMode, LayoutTemplate, MEDIA_TYPES, OutputSharpening,
+    PageListPosition, PaperSource, PrintQuality, PrintScope, SizingCriterion, SlotCaptionMode,
+    StandardLayoutSpec, TemplateLayoutSpec, find_media_type,
 };
 use lumaprint_engine::{EngineCommand, Session, scan_folder_for_images};
 use lumaprint_geom::{
@@ -668,6 +668,28 @@ pub enum SharedDockTab {
     PageList,
 }
 
+/// Active tab in the sticky bottom panel of the Right Dock (`[ 🖨 Drucken | 💾 Export ]`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PrintFooterTab {
+    #[default]
+    Print,
+    Export,
+}
+
+/// Visual feedback state for print and export actions in the sticky bottom footer.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum PrintJobUiState {
+    #[default]
+    Idle,
+    /// Two-frame progress state so `"⏳ Druckauftrag wird gesendet…"` is rendered on screen before
+    /// the synchronous 720 DPI render & CUPS spool executes.
+    Sending { frames_shown: u8 },
+    /// Green confirmation banner inside the sticky footer.
+    Success(String),
+    /// Red error banner inside the sticky footer (e.g. unreachable printer, empty sheet, export error).
+    Error(String),
+}
+
 /// Main LumaPrint GUI Application state.
 pub struct LumaPrintApp {
     pub session: Session,
@@ -709,6 +731,8 @@ pub struct LumaPrintApp {
     pub right_dock_tab: RightDockTab,
     pub left_dock_tab: SharedDockTab,
     pub bottom_dock_tab: SharedDockTab,
+    pub print_footer_tab: PrintFooterTab,
+    pub print_job_ui_state: PrintJobUiState,
 }
 
 impl Default for LumaPrintApp {
@@ -761,6 +785,8 @@ impl LumaPrintApp {
             right_dock_tab: RightDockTab::Settings,
             left_dock_tab: SharedDockTab::Pool,
             bottom_dock_tab: SharedDockTab::PageList,
+            print_footer_tab: PrintFooterTab::Print,
+            print_job_ui_state: PrintJobUiState::Idle,
         }
     }
 
@@ -1378,10 +1404,17 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         }
         let (tx, rx) = std::sync::mpsc::channel();
         self.dialog_rx = Some(rx);
+        let fmt_ext = self.session.doc.export.format.extension();
         let default_path = if self.export_path_input.trim().is_empty() {
-            String::from("/tmp/lumaprint_sheet.tif")
+            format!("/tmp/lumaprint_sheet.{fmt_ext}")
         } else {
-            self.export_path_input.trim().to_string()
+            let mut p = std::path::PathBuf::from(self.export_path_input.trim());
+            p.set_extension(fmt_ext);
+            p.to_string_lossy().into_owned()
+        };
+        let filter_str = match self.session.doc.export.format {
+            ExportFileFormat::Tiff16 => "16-Bit TIFF (*.tif *.tiff)|16-Bit PNG (*.png)",
+            ExportFileFormat::Png16 => "16-Bit PNG (*.png)|16-Bit TIFF (*.tif *.tiff)",
         };
         std::thread::spawn(move || {
             let out = std::process::Command::new("kdialog")
@@ -1390,7 +1423,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     "16-Bit Druckbogen exportieren",
                     "--getsavefilename",
                     &default_path,
-                    "16-Bit TIFF / PNG (*.tif *.tiff *.png)",
+                    filter_str,
                 ])
                 .output()
                 .or_else(|_| {
@@ -1484,17 +1517,25 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             self.exec(EngineCommand::ImportImageFiles { paths: file_paths });
                         }
                     }
-                    NativeDialogResult::ExportPrintFile(path) => {
+                    NativeDialogResult::ExportPrintFile(mut path) => {
+                        if path.extension().is_none() {
+                            path.set_extension(self.session.doc.export.format.extension());
+                        }
                         let p_str = path.to_string_lossy().into_owned();
                         self.export_path_input = p_str.clone();
-                        match self.session.export_print_file(&path, 360) {
+                        let exp_dpi = self.session.doc.export.dpi.max(72);
+                        match self.session.export_print_file(&path, exp_dpi) {
                             Ok(()) => {
-                                self.session.status_message = format!(
-                                    "Druckbogen erfolgreich nach '{p_str}' exportiert."
+                                let msg = format!(
+                                    "Druckbogen ({exp_dpi} dpi) nach '{p_str}' exportiert."
                                 );
+                                self.session.status_message = msg.clone();
+                                self.print_job_ui_state = PrintJobUiState::Success(msg);
                             }
                             Err(e) => {
-                                self.session.status_message = format!("Export-Fehler: {e}");
+                                let err_msg = format!("Export-Fehler: {e}");
+                                self.session.status_message = err_msg.clone();
+                                self.print_job_ui_state = PrintJobUiState::Error(err_msg);
                             }
                         }
                     }
@@ -1776,6 +1817,31 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         }
     }
 
+    fn process_pending_print_job(&mut self, ctx: &Context) {
+        if let PrintJobUiState::Sending { frames_shown } = self.print_job_ui_state {
+            if frames_shown == 0 {
+                self.print_job_ui_state = PrintJobUiState::Sending { frames_shown: 1 };
+                ctx.request_repaint();
+                return;
+            }
+            match self.session.send_print_job_to_printer(720) {
+                Ok(msg) => {
+                    self.print_job_ui_state = PrintJobUiState::Success(msg);
+                }
+                Err(e) => {
+                    let err_msg = match e {
+                        lumaprint_engine::EngineError::Cups(ce) => ce.to_string(),
+                        lumaprint_engine::EngineError::InvalidParam(msg) => msg,
+                        other => format!("Druckfehler: {other}"),
+                    };
+                    self.session.status_message = err_msg.clone();
+                    self.print_job_ui_state = PrintJobUiState::Error(err_msg);
+                }
+            }
+            ctx.request_repaint();
+        }
+    }
+
     /// Renders the complete UI into `ctx` (callable both from `eframe::App` and offscreen tests).
     pub fn render_ui(&mut self, ctx: &Context) {
         if let Some(pos) = ctx.input(|i| i.pointer.hover_pos().or_else(|| i.pointer.interact_pos()))
@@ -1785,6 +1851,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         self.ensure_theme_and_fonts(ctx);
         self.handle_keyboard_shortcuts(ctx);
         self.poll_native_dialog(ctx);
+        self.process_pending_print_job(ctx);
         self.handle_os_dropped_files(ctx);
         self.ensure_thumbnails(ctx);
         self.sync_wayland_color_management();
@@ -4811,118 +4878,67 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 }
 
                 // Sticky Bottom Print & Export Footer inside the Right Dock
+                // (No surrounding box; separated only by a 1 px top horizontal line, analogous to Bogenliste)
                 egui::TopBottomPanel::bottom("right_dock_sticky_print_footer")
                     .resizable(false)
                     .frame(
                         egui::Frame::new()
                             .fill(t.dock)
-                            .inner_margin(egui::Margin::symmetric(4, 8))
-                            .stroke(Stroke::new(1.0_f32, t.separator)),
+                            .inner_margin(egui::Margin::symmetric(6, 8))
+                            .stroke(Stroke::NONE),
                     )
                     .show_inside(ui, |ui| {
-                        let page_cnt = self.session.doc.page_count();
-                        let cur_scope = self.session.doc.print_scope;
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new("Umfang:").color(t.text_dim));
-                            egui::ComboBox::from_id_salt("print_scope_combo")
-                                .selected_text(match cur_scope {
-                                    PrintScope::AllPages => format!("Alle Bögen ({page_cnt})"),
-                                    PrintScope::CurrentPage => format!(
-                                        "Aktueller Bogen ({})",
-                                        self.session.doc.active_page_index + 1
-                                    ),
-                                })
-                                .width(165.0)
-                                .show_ui(ui, |ui| {
-                                    if ui
-                                        .selectable_label(
-                                            cur_scope == PrintScope::AllPages,
-                                            format!("Alle Bögen ({page_cnt})"),
-                                        )
-                                        .clicked()
-                                    {
-                                        self.exec(EngineCommand::SetPrintScope(
-                                            PrintScope::AllPages,
-                                        ));
-                                    }
-                                    if ui
-                                        .selectable_label(
-                                            cur_scope == PrintScope::CurrentPage,
-                                            format!(
-                                                "Nur aktueller Bogen ({})",
-                                                self.session.doc.active_page_index + 1
-                                            ),
-                                        )
-                                        .clicked()
-                                    {
-                                        self.exec(EngineCommand::SetPrintScope(
-                                            PrintScope::CurrentPage,
-                                        ));
-                                    }
-                                });
+                        let panel_rect = ui.max_rect();
+                        ui.painter().hline(
+                            panel_rect.x_range(),
+                            panel_rect.min.y,
+                            Stroke::new(1.0_f32, t.separator),
+                        );
 
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    let mut copies = self.session.doc.printer.copies;
-                                    if ui
-                                        .add(
-                                            egui::DragValue::new(&mut copies)
-                                                .range(1..=99)
-                                                .prefix("Kopien: "),
-                                        )
-                                        .changed()
-                                    {
-                                        self.exec(EngineCommand::SetCopies(copies));
-                                    }
-                                },
-                            );
-                        });
-
-                        ui.add_space(5.0);
+                        // Underline Tab Header Bar: [ 🖨 Drucken | 💾 Export ]
+                        let avail_w = ui.available_width().max(180.0);
+                        let tab_w = ((avail_w - 6.0) * 0.5).floor().max(85.0);
                         ui.horizontal(|ui| {
-                            let mut ts_on = self.session.doc.test_strip.enabled;
-                            if ui
-                                .checkbox(&mut ts_on, "Probestreifen (1:1 Ausschnitt drucken)")
-                                .on_hover_text(
-                                    "Druckt nur einen schmalen Streifenausschnitt im 1:1-Originalmaßstab zum Papiersparen",
-                                )
-                                .changed()
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            if draw_footer_tab(
+                                ui,
+                                &t,
+                                self.print_footer_tab == PrintFooterTab::Print,
+                                "🖨 Drucken",
+                                tab_w,
+                            )
+                            .clicked()
                             {
-                                let rect = self.session.doc.test_strip.norm_rect;
-                                self.exec(EngineCommand::SetTestStrip {
-                                    enabled: ts_on,
-                                    norm_rect: rect,
-                                });
+                                self.print_footer_tab = PrintFooterTab::Print;
+                            }
+                            if draw_footer_tab(
+                                ui,
+                                &t,
+                                self.print_footer_tab == PrintFooterTab::Export,
+                                "💾 Export",
+                                tab_w,
+                            )
+                            .clicked()
+                            {
+                                self.print_footer_tab = PrintFooterTab::Export;
                             }
                         });
+                        let tab_line_y = ui.cursor().min.y;
+                        ui.painter().hline(
+                            panel_rect.x_range(),
+                            tab_line_y,
+                            Stroke::new(1.0_f32, t.separator),
+                        );
+                        ui.add_space(8.0);
 
-                        ui.add_space(6.0);
-                        ui.horizontal(|ui| {
-                            if ui
-                                .button("💾 Export (.tif / .png)")
-                                .on_hover_text("16-Bit Druckbogen in Datei exportieren")
-                                .clicked()
-                            {
-                                self.open_native_export_picker();
+                        match self.print_footer_tab {
+                            PrintFooterTab::Print => {
+                                self.draw_sticky_print_tab_contents(ui);
                             }
-
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    if draw_print_button(ui)
-                                        .on_hover_text("Auftrag an den gewählten CUPS-Drucker senden")
-                                        .clicked()
-                                    {
-                                        if let Err(e) = self.session.send_print_job_to_printer(720)
-                                        {
-                                            self.session.status_message =
-                                                format!("Druckfehler: {e}");
-                                        }
-                                    }
-                                },
-                            );
-                        });
+                            PrintFooterTab::Export => {
+                                self.draw_sticky_export_tab_contents(ui);
+                            }
+                        }
                     });
 
                 // Scrollable Settings Sections above the Sticky Footer
@@ -4974,6 +4990,302 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
         if has_right_pool && self.right_dock_tab == RightDockTab::Pool {
             self.last_pool_rect = resp.response.rect;
+        }
+    }
+
+    fn draw_sticky_print_tab_contents(&mut self, ui: &mut Ui) {
+        let t = self.tokens;
+        let page_cnt = self.session.doc.page_count();
+        let cur_scope = self.session.doc.print_scope;
+
+        egui::Grid::new("sticky_print_tab_grid")
+            .num_columns(2)
+            .spacing([12.0, 7.0])
+            .min_col_width(95.0)
+            .show(ui, |ui| {
+                ui.label(RichText::new("Umfang:").color(t.text_dim));
+                ui.horizontal(|ui| {
+                    egui::ComboBox::from_id_salt("print_scope_combo")
+                        .selected_text(match cur_scope {
+                            PrintScope::AllPages => format!("Alle Bögen ({page_cnt})"),
+                            PrintScope::CurrentPage => format!(
+                                "Aktueller Bogen ({})",
+                                self.session.doc.active_page_index + 1
+                            ),
+                        })
+                        .width(155.0)
+                        .truncate()
+                        .show_ui(ui, |ui| {
+                            if ui
+                                .selectable_label(
+                                    cur_scope == PrintScope::AllPages,
+                                    format!("Alle Bögen ({page_cnt})"),
+                                )
+                                .clicked()
+                            {
+                                self.exec(EngineCommand::SetPrintScope(PrintScope::AllPages));
+                            }
+                            if ui
+                                .selectable_label(
+                                    cur_scope == PrintScope::CurrentPage,
+                                    format!(
+                                        "Nur aktueller Bogen ({})",
+                                        self.session.doc.active_page_index + 1
+                                    ),
+                                )
+                                .clicked()
+                            {
+                                self.exec(EngineCommand::SetPrintScope(PrintScope::CurrentPage));
+                            }
+                        });
+
+                    let mut copies = self.session.doc.printer.copies;
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut copies)
+                                .range(1..=99)
+                                .prefix("Kopien: "),
+                        )
+                        .changed()
+                    {
+                        self.exec(EngineCommand::SetCopies(copies));
+                    }
+                });
+                ui.end_row();
+
+                ui.label(RichText::new("Probestreifen:").color(t.text_dim));
+                let mut ts_on = self.session.doc.test_strip.enabled;
+                if ui
+                    .checkbox(&mut ts_on, "1:1 Ausschnitt drucken")
+                    .on_hover_text(
+                        "Druckt nur einen schmalen Streifenausschnitt im 1:1-Originalmaßstab zum Papiersparen",
+                    )
+                    .changed()
+                {
+                    let rect = self.session.doc.test_strip.norm_rect;
+                    self.exec(EngineCommand::SetTestStrip {
+                        enabled: ts_on,
+                        norm_rect: rect,
+                    });
+                }
+                ui.end_row();
+            });
+
+        self.draw_print_job_feedback_banner(ui);
+
+        ui.add_space(7.0);
+        let is_sending = matches!(self.print_job_ui_state, PrintJobUiState::Sending { .. });
+        let btn_w = ui.available_width().max(160.0);
+        if draw_print_button(ui, btn_w, is_sending)
+            .on_hover_text("Auftrag an den gewählten CUPS-Drucker senden")
+            .clicked()
+            && !is_sending
+        {
+            self.print_job_ui_state = PrintJobUiState::Sending { frames_shown: 0 };
+            ui.ctx().request_repaint();
+        }
+    }
+
+    fn draw_sticky_export_tab_contents(&mut self, ui: &mut Ui) {
+        let t = self.tokens;
+        let page_cnt = self.session.doc.page_count();
+        let cur_scope = self.session.doc.print_scope;
+        let cur_exp = self.session.doc.export;
+
+        egui::Grid::new("sticky_export_tab_grid")
+            .num_columns(2)
+            .spacing([12.0, 7.0])
+            .min_col_width(95.0)
+            .show(ui, |ui| {
+                ui.label(RichText::new("Umfang:").color(t.text_dim));
+                egui::ComboBox::from_id_salt("export_scope_combo")
+                    .selected_text(match cur_scope {
+                        PrintScope::AllPages => format!("Alle Bögen ({page_cnt})"),
+                        PrintScope::CurrentPage => format!(
+                            "Aktueller Bogen ({})",
+                            self.session.doc.active_page_index + 1
+                        ),
+                    })
+                    .width(235.0)
+                    .truncate()
+                    .show_ui(ui, |ui| {
+                        if ui
+                            .selectable_label(
+                                cur_scope == PrintScope::AllPages,
+                                format!("Alle Bögen ({page_cnt})"),
+                            )
+                            .clicked()
+                        {
+                            self.exec(EngineCommand::SetPrintScope(PrintScope::AllPages));
+                        }
+                        if ui
+                            .selectable_label(
+                                cur_scope == PrintScope::CurrentPage,
+                                format!(
+                                    "Nur aktueller Bogen ({})",
+                                    self.session.doc.active_page_index + 1
+                                ),
+                            )
+                            .clicked()
+                        {
+                            self.exec(EngineCommand::SetPrintScope(PrintScope::CurrentPage));
+                        }
+                    });
+                ui.end_row();
+
+                ui.label(RichText::new("Auflösung:").color(t.text_dim));
+                let dpi_label = |d: u32| -> &'static str {
+                    match d {
+                        300 => "300 dpi (Foto-Labor)",
+                        360 => "360 dpi (Standard)",
+                        720 => "720 dpi (Nativ Epson)",
+                        1440 => "1440 dpi (Max. Detail)",
+                        _ => "720 dpi",
+                    }
+                };
+                egui::ComboBox::from_id_salt("export_dpi_combo")
+                    .selected_text(dpi_label(cur_exp.dpi))
+                    .width(235.0)
+                    .truncate()
+                    .show_ui(ui, |ui| {
+                        for d in ExportSettings::DPI_PRESETS {
+                            if ui
+                                .selectable_label(cur_exp.dpi == d, dpi_label(d))
+                                .clicked()
+                            {
+                                let mut next = cur_exp;
+                                next.dpi = d;
+                                self.exec(EngineCommand::SetExportSettings(next));
+                            }
+                        }
+                    });
+                ui.end_row();
+
+                ui.label(RichText::new("Farbraum:").color(t.text_dim));
+                egui::ComboBox::from_id_salt("export_cs_combo")
+                    .selected_text(cur_exp.color_space.label_de())
+                    .width(235.0)
+                    .truncate()
+                    .show_ui(ui, |ui| {
+                        for cs in ExportColorSpace::ALL {
+                            if ui
+                                .selectable_label(cur_exp.color_space == cs, cs.label_de())
+                                .clicked()
+                            {
+                                let mut next = cur_exp;
+                                next.color_space = cs;
+                                self.exec(EngineCommand::SetExportSettings(next));
+                            }
+                        }
+                    });
+                ui.end_row();
+
+                ui.label(RichText::new("Dateiformat:").color(t.text_dim));
+                egui::ComboBox::from_id_salt("export_fmt_combo")
+                    .selected_text(cur_exp.format.label_de())
+                    .width(235.0)
+                    .truncate()
+                    .show_ui(ui, |ui| {
+                        for fmt in ExportFileFormat::ALL {
+                            if ui
+                                .selectable_label(cur_exp.format == fmt, fmt.label_de())
+                                .clicked()
+                            {
+                                let mut next = cur_exp;
+                                next.format = fmt;
+                                self.exec(EngineCommand::SetExportSettings(next));
+                                let mut p = std::path::PathBuf::from(self.export_path_input.trim());
+                                p.set_extension(fmt.extension());
+                                self.export_path_input = p.to_string_lossy().into_owned();
+                            }
+                        }
+                    });
+                ui.end_row();
+            });
+
+        self.draw_print_job_feedback_banner(ui);
+
+        ui.add_space(7.0);
+        let btn_w = ui.available_width().max(160.0);
+        if draw_export_button(ui, &t, btn_w, cur_exp.format)
+            .on_hover_text("16-Bit Druckbogen in Datei exportieren")
+            .clicked()
+        {
+            self.open_native_export_picker();
+        }
+    }
+
+    fn draw_print_job_feedback_banner(&mut self, ui: &mut Ui) {
+        let state = self.print_job_ui_state.clone();
+        if matches!(state, PrintJobUiState::Idle) {
+            return;
+        }
+
+        ui.add_space(6.0);
+        let (bg, border, text_col, prefix, msg, can_dismiss) = match &state {
+            PrintJobUiState::Idle => return,
+            PrintJobUiState::Sending { .. } => (
+                Color32::from_rgba_unmultiplied(0, 120, 215, 36),
+                Color32::from_rgb(55, 155, 245),
+                Color32::from_rgb(175, 220, 255),
+                "⏳",
+                "Druckbogen wird in 720 DPI gerendert und an CUPS übergeben…",
+                false,
+            ),
+            PrintJobUiState::Success(m) => (
+                Color32::from_rgba_unmultiplied(35, 150, 75, 42),
+                Color32::from_rgb(65, 195, 110),
+                Color32::from_rgb(180, 245, 200),
+                "✓",
+                m.as_str(),
+                true,
+            ),
+            PrintJobUiState::Error(e) => (
+                Color32::from_rgba_unmultiplied(195, 45, 45, 48),
+                Color32::from_rgb(235, 85, 85),
+                Color32::from_rgb(255, 195, 195),
+                "⚠",
+                e.as_str(),
+                true,
+            ),
+        };
+
+        let mut dismiss = false;
+        egui::Frame::new()
+            .fill(bg)
+            .stroke(Stroke::new(1.0_f32, border))
+            .corner_radius(CornerRadius::same(4))
+            .inner_margin(egui::Margin::symmetric(8, 6))
+            .show(ui, |ui| {
+                ui.set_max_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    let msg_w = (ui.available_width() - if can_dismiss { 26.0 } else { 0.0 })
+                        .max(80.0);
+                    ui.allocate_ui(Vec2::new(msg_w, 18.0), |ui| {
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(format!("{prefix} {msg}"))
+                                    .size(11.5)
+                                    .color(text_col),
+                            )
+                            .wrap(),
+                        );
+                    });
+                    if can_dismiss {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .small_button("✕")
+                                .on_hover_text("Meldung schließen")
+                                .clicked()
+                            {
+                                dismiss = true;
+                            }
+                        });
+                    }
+                });
+            });
+        if dismiss {
+            self.print_job_ui_state = PrintJobUiState::Idle;
         }
     }
 
@@ -9957,13 +10269,90 @@ fn compute_std_free_drag_rect(
     next
 }
 
+/// Paints a clean underline-style tab header (`[ 🖨 Drucken | 💾 Export ]`) with an open bottom edge
+/// and a `2.5 px` accent indicator line when active.
+fn draw_footer_tab(
+    ui: &mut Ui,
+    tokens: &Tokens,
+    active: bool,
+    label: &str,
+    width: f32,
+) -> egui::Response {
+    let size = Vec2::new(width, 28.0);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+
+    let p = ui.painter();
+    if active {
+        p.rect_filled(
+            rect,
+            CornerRadius {
+                nw: 4,
+                ne: 4,
+                sw: 0,
+                se: 0,
+            },
+            tokens.accent.gamma_multiply(0.14),
+        );
+    } else if resp.hovered() {
+        p.rect_filled(
+            rect,
+            CornerRadius {
+                nw: 4,
+                ne: 4,
+                sw: 0,
+                se: 0,
+            },
+            tokens.hover.gamma_multiply(0.55),
+        );
+    }
+
+    let fg = if active || resp.hovered() {
+        tokens.text
+    } else {
+        tokens.text_dim
+    };
+
+    p.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        FontId::proportional(12.5),
+        fg,
+    );
+
+    if active {
+        p.line_segment(
+            [
+                Pos2::new(rect.min.x + 4.0, rect.max.y - 1.2),
+                Pos2::new(rect.max.x - 4.0, rect.max.y - 1.2),
+            ],
+            Stroke::new(2.5_f32, tokens.accent),
+        );
+    }
+
+    resp
+}
+
 /// Paints the primary `"Drucken"` action button with a crisp vector printer icon and
 /// vertically centered label so there is no emoji font baseline shift.
-fn draw_print_button(ui: &mut Ui) -> egui::Response {
-    let size = Vec2::new(148.0, 32.0);
-    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+fn draw_print_button(ui: &mut Ui, width: f32, is_sending: bool) -> egui::Response {
+    let size = Vec2::new(width.max(148.0), 34.0);
+    let sense = if is_sending {
+        Sense::hover()
+    } else {
+        Sense::click()
+    };
+    let (rect, resp) = ui.allocate_exact_size(size, sense);
+    let resp = if is_sending {
+        resp
+    } else {
+        resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+    };
 
-    let bg = if resp.is_pointer_button_down_on() {
+    let bg = if is_sending {
+        Color32::from_rgb(20, 95, 165)
+    } else if resp.is_pointer_button_down_on() {
         Color32::from_rgb(0, 98, 180)
     } else if resp.hovered() {
         Color32::from_rgb(18, 138, 235)
@@ -9981,7 +10370,12 @@ fn draw_print_button(ui: &mut Ui) -> egui::Response {
     );
 
     let cy = rect.center().y;
-    let icon_cx = rect.min.x + 30.0;
+    let label_text = if is_sending {
+        "Druckauftrag wird gesendet…"
+    } else {
+        "Drucken"
+    };
+    let icon_cx = rect.center().x - if is_sending { 95.0 } else { 32.0 };
     let white_stroke = Stroke::new(1.4_f32, Color32::WHITE);
 
     // Vector Printer Icon (top paper tray, main body, bottom output sheet) vertically centered at `cy`
@@ -9997,9 +10391,52 @@ fn draw_print_button(ui: &mut Ui) -> egui::Response {
     p.text(
         Pos2::new(icon_cx + 13.0, cy),
         egui::Align2::LEFT_CENTER,
-        "Drucken",
-        FontId::proportional(14.5),
+        label_text,
+        FontId::proportional(14.0),
         Color32::WHITE,
+    );
+
+    resp
+}
+
+/// Paints the primary action button inside the `[ 💾 Export ]` tab.
+fn draw_export_button(
+    ui: &mut Ui,
+    tokens: &Tokens,
+    width: f32,
+    format: ExportFileFormat,
+) -> egui::Response {
+    let size = Vec2::new(width.max(148.0), 34.0);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+
+    let bg = if resp.is_pointer_button_down_on() {
+        tokens.accent.gamma_multiply(0.38)
+    } else if resp.hovered() {
+        tokens.accent.gamma_multiply(0.28)
+    } else {
+        tokens.accent.gamma_multiply(0.20)
+    };
+
+    let p = ui.painter();
+    p.rect_filled(rect, CornerRadius::same(5), bg);
+    p.rect_stroke(
+        rect,
+        CornerRadius::same(5),
+        Stroke::new(1.2_f32, tokens.accent),
+        StrokeKind::Middle,
+    );
+
+    let label = match format {
+        ExportFileFormat::Tiff16 => "💾 16-Bit TIFF exportieren…",
+        ExportFileFormat::Png16 => "💾 16-Bit PNG exportieren…",
+    };
+    p.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        FontId::proportional(13.5),
+        tokens.text,
     );
 
     resp
@@ -10756,6 +11193,39 @@ mod tests {
                 .is_some()
             );
         });
+
+        // 8. Sticky bottom footer [ 🖨 Drucken | 💾 Export ] tabs & PrintJobUiState two-frame feedback
+        assert_eq!(app.print_footer_tab, PrintFooterTab::Print);
+        app.print_footer_tab = PrintFooterTab::Export;
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            app.render_ui(ctx);
+        });
+        assert_eq!(app.print_footer_tab, PrintFooterTab::Export);
+
+        app.print_footer_tab = PrintFooterTab::Print;
+        app.session.doc.pages[0].slot_assignments = vec![None; 25];
+        app.session.doc.load_active_page_from_list();
+        app.print_job_ui_state = PrintJobUiState::Sending { frames_shown: 0 };
+
+        // Frame 1: renders "⏳ Druckauftrag wird gesendet…" and advances frames_shown to 1
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            app.render_ui(ctx);
+        });
+        assert_eq!(
+            app.print_job_ui_state,
+            PrintJobUiState::Sending { frames_shown: 1 }
+        );
+
+        // Frame 2: executes synchronous print pre-flight and transitions to Error on empty sheet
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            app.render_ui(ctx);
+        });
+        assert!(
+            matches!(app.print_job_ui_state, PrintJobUiState::Error(ref msg) if msg.contains("kein Bild platziert")),
+            "expected PrintJobUiState::Error on empty sheet, got {:?}",
+            app.print_job_ui_state
+        );
     }
 }
+
 

@@ -1074,6 +1074,94 @@ pub enum CanvasViewMode {
     AllPagesOverview,
 }
 
+/// Target color space / color pipeline when exporting a 16-bit print sheet to disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum ExportColorSpace {
+    /// Applies the active print color pipeline (ICC paper profile / ABW toning / color adjustments).
+    #[default]
+    PrinterPipeline,
+    /// Converts placed images to standard `sRGB IEC61966-2.1` (plus non-destructive color adjustments).
+    Srgb,
+    /// Converts placed images to `Adobe RGB (1998)` (plus non-destructive color adjustments).
+    AdobeRgb1998,
+    /// Preserves raw 16-bit source pixels without color space conversion (`Unverändert / Quell-Farbraum`).
+    Unchanged,
+}
+
+impl ExportColorSpace {
+    pub const ALL: [Self; 4] = [
+        Self::PrinterPipeline,
+        Self::Srgb,
+        Self::AdobeRgb1998,
+        Self::Unchanged,
+    ];
+
+    pub fn label_de(self) -> &'static str {
+        match self {
+            Self::PrinterPipeline => "Drucker-ICC / Farbpipeline",
+            Self::Srgb => "sRGB (IEC 61966-2-1)",
+            Self::AdobeRgb1998 => "Adobe RGB (1998)",
+            Self::Unchanged => "Unverändert (Quell-Farbraum)",
+        }
+    }
+}
+
+/// Output file format for 16-bit sheet export (`16-Bit TIFF` vs. `16-Bit PNG`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum ExportFileFormat {
+    #[default]
+    Tiff16,
+    Png16,
+}
+
+impl ExportFileFormat {
+    pub const ALL: [Self; 2] = [Self::Tiff16, Self::Png16];
+
+    pub fn label_de(self) -> &'static str {
+        match self {
+            Self::Tiff16 => "16-Bit TIFF (.tif)",
+            Self::Png16 => "16-Bit PNG (.png)",
+        }
+    }
+
+    pub const fn extension(self) -> &'static str {
+        match self {
+            Self::Tiff16 => "tif",
+            Self::Png16 => "png",
+        }
+    }
+}
+
+fn default_export_dpi() -> u32 {
+    720
+}
+
+/// Settings for the `[ 💾 Export ]` tab in the sticky bottom dock footer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExportSettings {
+    /// Target export resolution in DPI (`300`, `360`, `720`, `1440`).
+    #[serde(default = "default_export_dpi")]
+    pub dpi: u32,
+    #[serde(default)]
+    pub color_space: ExportColorSpace,
+    #[serde(default)]
+    pub format: ExportFileFormat,
+}
+
+impl Default for ExportSettings {
+    fn default() -> Self {
+        Self {
+            dpi: 720,
+            color_space: ExportColorSpace::PrinterPipeline,
+            format: ExportFileFormat::Tiff16,
+        }
+    }
+}
+
+impl ExportSettings {
+    pub const DPI_PRESETS: [u32; 4] = [300, 360, 720, 1440];
+}
+
 /// Scope for printing or exporting sheets (`Alle Bögen` vs. `Aktueller Bogen`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum PrintScope {
@@ -1203,6 +1291,8 @@ pub struct PrintJobDocument {
     /// Layout of the currently active page (`pages[active_page_index]`).
     pub layout: LayoutMode,
     pub color: ColorSettings,
+    #[serde(default)]
+    pub export: ExportSettings,
     pub test_strip: TestStripSpec,
     pub display_unit: DisplayUnit,
     pub filmstrip_position: FilmstripPosition,
@@ -1250,6 +1340,7 @@ impl Default for PrintJobDocument {
             printer: PrinterSettings::default(),
             layout: LayoutMode::default(),
             color: ColorSettings::default(),
+            export: ExportSettings::default(),
             test_strip: TestStripSpec::default(),
             display_unit: DisplayUnit::Mm,
             filmstrip_position: FilmstripPosition::Left,
