@@ -105,7 +105,7 @@ pub fn load_image_from_bytes(bytes: &[u8], source_label: &str) -> Result<LoadedI
 
     let rgb16_img = dyn_img.to_rgb16();
     let raw_samples = rgb16_img.into_raw();
-    let buffer = ImageBuffer16::from_raw(width, height, raw_samples).map_err(|e| {
+    let mut buffer = ImageBuffer16::from_raw(width, height, raw_samples).map_err(|e| {
         CodecError::Decode {
             path: source_label.to_string(),
             reason: e.to_string(),
@@ -113,7 +113,7 @@ pub fn load_image_from_bytes(bytes: &[u8], source_label: &str) -> Result<LoadedI
     })?;
 
     let (color_space, icc_profile_name) =
-        detect_embedded_color_space(decoder_icc.as_deref(), bytes);
+        detect_and_apply_embedded_color_space(&mut buffer, decoder_icc.as_deref(), bytes);
 
     Ok(LoadedImage {
         buffer,
@@ -131,17 +131,27 @@ pub fn load_image_from_bytes(bytes: &[u8], source_label: &str) -> Result<LoadedI
     })
 }
 
-fn classify_icc_profile(prof: &IccProfile) -> (WorkingColorSpace, String) {
+fn classify_and_apply_icc_profile(
+    buf: &mut ImageBuffer16,
+    prof: &IccProfile,
+) -> (WorkingColorSpace, String) {
     let desc_low = prof.description.to_ascii_lowercase();
-    let ws = if desc_low.contains("adobe") || desc_low.contains("clayrgb") {
-        WorkingColorSpace::AdobeRgb1998
-    } else if desc_low.contains("prophoto") || desc_low.contains("romm") {
-        WorkingColorSpace::ProPhotoRgb
-    } else if desc_low.contains("p3") {
-        WorkingColorSpace::DisplayP3
-    } else if let Some(r_xyz) = prof.red_primary_xyz {
-        // Fallback classification by D50-adapted Red primary X coordinate:
-        // sRGB: ~0.436, Display P3: ~0.515, AdobeRGB: ~0.610, ProPhoto: ~0.798
+    if desc_low.contains("adobe") || desc_low.contains("clayrgb") {
+        return (WorkingColorSpace::AdobeRgb1998, prof.description.clone());
+    }
+    if desc_low.contains("prophoto") || desc_low.contains("romm") {
+        return (WorkingColorSpace::ProPhotoRgb, prof.description.clone());
+    }
+    if desc_low.contains("p3") {
+        return (WorkingColorSpace::DisplayP3, prof.description.clone());
+    }
+    if desc_low.contains("srgb") || desc_low.contains("iec61966") {
+        return (WorkingColorSpace::Srgb, prof.description.clone());
+    }
+
+    // For custom/non-standard embedded ICC profiles (e.g. ECI RGB v2, camera profiles, linear profiles),
+    // choose the closest wide-gamut WorkingColorSpace and let liblcms2 convert the 16-bit buffer into it.
+    let target_ws = if let Some(r_xyz) = prof.red_primary_xyz {
         if r_xyz[0] > 0.70 {
             WorkingColorSpace::ProPhotoRgb
         } else if r_xyz[0] > 0.56 {
@@ -152,20 +162,22 @@ fn classify_icc_profile(prof: &IccProfile) -> (WorkingColorSpace, String) {
             WorkingColorSpace::Srgb
         }
     } else {
-        WorkingColorSpace::Srgb
+        WorkingColorSpace::ProPhotoRgb
     };
-    (ws, prof.description.clone())
+    prof.convert_buffer_to_working_space(buf, target_ws);
+    (target_ws, prof.description.clone())
 }
 
 /// Inspects decompressed ICC profile bytes from `ImageDecoder::icc_profile()` or raw file bytes
 /// for an embedded ICC header (`acsp`).
-fn detect_embedded_color_space(
+fn detect_and_apply_embedded_color_space(
+    buf: &mut ImageBuffer16,
     decoded_icc: Option<&[u8]>,
     bytes: &[u8],
 ) -> (WorkingColorSpace, String) {
     if let Some(icc_slice) = decoded_icc {
         if let Ok(prof) = IccProfile::from_bytes(icc_slice, None) {
-            return classify_icc_profile(&prof);
+            return classify_and_apply_icc_profile(buf, &prof);
         }
     }
     // Fallback: search for an uncompressed embedded ICC header ('acsp' at offset +36 of profile header)
@@ -174,7 +186,7 @@ fn detect_embedded_color_space(
             let start = pos - 36;
             if let Some(slice) = bytes.get(start..) {
                 if let Ok(prof) = IccProfile::from_bytes(slice, None) {
-                    return classify_icc_profile(&prof);
+                    return classify_and_apply_icc_profile(buf, &prof);
                 }
             }
         }

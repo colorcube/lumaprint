@@ -1,10 +1,10 @@
-//! Pure-Rust ICC v2/v4 Color Management Engine (`lumaprint-cms`).
+//! Safe Rust facade over LittleCMS 2 (`liblcms2`) for LumaPrint (`lumaprint-cms`).
 //!
-//! Directly parses Epson SC-P900 / SC-P700 printer ICC profiles (`mft2` 16-bit `B2A0..2` and
-//! `A2B0..2` LUTs, `mft1` `gamt` gamut tags, `wtpt`/`bkpt` `XYZ ` tags, and `desc`/`mluc` names)
-//! as well as standard RGB working space profiles (`sRGB`, `Adobe RGB (1998)`, `ProPhoto RGB`,
-//! `Display P3`).
-#![forbid(unsafe_code)]
+//! All ICC profile parsing, 16-bit color transformations (`cmsCreateTransformTHR`, `cmsDoTransform`),
+//! Black Point Compensation (`cmsFLAGS_BLACKPOINTCOMPENSATION`), Softproofing (`cmsCreateProofingTransformTHR`),
+//! and Gamut Warning (`cmsFLAGS_GAMUTCHECK`) are delegated to the industry-standard `liblcms2` C library.
+//! All `unsafe` FFI calls are strictly isolated inside the private `lcms2` module.
+#![deny(unsafe_code)]
 #![deny(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -17,8 +17,437 @@
 use lumaprint_color::{ImageBuffer16, Rgb8, Rgb16};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock, RwLock};
 use thiserror::Error;
+
+#[allow(unsafe_code)]
+mod lcms2 {
+    use std::ffi::{c_char, c_int, c_uint, c_void};
+    use std::ptr;
+
+    pub type CmsContext = *mut c_void;
+    pub type CmsHProfile = *mut c_void;
+    pub type CmsHTransform = *mut c_void;
+    pub type CmsToneCurve = c_void;
+
+    /// `TYPE_RGB_16`: `COLORSPACE_SH(PT_RGB=4) | CHANNELS_SH(3) | BYTES_SH(2)` = `(4 << 16) | (3 << 3) | 2`.
+    pub const TYPE_RGB_16: u32 = (4 << 16) | (3 << 3) | 2;
+
+    pub const INTENT_PERCEPTUAL: u32 = 0;
+    pub const INTENT_RELATIVE_COLORIMETRIC: u32 = 1;
+    pub const INTENT_SATURATION: u32 = 2;
+    pub const INTENT_ABSOLUTE_COLORIMETRIC: u32 = 3;
+
+    pub const CMS_FLAGS_NOCACHE: u32 = 0x0040;
+    pub const CMS_FLAGS_HIGHRESPRECALC: u32 = 0x0400;
+    pub const CMS_FLAGS_GAMUTCHECK: u32 = 0x1000;
+    pub const CMS_FLAGS_BLACKPOINTCOMPENSATION: u32 = 0x2000;
+    pub const CMS_FLAGS_SOFTPROOFING: u32 = 0x4000;
+
+    pub const CMS_INFO_DESCRIPTION: u32 = 0;
+
+    pub const CMS_SIG_MEDIA_WHITE_POINT_TAG: u32 = 0x7774_7074; // 'wtpt'
+    pub const CMS_SIG_MEDIA_BLACK_POINT_TAG: u32 = 0x626B_7074; // 'bkpt'
+    pub const CMS_SIG_RED_MATRIX_COLUMN_TAG: u32 = 0x7258_595A; // 'rXYZ'
+
+    #[repr(C)]
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct CmsCIEXYZ {
+        pub x: f64,
+        pub y: f64,
+        pub z: f64,
+    }
+
+    #[repr(C)]
+    #[derive(Debug, Clone, Copy)]
+    pub struct CmsCIExyY {
+        pub x: f64,
+        pub y: f64,
+        pub big_y: f64,
+    }
+
+    #[repr(C)]
+    #[derive(Debug, Clone, Copy)]
+    pub struct CmsCIExyYTriple {
+        pub red: CmsCIExyY,
+        pub green: CmsCIExyY,
+        pub blue: CmsCIExyY,
+    }
+
+    #[link(name = "lcms2")]
+    unsafe extern "C" {
+        fn cmsCreateContext(plugin: *mut c_void, user_data: *mut c_void) -> CmsContext;
+        fn cmsDeleteContext(context_id: CmsContext);
+
+        fn cmsOpenProfileFromMemTHR(
+            context_id: CmsContext,
+            mem_ptr: *const c_void,
+            dw_size: u32,
+        ) -> CmsHProfile;
+        fn cmsCloseProfile(h_profile: CmsHProfile) -> c_int;
+
+        fn cmsCreate_sRGBProfileTHR(context_id: CmsContext) -> CmsHProfile;
+        fn cmsCreateRGBProfileTHR(
+            context_id: CmsContext,
+            white_point: *const CmsCIExyY,
+            primaries: *const CmsCIExyYTriple,
+            transfer_function: *const *mut CmsToneCurve,
+        ) -> CmsHProfile;
+
+        fn cmsBuildParametricToneCurve(
+            context_id: CmsContext,
+            curve_type: i32,
+            params: *const f64,
+        ) -> *mut CmsToneCurve;
+        fn cmsFreeToneCurve(curve: *mut CmsToneCurve);
+
+        fn cmsGetProfileInfoUTF8(
+            h_profile: CmsHProfile,
+            info: c_uint,
+            language_code: *const c_char,
+            country_code: *const c_char,
+            buffer: *mut c_char,
+            buffer_size: u32,
+        ) -> u32;
+
+        fn cmsReadTag(h_profile: CmsHProfile, sig: u32) -> *const c_void;
+
+        fn cmsDetectDestinationBlackPoint(
+            black_point: *mut CmsCIEXYZ,
+            h_profile: CmsHProfile,
+            intent: u32,
+            dw_flags: u32,
+        ) -> c_int;
+
+        fn cmsCreateTransformTHR(
+            context_id: CmsContext,
+            input: CmsHProfile,
+            input_format: u32,
+            output: CmsHProfile,
+            output_format: u32,
+            intent: u32,
+            dw_flags: u32,
+        ) -> CmsHTransform;
+
+        fn cmsCreateProofingTransformTHR(
+            context_id: CmsContext,
+            input: CmsHProfile,
+            input_format: u32,
+            output: CmsHProfile,
+            output_format: u32,
+            proofing: CmsHProfile,
+            intent: u32,
+            proofing_intent: u32,
+            dw_flags: u32,
+        ) -> CmsHTransform;
+
+        fn cmsDeleteTransform(h_transform: CmsHTransform);
+
+        fn cmsDoTransform(
+            transform: CmsHTransform,
+            input_buffer: *const c_void,
+            output_buffer: *mut c_void,
+            size: u32,
+        );
+
+        fn cmsSetAlarmCodesTHR(context_id: CmsContext, alarm_codes: *const u16);
+    }
+
+    /// Safe RAII wrapper around `cmsHPROFILE`.
+    pub struct ProfileHandle(CmsHProfile);
+
+    // SAFETY: `cmsHPROFILE` is only mutated during creation/closing and is thread-safe
+    // when creating transforms with `THR` functions and `CMS_FLAGS_NOCACHE`.
+    unsafe impl Send for ProfileHandle {}
+    unsafe impl Sync for ProfileHandle {}
+
+    impl ProfileHandle {
+        pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+            let len = u32::try_from(bytes.len()).ok()?;
+            let handle =
+                unsafe { cmsOpenProfileFromMemTHR(ptr::null_mut(), bytes.as_ptr().cast(), len) };
+            if handle.is_null() {
+                None
+            } else {
+                Some(Self(handle))
+            }
+        }
+
+        pub fn create_srgb() -> Option<Self> {
+            let handle = unsafe { cmsCreate_sRGBProfileTHR(ptr::null_mut()) };
+            if handle.is_null() {
+                None
+            } else {
+                Some(Self(handle))
+            }
+        }
+
+        pub fn create_parametric_rgb(
+            white_point: CmsCIExyY,
+            primaries: CmsCIExyYTriple,
+            curve_type: i32,
+            curve_params: &[f64],
+        ) -> Option<Self> {
+            unsafe {
+                let curve = cmsBuildParametricToneCurve(
+                    ptr::null_mut(),
+                    curve_type,
+                    curve_params.as_ptr(),
+                );
+                if curve.is_null() {
+                    return None;
+                }
+                let curves: [*mut CmsToneCurve; 3] = [curve, curve, curve];
+                let handle = cmsCreateRGBProfileTHR(
+                    ptr::null_mut(),
+                    &raw const white_point,
+                    &raw const primaries,
+                    curves.as_ptr(),
+                );
+                cmsFreeToneCurve(curve);
+                if handle.is_null() {
+                    None
+                } else {
+                    Some(Self(handle))
+                }
+            }
+        }
+
+        pub fn description(&self) -> Option<String> {
+            unsafe {
+                let lang = b"en\0";
+                let country = b"US\0";
+                let needed = cmsGetProfileInfoUTF8(
+                    self.0,
+                    CMS_INFO_DESCRIPTION,
+                    lang.as_ptr().cast(),
+                    country.as_ptr().cast(),
+                    ptr::null_mut(),
+                    0,
+                );
+                if needed == 0 || needed > 4096 {
+                    return None;
+                }
+                let mut buf = vec![0u8; needed as usize];
+                let written = cmsGetProfileInfoUTF8(
+                    self.0,
+                    CMS_INFO_DESCRIPTION,
+                    lang.as_ptr().cast(),
+                    country.as_ptr().cast(),
+                    buf.as_mut_ptr().cast(),
+                    needed,
+                );
+                if written == 0 {
+                    return None;
+                }
+                let trimmed: Vec<u8> = buf.into_iter().take_while(|&b| b != 0).collect();
+                let s = String::from_utf8_lossy(&trimmed).trim().to_string();
+                if s.is_empty() { None } else { Some(s) }
+            }
+        }
+
+        pub fn read_xyz_tag(&self, sig: u32) -> Option<[f32; 3]> {
+            unsafe {
+                let ptr = cmsReadTag(self.0, sig) as *const CmsCIEXYZ;
+                if ptr.is_null() {
+                    None
+                } else {
+                    let xyz = *ptr;
+                    Some([xyz.x as f32, xyz.y as f32, xyz.z as f32])
+                }
+            }
+        }
+
+        pub fn detect_destination_black_point(&self, intent: u32) -> Option<[f32; 3]> {
+            unsafe {
+                let mut bp = CmsCIEXYZ::default();
+                let ok = cmsDetectDestinationBlackPoint(&raw mut bp, self.0, intent, 0);
+                if ok != 0 {
+                    Some([bp.x as f32, bp.y as f32, bp.z as f32])
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    impl Drop for ProfileHandle {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                unsafe {
+                    cmsCloseProfile(self.0);
+                }
+            }
+        }
+    }
+
+    /// Safe RAII wrapper around `cmsHTRANSFORM` (and optional owning `cmsContext`).
+    pub struct TransformHandle {
+        transform: CmsHTransform,
+        context: CmsContext,
+    }
+
+    // SAFETY: Created with `CMS_FLAGS_NOCACHE`, making `cmsDoTransform` completely stateless
+    // and safe to invoke concurrently from multiple `rayon` worker threads.
+    unsafe impl Send for TransformHandle {}
+    unsafe impl Sync for TransformHandle {}
+
+    impl TransformHandle {
+        pub fn new_rgb16(
+            input: &ProfileHandle,
+            output: &ProfileHandle,
+            intent: u32,
+            bpc: bool,
+        ) -> Option<Self> {
+            let mut flags = CMS_FLAGS_HIGHRESPRECALC | CMS_FLAGS_NOCACHE;
+            if bpc {
+                flags |= CMS_FLAGS_BLACKPOINTCOMPENSATION;
+            }
+            let transform = unsafe {
+                cmsCreateTransformTHR(
+                    ptr::null_mut(),
+                    input.0,
+                    TYPE_RGB_16,
+                    output.0,
+                    TYPE_RGB_16,
+                    intent,
+                    flags,
+                )
+            };
+            if transform.is_null() {
+                None
+            } else {
+                Some(Self {
+                    transform,
+                    context: ptr::null_mut(),
+                })
+            }
+        }
+
+        pub fn new_proofing_rgb16(
+            input: &ProfileHandle,
+            display_output: &ProfileHandle,
+            proofing_printer: &ProfileHandle,
+            intent: u32,
+            simulate_paper_white: bool,
+            bpc: bool,
+        ) -> Option<Self> {
+            let mut flags = CMS_FLAGS_SOFTPROOFING | CMS_FLAGS_HIGHRESPRECALC | CMS_FLAGS_NOCACHE;
+            if bpc {
+                flags |= CMS_FLAGS_BLACKPOINTCOMPENSATION;
+            }
+            let proofing_intent = if simulate_paper_white {
+                INTENT_ABSOLUTE_COLORIMETRIC
+            } else {
+                INTENT_RELATIVE_COLORIMETRIC
+            };
+            let transform = unsafe {
+                cmsCreateProofingTransformTHR(
+                    ptr::null_mut(),
+                    input.0,
+                    TYPE_RGB_16,
+                    display_output.0,
+                    TYPE_RGB_16,
+                    proofing_printer.0,
+                    intent,
+                    proofing_intent,
+                    flags,
+                )
+            };
+            if transform.is_null() {
+                None
+            } else {
+                Some(Self {
+                    transform,
+                    context: ptr::null_mut(),
+                })
+            }
+        }
+
+        /// Creates a proofing transform with a dedicated `cmsContext` whose alarm codes are set to
+        /// `[0xDEAD, 0xBEEF, 0xCAFE, ...]` so out-of-gamut pixels can be detected via `CMS_FLAGS_GAMUTCHECK`.
+        pub fn new_gamut_check_rgb16(
+            input: &ProfileHandle,
+            proofing_printer: &ProfileHandle,
+        ) -> Option<Self> {
+            unsafe {
+                let ctx = cmsCreateContext(ptr::null_mut(), ptr::null_mut());
+                if ctx.is_null() {
+                    return None;
+                }
+                let mut alarms = [0u16; 16];
+                alarms[0] = 0xDEAD;
+                alarms[1] = 0xBEEF;
+                alarms[2] = 0xCAFE;
+                cmsSetAlarmCodesTHR(ctx, alarms.as_ptr());
+
+                let flags = CMS_FLAGS_GAMUTCHECK | CMS_FLAGS_SOFTPROOFING | CMS_FLAGS_NOCACHE;
+                let transform = cmsCreateProofingTransformTHR(
+                    ctx,
+                    input.0,
+                    TYPE_RGB_16,
+                    input.0,
+                    TYPE_RGB_16,
+                    proofing_printer.0,
+                    INTENT_RELATIVE_COLORIMETRIC,
+                    INTENT_RELATIVE_COLORIMETRIC,
+                    flags,
+                );
+                if transform.is_null() {
+                    cmsDeleteContext(ctx);
+                    None
+                } else {
+                    Some(Self {
+                        transform,
+                        context: ctx,
+                    })
+                }
+            }
+        }
+
+        #[inline]
+        pub fn transform_pixel(&self, px: [u16; 3]) -> [u16; 3] {
+            let mut out = [0u16; 3];
+            unsafe {
+                cmsDoTransform(self.transform, px.as_ptr().cast(), out.as_mut_ptr().cast(), 1);
+            }
+            out
+        }
+
+        /// Transforms a contiguous slice of `u16` RGB triplets (`len` must be a multiple of 3) in-place.
+        #[inline]
+        pub fn transform_slice_in_place(&self, rgb_u16_slice: &mut [u16]) {
+            let num_pixels = rgb_u16_slice.len() / 3;
+            if num_pixels == 0 {
+                return;
+            }
+            let Ok(count) = u32::try_from(num_pixels) else {
+                return;
+            };
+            let ptr = rgb_u16_slice.as_mut_ptr();
+            unsafe {
+                cmsDoTransform(self.transform, ptr.cast(), ptr.cast(), count);
+            }
+        }
+    }
+
+    impl Drop for TransformHandle {
+        fn drop(&mut self) {
+            if !self.transform.is_null() {
+                unsafe {
+                    cmsDeleteTransform(self.transform);
+                }
+            }
+            if !self.context.is_null() {
+                unsafe {
+                    cmsDeleteContext(self.context);
+                }
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum CmsError {
@@ -80,6 +509,24 @@ impl RenderingIntent {
             Self::Saturation => b"A2B2",
         }
     }
+
+    fn lcms_intent(self) -> u32 {
+        match self {
+            Self::Perceptual => lcms2::INTENT_PERCEPTUAL,
+            Self::RelativeColorimetric => lcms2::INTENT_RELATIVE_COLORIMETRIC,
+            Self::Saturation => lcms2::INTENT_SATURATION,
+            Self::AbsoluteColorimetric => lcms2::INTENT_ABSOLUTE_COLORIMETRIC,
+        }
+    }
+
+    const fn index(self) -> usize {
+        match self {
+            Self::Perceptual => 0,
+            Self::RelativeColorimetric => 1,
+            Self::Saturation => 2,
+            Self::AbsoluteColorimetric => 3,
+        }
+    }
 }
 
 /// Builtin source RGB color spaces.
@@ -106,6 +553,122 @@ impl WorkingColorSpace {
             Self::AdobeRgb1998 => "Adobe RGB (1998)",
             Self::ProPhotoRgb => "ProPhoto RGB (ROMM)",
             Self::DisplayP3 => "Display P3",
+        }
+    }
+
+    const fn index(self) -> usize {
+        match self {
+            Self::Srgb => 0,
+            Self::AdobeRgb1998 => 1,
+            Self::ProPhotoRgb => 2,
+            Self::DisplayP3 => 3,
+        }
+    }
+
+    fn lcms_profile(self) -> Option<&'static lcms2::ProfileHandle> {
+        static SRGB: OnceLock<Option<lcms2::ProfileHandle>> = OnceLock::new();
+        static ADOBE_RGB: OnceLock<Option<lcms2::ProfileHandle>> = OnceLock::new();
+        static PROPHOTO_RGB: OnceLock<Option<lcms2::ProfileHandle>> = OnceLock::new();
+        static DISPLAY_P3: OnceLock<Option<lcms2::ProfileHandle>> = OnceLock::new();
+
+        match self {
+            Self::Srgb => SRGB.get_or_init(lcms2::ProfileHandle::create_srgb).as_ref(),
+            Self::AdobeRgb1998 => ADOBE_RGB
+                .get_or_init(|| {
+                    let wp = lcms2::CmsCIExyY {
+                        x: 0.3127,
+                        y: 0.3290,
+                        big_y: 1.0,
+                    };
+                    let primaries = lcms2::CmsCIExyYTriple {
+                        red: lcms2::CmsCIExyY {
+                            x: 0.6400,
+                            y: 0.3300,
+                            big_y: 1.0,
+                        },
+                        green: lcms2::CmsCIExyY {
+                            x: 0.2100,
+                            y: 0.7100,
+                            big_y: 1.0,
+                        },
+                        blue: lcms2::CmsCIExyY {
+                            x: 0.1500,
+                            y: 0.0600,
+                            big_y: 1.0,
+                        },
+                    };
+                    lcms2::ProfileHandle::create_parametric_rgb(
+                        wp,
+                        primaries,
+                        1,
+                        &[563.0 / 256.0],
+                    )
+                })
+                .as_ref(),
+            Self::ProPhotoRgb => PROPHOTO_RGB
+                .get_or_init(|| {
+                    let wp = lcms2::CmsCIExyY {
+                        x: 0.34567,
+                        y: 0.35850,
+                        big_y: 1.0,
+                    };
+                    let primaries = lcms2::CmsCIExyYTriple {
+                        red: lcms2::CmsCIExyY {
+                            x: 0.7347,
+                            y: 0.2653,
+                            big_y: 1.0,
+                        },
+                        green: lcms2::CmsCIExyY {
+                            x: 0.1596,
+                            y: 0.8404,
+                            big_y: 1.0,
+                        },
+                        blue: lcms2::CmsCIExyY {
+                            x: 0.0366,
+                            y: 0.0001,
+                            big_y: 1.0,
+                        },
+                    };
+                    lcms2::ProfileHandle::create_parametric_rgb(
+                        wp,
+                        primaries,
+                        4,
+                        &[1.8, 1.0, 0.0, 1.0 / 16.0, 0.03125],
+                    )
+                })
+                .as_ref(),
+            Self::DisplayP3 => DISPLAY_P3
+                .get_or_init(|| {
+                    let wp = lcms2::CmsCIExyY {
+                        x: 0.3127,
+                        y: 0.3290,
+                        big_y: 1.0,
+                    };
+                    let primaries = lcms2::CmsCIExyYTriple {
+                        red: lcms2::CmsCIExyY {
+                            x: 0.6800,
+                            y: 0.3200,
+                            big_y: 1.0,
+                        },
+                        green: lcms2::CmsCIExyY {
+                            x: 0.2650,
+                            y: 0.6900,
+                            big_y: 1.0,
+                        },
+                        blue: lcms2::CmsCIExyY {
+                            x: 0.1500,
+                            y: 0.0600,
+                            big_y: 1.0,
+                        },
+                    };
+                    lcms2::ProfileHandle::create_parametric_rgb(
+                        wp,
+                        primaries,
+                        4,
+                        &[2.4, 1.0 / 1.055, 0.055 / 1.055, 1.0 / 12.92, 0.04045],
+                    )
+                })
+                .as_ref(),
         }
     }
 
@@ -310,204 +873,32 @@ pub fn xyz_d50_to_srgb16(xyz: [f32; 3]) -> Rgb16 {
     WorkingColorSpace::Srgb.xyz_d50_to_rgb16(xyz)
 }
 
-/// 3D Lookup Table (`mft1` 8-bit or `mft2` 16-bit) from an ICC v2/v4 profile.
-#[derive(Debug, Clone)]
-pub struct Lut3D {
-    pub in_channels: u8,
-    pub out_channels: u8,
-    pub grid_points: u8,
-    pub matrix: [[f32; 3]; 3],
-    pub input_tables: Vec<Vec<f32>>,
-    /// Flattened CLUT values normalized to `0.0..=1.0`, length `grid^3 * out_channels`.
-    pub clut: Vec<f32>,
-    pub output_tables: Vec<Vec<f32>>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct ProofKey {
+    src_space: WorkingColorSpace,
+    dst_display_space: WorkingColorSpace,
+    intent: RenderingIntent,
+    bpc: bool,
+    simulate_paper_white: bool,
 }
 
-impl Lut3D {
-    /// Parses an ICC `mft2` (16-bit LUT) or `mft1` (8-bit LUT) tag slice.
-    pub fn parse(tag: &[u8]) -> Result<Self, CmsError> {
-        if tag.len() < 52 {
-            return Err(CmsError::Truncated(tag.len()));
-        }
-        let sig = tag.get(0..4).ok_or(CmsError::Truncated(tag.len()))?;
-        let is_16bit = match sig {
-            b"mft2" => true,
-            b"mft1" => false,
-            _ => {
-                return Err(CmsError::InvalidTag(format!(
-                    "expected mft1/mft2, got {:?}",
-                    String::from_utf8_lossy(sig)
-                )));
-            }
-        };
-        let in_channels = *tag.get(8).ok_or(CmsError::Truncated(tag.len()))?;
-        let out_channels = *tag.get(9).ok_or(CmsError::Truncated(tag.len()))?;
-        let grid_points = *tag.get(10).ok_or(CmsError::Truncated(tag.len()))?;
-        if in_channels != 3 || !(1..=4).contains(&out_channels) || grid_points < 2 {
-            return Err(CmsError::InvalidTag(format!(
-                "unsupported LUT dims: in={in_channels} out={out_channels} grid={grid_points}"
-            )));
-        }
+struct IccProfileInner {
+    handle: lcms2::ProfileHandle,
+    /// Cached device transforms indexed by `(src_space.index() * 8) + (intent.index() * 2) + usize::from(bpc)`.
+    device_transforms: [OnceLock<Option<lcms2::TransformHandle>>; 32],
+    /// Cached gamut-check transforms indexed by `src_space.index()`.
+    gamut_transforms: [OnceLock<Option<lcms2::TransformHandle>>; 4],
+    /// Cached softproofing transforms (`src_space -> printer -> dst_display_space`).
+    proof_transforms: RwLock<HashMap<ProofKey, Arc<lcms2::TransformHandle>>>,
+}
 
-        let mut matrix = [[0.0f32; 3]; 3];
-        for (r, row) in matrix.iter_mut().enumerate() {
-            for (c, cell) in row.iter_mut().enumerate() {
-                let off = 12 + (r * 3 + c) * 4;
-                *cell = read_s15fixed16(tag, off)?;
-            }
-        }
-
-        let (in_entries, out_entries, mut offset) = if is_16bit {
-            let ie = usize::from(read_u16_be(tag, 48)?);
-            let oe = usize::from(read_u16_be(tag, 50)?);
-            (ie, oe, 52usize)
-        } else {
-            (256usize, 256usize, 48usize)
-        };
-        if in_entries < 2 || out_entries < 2 {
-            return Err(CmsError::InvalidTag("LUT table entries < 2".into()));
-        }
-
-        let mut input_tables = Vec::with_capacity(usize::from(in_channels));
-        for _ in 0..in_channels {
-            let mut tbl = Vec::with_capacity(in_entries);
-            for _ in 0..in_entries {
-                if is_16bit {
-                    let v = f32::from(read_u16_be(tag, offset)?) / 65535.0;
-                    offset += 2;
-                    tbl.push(v);
-                } else {
-                    let v = f32::from(*tag.get(offset).ok_or(CmsError::Truncated(tag.len()))?)
-                        / 255.0;
-                    offset += 1;
-                    tbl.push(v);
-                }
-            }
-            input_tables.push(tbl);
-        }
-
-        let g = usize::from(grid_points);
-        let clut_samples = g
-            .checked_mul(g)
-            .and_then(|v| v.checked_mul(g))
-            .and_then(|v| v.checked_mul(usize::from(out_channels)))
-            .ok_or_else(|| CmsError::InvalidTag("CLUT size overflow".into()))?;
-        let mut clut = Vec::with_capacity(clut_samples);
-        for _ in 0..clut_samples {
-            if is_16bit {
-                let v = f32::from(read_u16_be(tag, offset)?) / 65535.0;
-                offset += 2;
-                clut.push(v);
-            } else {
-                let v =
-                    f32::from(*tag.get(offset).ok_or(CmsError::Truncated(tag.len()))?) / 255.0;
-                offset += 1;
-                clut.push(v);
-            }
-        }
-
-        let mut output_tables = Vec::with_capacity(usize::from(out_channels));
-        for _ in 0..out_channels {
-            let mut tbl = Vec::with_capacity(out_entries);
-            for _ in 0..out_entries {
-                if is_16bit {
-                    let v = f32::from(read_u16_be(tag, offset)?) / 65535.0;
-                    offset += 2;
-                    tbl.push(v);
-                } else {
-                    let v = f32::from(*tag.get(offset).ok_or(CmsError::Truncated(tag.len()))?)
-                        / 255.0;
-                    offset += 1;
-                    tbl.push(v);
-                }
-            }
-            output_tables.push(tbl);
-        }
-
-        Ok(Self {
-            in_channels,
-            out_channels,
-            grid_points,
-            matrix,
-            input_tables,
-            clut,
-            output_tables,
-        })
-    }
-
-    /// Evaluates the 3D LUT on normalized inputs `[x0, x1, x2]` (`0.0..=1.0`) using trilinear interpolation.
-    pub fn eval(&self, inp: [f32; 3]) -> [f32; 4] {
-        let x0 = sample_1d(&self.input_tables[0], inp[0]);
-        let x1 = sample_1d(&self.input_tables[1], inp[1]);
-        let x2 = sample_1d(&self.input_tables[2], inp[2]);
-
-        let g = usize::from(self.grid_points);
-        let scale = (g - 1) as f32;
-        let p0 = (x0.clamp(0.0, 1.0) * scale).min(scale);
-        let p1 = (x1.clamp(0.0, 1.0) * scale).min(scale);
-        let p2 = (x2.clamp(0.0, 1.0) * scale).min(scale);
-
-        let i0 = (p0.floor() as usize).min(g.saturating_sub(2));
-        let i1 = (p1.floor() as usize).min(g.saturating_sub(2));
-        let i2 = (p2.floor() as usize).min(g.saturating_sub(2));
-
-        let f0 = p0 - (i0 as f32);
-        let f1 = p1 - (i1 as f32);
-        let f2 = p2 - (i2 as f32);
-
-        let oc = usize::from(self.out_channels);
-        let idx = |a: usize, b: usize, c: usize, ch: usize| -> f32 {
-            let flat = (((a * g + b) * g + c) * oc) + ch;
-            self.clut.get(flat).copied().unwrap_or(0.0)
-        };
-
-        let mut out = [0.0f32; 4];
-        for (ch, out_val) in out.iter_mut().enumerate().take(oc) {
-            let c000 = idx(i0, i1, i2, ch);
-            let c001 = idx(i0, i1, i2 + 1, ch);
-            let c010 = idx(i0, i1 + 1, i2, ch);
-            let c011 = idx(i0, i1 + 1, i2 + 1, ch);
-            let c100 = idx(i0 + 1, i1, i2, ch);
-            let c101 = idx(i0 + 1, i1, i2 + 1, ch);
-            let c110 = idx(i0 + 1, i1 + 1, i2, ch);
-            let c111 = idx(i0 + 1, i1 + 1, i2 + 1, ch);
-
-            let c00 = c000 + f2 * (c001 - c000);
-            let c01 = c010 + f2 * (c011 - c010);
-            let c10 = c100 + f2 * (c101 - c100);
-            let c11 = c110 + f2 * (c111 - c110);
-
-            let c0 = c00 + f1 * (c01 - c00);
-            let c1 = c10 + f1 * (c11 - c10);
-            let val = c0 + f0 * (c1 - c0);
-
-            *out_val = if let Some(tbl) = self.output_tables.get(ch) {
-                sample_1d(tbl, val)
-            } else {
-                val
-            };
-        }
-        out
+impl std::fmt::Debug for IccProfileInner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IccProfileInner").finish_non_exhaustive()
     }
 }
 
-fn sample_1d(table: &[f32], x: f32) -> f32 {
-    if table.is_empty() {
-        return x.clamp(0.0, 1.0);
-    }
-    if table.len() == 1 {
-        return table[0];
-    }
-    let max_idx = (table.len() - 1) as f32;
-    let pos = x.clamp(0.0, 1.0) * max_idx;
-    let i = (pos.floor() as usize).min(table.len() - 2);
-    let frac = pos - (i as f32);
-    let a = table.get(i).copied().unwrap_or(0.0);
-    let b = table.get(i + 1).copied().unwrap_or(a);
-    a + frac * (b - a)
-}
-
-/// Parsed ICC v2/v4 Printer / Output / Input Profile.
+/// Parsed ICC v2/v4 Printer / Output / Input Profile backed by `liblcms2`.
 #[derive(Debug, Clone)]
 pub struct IccProfile {
     pub description: String,
@@ -515,17 +906,11 @@ pub struct IccProfile {
     pub media_white_xyz: [f32; 3],
     pub media_black_xyz: [f32; 3],
     pub red_primary_xyz: Option<[f32; 3]>,
-    pub b2a0: Option<Lut3D>,
-    pub b2a1: Option<Lut3D>,
-    pub b2a2: Option<Lut3D>,
-    pub a2b0: Option<Lut3D>,
-    pub a2b1: Option<Lut3D>,
-    pub a2b2: Option<Lut3D>,
-    pub gamt: Option<Lut3D>,
+    inner: Arc<IccProfileInner>,
 }
 
 impl IccProfile {
-    /// Parses an ICC profile from raw bytes.
+    /// Parses an ICC profile from raw bytes using `liblcms2`.
     pub fn from_bytes(bytes: &[u8], file_path: Option<PathBuf>) -> Result<Self, CmsError> {
         if bytes.len() < 132 {
             return Err(CmsError::Truncated(bytes.len()));
@@ -533,82 +918,38 @@ impl IccProfile {
         if bytes.get(36..40) != Some(b"acsp") {
             return Err(CmsError::BadSignature);
         }
-        let tag_count = read_u32_be(bytes, 128)? as usize;
-        if tag_count > 256 || 132 + tag_count * 12 > bytes.len() {
-            return Err(CmsError::Truncated(bytes.len()));
-        }
+        let declared_len = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+        let icc_slice = if declared_len >= 132 && declared_len <= bytes.len() {
+            &bytes[..declared_len]
+        } else {
+            bytes
+        };
 
-        let mut description = String::from("ICC Profile");
-        let mut media_white_xyz = D50_XYZ;
-        let mut media_black_xyz = [0.003f32, 0.003, 0.0025];
-        let mut red_primary_xyz = None;
-        let mut b2a0 = None;
-        let mut b2a1 = None;
-        let mut b2a2 = None;
-        let mut a2b0 = None;
-        let mut a2b1 = None;
-        let mut a2b2 = None;
-        let mut gamt = None;
+        let handle = lcms2::ProfileHandle::from_bytes(icc_slice)
+            .ok_or_else(|| CmsError::InvalidTag("liblcms2 rejected ICC profile".into()))?;
 
-        for i in 0..tag_count {
-            let entry_off = 132 + i * 12;
-            let sig = bytes
-                .get(entry_off..entry_off + 4)
-                .ok_or(CmsError::Truncated(bytes.len()))?;
-            let off = read_u32_be(bytes, entry_off + 4)? as usize;
-            let len = read_u32_be(bytes, entry_off + 8)? as usize;
-            let Some(tag_slice) = bytes.get(off..off.saturating_add(len)) else {
-                continue;
-            };
+        let description = handle
+            .description()
+            .or_else(|| fallback_desc_from_bytes(icc_slice))
+            .unwrap_or_else(|| String::from("ICC Profile"));
 
-            match sig {
-                b"desc" => {
-                    if let Some(d) = parse_desc_tag(tag_slice) {
-                        description = d;
-                    }
-                }
-                b"wtpt" => {
-                    if let Ok(xyz) = parse_xyz_tag(tag_slice) {
-                        media_white_xyz = xyz;
-                    }
-                }
-                b"bkpt" => {
-                    if let Ok(xyz) = parse_xyz_tag(tag_slice) {
-                        media_black_xyz = xyz;
-                    }
-                }
-                b"rXYZ" => {
-                    if let Ok(xyz) = parse_xyz_tag(tag_slice) {
-                        red_primary_xyz = Some(xyz);
-                    }
-                }
-                b"B2A0" => b2a0 = Lut3D::parse(tag_slice).ok(),
-                b"B2A1" => b2a1 = Lut3D::parse(tag_slice).ok(),
-                b"B2A2" => b2a2 = Lut3D::parse(tag_slice).ok(),
-                b"A2B0" => a2b0 = Lut3D::parse(tag_slice).ok(),
-                b"A2B1" => a2b1 = Lut3D::parse(tag_slice).ok(),
-                b"A2B2" => a2b2 = Lut3D::parse(tag_slice).ok(),
-                b"gamt" => gamt = Lut3D::parse(tag_slice).ok(),
-                _ => {}
-            }
-        }
+        let media_white_xyz = handle
+            .read_xyz_tag(lcms2::CMS_SIG_MEDIA_WHITE_POINT_TAG)
+            .unwrap_or(D50_XYZ);
 
-        // ISO 18619 / LittleCMS2 `cmsDetectDestinationBlackPoint`:
-        // For output profiles with B2A1 + A2B1 tables, the legacy `bkpt` tag is often inaccurate;
-        // derive the true Relative Colorimetric destination black point by round-tripping
-        // PCS black (L*=0, a*=0, b*=0 -> norm [0.0, 0.5, 0.5]) through B2A1 -> A2B1.
-        if let Some(ref a2b) = a2b1 {
-            let dev_blk = b2a1
-                .as_ref()
-                .map(|b2a| {
-                    let out = b2a.eval([0.0, 0.5, 0.5]);
-                    [out[0], out[1], out[2]]
-                })
-                .unwrap_or([0.0, 0.0, 0.0]);
-            let norm_lab_blk = a2b.eval(dev_blk);
-            let l_blk = (norm_lab_blk[0] * (65535.0 / 65280.0) * 100.0).clamp(0.0, 25.0);
-            media_black_xyz = lab_to_xyz_d50([l_blk, 0.0, 0.0]);
-        }
+        let media_black_xyz = handle
+            .detect_destination_black_point(lcms2::INTENT_RELATIVE_COLORIMETRIC)
+            .or_else(|| handle.read_xyz_tag(lcms2::CMS_SIG_MEDIA_BLACK_POINT_TAG))
+            .unwrap_or([0.003, 0.003, 0.0025]);
+
+        let red_primary_xyz = handle.read_xyz_tag(lcms2::CMS_SIG_RED_MATRIX_COLUMN_TAG);
+
+        let inner = Arc::new(IccProfileInner {
+            handle,
+            device_transforms: std::array::from_fn(|_| OnceLock::new()),
+            gamut_transforms: std::array::from_fn(|_| OnceLock::new()),
+            proof_transforms: RwLock::new(HashMap::new()),
+        });
 
         Ok(Self {
             description,
@@ -616,13 +957,7 @@ impl IccProfile {
             media_white_xyz,
             media_black_xyz,
             red_primary_xyz,
-            b2a0,
-            b2a1,
-            b2a2,
-            a2b0,
-            a2b1,
-            a2b2,
-            gamt,
+            inner,
         })
     }
 
@@ -636,27 +971,81 @@ impl IccProfile {
         Self::from_bytes(&bytes, Some(p.to_path_buf()))
     }
 
-    pub fn b2a_for_intent(&self, intent: RenderingIntent) -> Option<&Lut3D> {
-        match intent {
-            RenderingIntent::Perceptual => self.b2a0.as_ref().or(self.b2a1.as_ref()),
-            RenderingIntent::RelativeColorimetric | RenderingIntent::AbsoluteColorimetric => {
-                self.b2a1.as_ref().or(self.b2a0.as_ref())
-            }
-            RenderingIntent::Saturation => self.b2a2.as_ref().or(self.b2a0.as_ref()),
-        }
+    /// Converts a 16-bit image buffer from this embedded input/display ICC profile into `dst_space`
+    /// using `liblcms2` (`INTENT_RELATIVE_COLORIMETRIC` + Black Point Compensation).
+    pub fn convert_buffer_to_working_space(
+        &self,
+        buf: &mut ImageBuffer16,
+        dst_space: WorkingColorSpace,
+    ) -> bool {
+        let Some(dst_prof) = dst_space.lcms_profile() else {
+            return false;
+        };
+        let Some(xform) = lcms2::TransformHandle::new_rgb16(
+            &self.inner.handle,
+            dst_prof,
+            lcms2::INTENT_RELATIVE_COLORIMETRIC,
+            true,
+        ) else {
+            return false;
+        };
+        buf.data.par_chunks_mut(3 * 1024).for_each(|chunk| {
+            xform.transform_slice_in_place(chunk);
+        });
+        true
     }
 
-    pub fn a2b_for_intent(&self, intent: RenderingIntent) -> Option<&Lut3D> {
-        match intent {
-            RenderingIntent::Perceptual => self.a2b0.as_ref().or(self.a2b1.as_ref()),
-            RenderingIntent::RelativeColorimetric | RenderingIntent::AbsoluteColorimetric => {
-                self.a2b1.as_ref().or(self.a2b0.as_ref())
-            }
-            RenderingIntent::Saturation => self.a2b2.as_ref().or(self.a2b0.as_ref()),
-        }
+    fn device_transform(
+        &self,
+        src_space: WorkingColorSpace,
+        intent: RenderingIntent,
+        black_point_compensation: bool,
+    ) -> Option<&lcms2::TransformHandle> {
+        let slot = (src_space.index() * 8)
+            + (intent.index() * 2)
+            + usize::from(black_point_compensation);
+        self.inner.device_transforms.get(slot)?.get_or_init(|| {
+            let src_prof = src_space.lcms_profile()?;
+            lcms2::TransformHandle::new_rgb16(
+                src_prof,
+                &self.inner.handle,
+                intent.lcms_intent(),
+                black_point_compensation,
+            )
+        }).as_ref()
     }
 
-    /// Transforms a single 16-bit source RGB pixel into printer device RGB (`0..=65535`).
+    fn gamut_transform(&self, src_space: WorkingColorSpace) -> Option<&lcms2::TransformHandle> {
+        let slot = src_space.index();
+        self.inner.gamut_transforms.get(slot)?.get_or_init(|| {
+            let src_prof = src_space.lcms_profile()?;
+            lcms2::TransformHandle::new_gamut_check_rgb16(src_prof, &self.inner.handle)
+        }).as_ref()
+    }
+
+    fn proof_transform(&self, key: ProofKey) -> Option<Arc<lcms2::TransformHandle>> {
+        if let Ok(guard) = self.inner.proof_transforms.read() {
+            if let Some(found) = guard.get(&key) {
+                return Some(Arc::clone(found));
+            }
+        }
+        let src_prof = key.src_space.lcms_profile()?;
+        let dst_prof = key.dst_display_space.lcms_profile()?;
+        let created = Arc::new(lcms2::TransformHandle::new_proofing_rgb16(
+            src_prof,
+            dst_prof,
+            &self.inner.handle,
+            key.intent.lcms_intent(),
+            key.simulate_paper_white,
+            key.bpc,
+        )?);
+        if let Ok(mut guard) = self.inner.proof_transforms.write() {
+            guard.insert(key, Arc::clone(&created));
+        }
+        Some(created)
+    }
+
+    /// Transforms a single 16-bit source RGB pixel into printer device RGB (`0..=65535`) via `liblcms2`.
     pub fn transform_pixel(
         &self,
         src_space: WorkingColorSpace,
@@ -664,66 +1053,23 @@ impl IccProfile {
         intent: RenderingIntent,
         black_point_compensation: bool,
     ) -> Rgb16 {
-        let Some(b2a) = self.b2a_for_intent(intent) else {
+        let Some(xform) = self.device_transform(src_space, intent, black_point_compensation) else {
             return px;
         };
-        let mut xyz = src_space.rgb16_to_xyz_d50(px.r, px.g, px.b);
-
-        // Apply Black Point Compensation (ISO 18619 / Adobe BPC linear XYZ scaling).
-        // Perceptual (`B2A0`) already bakes black-point scaling into its CLUT (its A2B0 black point is L*≈0),
-        // whereas Relative Colorimetric (`B2A1`) requires linear XYZ scaling to `self.media_black_xyz`.
-        if black_point_compensation && intent == RenderingIntent::RelativeColorimetric {
-            let y_dst_blk = self.media_black_xyz[1].clamp(0.0, 0.08);
-            let scale = 1.0 - y_dst_blk;
-            for (i, c) in xyz.iter_mut().enumerate() {
-                *c = *c * scale + y_dst_blk * D50_XYZ[i];
-            }
-        }
-
-        // Absolute Colorimetric scales PCS XYZ by D50 / media_white_xyz
-        if intent == RenderingIntent::AbsoluteColorimetric {
-            for i in 0..3 {
-                if self.media_white_xyz[i] > 0.01 {
-                    xyz[i] *= D50_XYZ[i] / self.media_white_xyz[i];
-                }
-            }
-        }
-
-        let lab = xyz_d50_to_lab(xyz);
-        // ICC PCS Lab grid normalization:
-        // Neutral a*=0, b*=0 maps to exact 0.5 (`128.0 / 256.0 = 16.0 / 32.0` on a 33^3 CLUT)
-        // so that pure white (L*=100, a*=0, b*=0) hits CLUT node (32, 16, 16) = RGB(65535, 65535, 65535)
-        // without bleeding into adjacent nodes.
-        let norm_lab = [
-            (lab[0] / 100.0).clamp(0.0, 1.0),
-            ((lab[1] + 128.0) / 256.0).clamp(0.0, 1.0),
-            ((lab[2] + 128.0) / 256.0).clamp(0.0, 1.0),
-        ];
-        let out = b2a.eval(norm_lab);
-        Rgb16 {
-            r: (out[0].clamp(0.0, 1.0) * 65535.0).round() as u16,
-            g: (out[1].clamp(0.0, 1.0) * 65535.0).round() as u16,
-            b: (out[2].clamp(0.0, 1.0) * 65535.0).round() as u16,
-        }
+        let [r, g, b] = xform.transform_pixel([px.r, px.g, px.b]);
+        Rgb16 { r, g, b }
     }
 
-    /// Checks whether a source pixel is out of the printer profile's gamut.
+    /// Checks whether a source pixel is out of the printer profile's gamut using `liblcms2` (`cmsFLAGS_GAMUTCHECK`).
     pub fn is_out_of_gamut(&self, src_space: WorkingColorSpace, px: Rgb16) -> bool {
-        let xyz = src_space.rgb16_to_xyz_d50(px.r, px.g, px.b);
-        let lab = xyz_d50_to_lab(xyz);
-        let norm_lab = [
-            (lab[0] / 100.0).clamp(0.0, 1.0),
-            ((lab[1] + 128.0) / 256.0).clamp(0.0, 1.0),
-            ((lab[2] + 128.0) / 256.0).clamp(0.0, 1.0),
-        ];
-        if let Some(gamt) = &self.gamt {
-            let v = gamt.eval(norm_lab)[0];
-            return v > 0.08;
-        }
-        false
+        let Some(xform) = self.gamut_transform(src_space) else {
+            return false;
+        };
+        let out = xform.transform_pixel([px.r, px.g, px.b]);
+        out == [0xDEAD, 0xBEEF, 0xCAFE]
     }
 
-    /// Transforms an entire 16-bit image buffer in-place using `rayon`.
+    /// Transforms an entire 16-bit image buffer in-place using `liblcms2` across `rayon` threads.
     pub fn transform_buffer_in_place(
         &self,
         src_space: WorkingColorSpace,
@@ -731,16 +1077,13 @@ impl IccProfile {
         intent: RenderingIntent,
         black_point_compensation: bool,
     ) {
-        buf.data.par_chunks_exact_mut(3).for_each(|px| {
-            let out = self.transform_pixel(
-                src_space,
-                Rgb16::new(px[0], px[1], px[2]),
-                intent,
-                black_point_compensation,
-            );
-            px[0] = out.r;
-            px[1] = out.g;
-            px[2] = out.b;
+        let Some(xform) = self.device_transform(src_space, intent, black_point_compensation) else {
+            return;
+        };
+        // Process in chunks of 1024 pixels (3072 u16 values) per rayon task so `cmsDoTransform`
+        // amortizes function call overhead across scanlines.
+        buf.data.par_chunks_mut(3 * 1024).for_each(|chunk| {
+            xform.transform_slice_in_place(chunk);
         });
     }
 }
@@ -820,9 +1163,9 @@ impl IccProfile {
         );
     }
 
-    /// Applies a softproof simulation (and optional Out-of-Gamut warning overlay) to `buf`,
-    /// encoding the final simulated print appearance into `dst_display_space`
-    /// (e.g. `DisplayP3`, `AdobeRgb1998`, or `Srgb`).
+    /// Applies a softproof simulation (and optional Out-of-Gamut warning overlay) to `buf`
+    /// using `liblcms2` (`cmsCreateProofingTransformTHR`), encoding the final simulated print
+    /// appearance into `dst_display_space` (`DisplayP3`, `AdobeRgb1998`, or `Srgb`).
     pub fn apply_softproof_to_display(
         &self,
         src_space: WorkingColorSpace,
@@ -836,9 +1179,20 @@ impl IccProfile {
             src_space.convert_buffer_to(buf, dst_display_space);
             return;
         }
-        let warn_rgb16 =
-            WorkingColorSpace::Srgb.convert_pixel_to(proof.gamut_warning_color.to_rgb16(), dst_display_space);
+        let warn_rgb16 = WorkingColorSpace::Srgb
+            .convert_pixel_to(proof.gamut_warning_color.to_rgb16(), dst_display_space);
         let light_mult = proof.viewing_light.white_tint_multipliers();
+        let proof_xform = if proof.enabled {
+            self.proof_transform(ProofKey {
+                src_space,
+                dst_display_space,
+                intent,
+                bpc,
+                simulate_paper_white: proof.simulate_paper_white,
+            })
+        } else {
+            None
+        };
 
         buf.data.par_chunks_exact_mut(3).for_each(|px| {
             let src_px = Rgb16::new(px[0], px[1], px[2]);
@@ -855,99 +1209,55 @@ impl IccProfile {
                 px[2] = out.b;
                 return;
             }
-            let dev_rgb = self.transform_pixel(src_space, src_px, intent, bpc);
-            if let Some(a2b) = self.a2b_for_intent(intent) {
-                let norm_dev = [
-                    f32::from(dev_rgb.r) / 65535.0,
-                    f32::from(dev_rgb.g) / 65535.0,
-                    f32::from(dev_rgb.b) / 65535.0,
-                ];
-                let norm_lab = a2b.eval(norm_dev);
-                let lab = [
-                    norm_lab[0] * 100.0,
-                    norm_lab[1] * 256.0 - 128.0,
-                    norm_lab[2] * 256.0 - 128.0,
-                ];
-                let mut xyz = lab_to_xyz_d50(lab);
-                if proof.simulate_paper_white {
-                    for i in 0..3 {
-                        xyz[i] *= (self.media_white_xyz[i] / D50_XYZ[i]).clamp(0.80, 1.05);
-                    }
+            if let Some(ref xform) = proof_xform {
+                let [r, g, b] = xform.transform_pixel([src_px.r, src_px.g, src_px.b]);
+                if proof.viewing_light == ViewingLight::D65 && !proof.simulate_paper_white {
+                    px[0] = r;
+                    px[1] = g;
+                    px[2] = b;
+                } else {
+                    let rl = dst_display_space.to_linear(f32::from(r) / 65535.0) * light_mult[0];
+                    let gl = dst_display_space.to_linear(f32::from(g) / 65535.0) * light_mult[1];
+                    let bl = dst_display_space.to_linear(f32::from(b) / 65535.0) * light_mult[2];
+                    px[0] = (dst_display_space.from_linear(rl) * 65535.0).round() as u16;
+                    px[1] = (dst_display_space.from_linear(gl) * 65535.0).round() as u16;
+                    px[2] = (dst_display_space.from_linear(bl) * 65535.0).round() as u16;
                 }
-                xyz[0] *= light_mult[0];
-                xyz[1] *= light_mult[1];
-                xyz[2] *= light_mult[2];
-                let disp = dst_display_space.xyz_d50_to_rgb16(xyz);
-                px[0] = disp.r;
-                px[1] = disp.g;
-                px[2] = disp.b;
             } else {
-                px[0] = dev_rgb.r;
-                px[1] = dev_rgb.g;
-                px[2] = dev_rgb.b;
+                let out = self.transform_pixel(src_space, src_px, intent, bpc);
+                px[0] = out.r;
+                px[1] = out.g;
+                px[2] = out.b;
             }
         });
     }
 }
 
-fn read_u16_be(buf: &[u8], off: usize) -> Result<u16, CmsError> {
-    let b = buf.get(off..off + 2).ok_or(CmsError::Truncated(buf.len()))?;
-    Ok(u16::from_be_bytes([b[0], b[1]]))
-}
-
-fn read_u32_be(buf: &[u8], off: usize) -> Result<u32, CmsError> {
-    let b = buf.get(off..off + 4).ok_or(CmsError::Truncated(buf.len()))?;
-    Ok(u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
-}
-
-fn read_s15fixed16(buf: &[u8], off: usize) -> Result<f32, CmsError> {
-    let b = buf.get(off..off + 4).ok_or(CmsError::Truncated(buf.len()))?;
-    let raw = i32::from_be_bytes([b[0], b[1], b[2], b[3]]);
-    Ok((raw as f32) / 65536.0)
-}
-
-fn parse_xyz_tag(tag: &[u8]) -> Result<[f32; 3], CmsError> {
-    if tag.len() < 20 || tag.get(0..4) != Some(b"XYZ ") {
-        return Err(CmsError::InvalidTag("invalid XYZ tag".into()));
+fn fallback_desc_from_bytes(bytes: &[u8]) -> Option<String> {
+    let tag_count = u32::from_be_bytes(bytes.get(128..132)?.try_into().ok()?) as usize;
+    if tag_count > 256 {
+        return None;
     }
-    Ok([
-        read_s15fixed16(tag, 8)?,
-        read_s15fixed16(tag, 12)?,
-        read_s15fixed16(tag, 16)?,
-    ])
-}
-
-fn parse_desc_tag(tag: &[u8]) -> Option<String> {
-    let sig = tag.get(0..4)?;
-    match sig {
-        b"desc" => {
-            let count = read_u32_be(tag, 8).ok()? as usize;
+    for i in 0..tag_count {
+        let entry_off = 132 + i * 12;
+        let sig = bytes.get(entry_off..entry_off + 4)?;
+        if sig != b"desc" {
+            continue;
+        }
+        let off =
+            u32::from_be_bytes(bytes.get(entry_off + 4..entry_off + 8)?.try_into().ok()?) as usize;
+        let len =
+            u32::from_be_bytes(bytes.get(entry_off + 8..entry_off + 12)?.try_into().ok()?) as usize;
+        let tag = bytes.get(off..off.saturating_add(len))?;
+        if tag.get(0..4) == Some(b"desc") {
+            let count = u32::from_be_bytes(tag.get(8..12)?.try_into().ok()?) as usize;
             let end = 12usize.saturating_add(count).min(tag.len());
             let slice = tag.get(12..end)?;
-            let trimmed = slice
-                .iter()
-                .copied()
-                .take_while(|&b| b != 0)
-                .collect::<Vec<u8>>();
-            String::from_utf8(trimmed).ok()
+            let trimmed: Vec<u8> = slice.iter().copied().take_while(|&b| b != 0).collect();
+            return String::from_utf8(trimmed).ok();
         }
-        b"mluc" => {
-            let records = read_u32_be(tag, 8).ok()? as usize;
-            if records == 0 || tag.len() < 28 {
-                return None;
-            }
-            let str_len = read_u32_be(tag, 20).ok()? as usize;
-            let str_off = read_u32_be(tag, 24).ok()? as usize;
-            let utf16_bytes = tag.get(str_off..str_off.saturating_add(str_len))?;
-            let u16s: Vec<u16> = utf16_bytes
-                .chunks_exact(2)
-                .map(|c| u16::from_be_bytes([c[0], c[1]]))
-                .take_while(|&u| u != 0)
-                .collect();
-            String::from_utf16(&u16s).ok()
-        }
-        _ => None,
     }
+    None
 }
 
 #[cfg(test)]
@@ -1017,7 +1327,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_real_epson_sc_p900_icc_profiles_and_transforms_16bit() {
+    fn parses_real_epson_sc_p900_icc_profiles_and_transforms_16bit_via_lcms2() {
         let icc_path = Path::new(
             "/home/rene/Projekte/Spielwiese/Drucker-Epson-SC-P900/Code/Epson-SC-P900-Treiber/extracted/icc/mac_Epson_SC-P900_700_EpsonPremiumGlossy.icc",
         );
@@ -1030,10 +1340,6 @@ mod tests {
             "Description was: {}",
             prof.description
         );
-        assert!(prof.b2a0.is_some());
-        assert!(prof.b2a1.is_some());
-        assert!(prof.a2b1.is_some());
-        assert!(prof.gamt.is_some());
 
         // Transform pure white & pure black
         let white_out = prof.transform_pixel(
@@ -1051,6 +1357,27 @@ mod tests {
             true,
         );
         assert!(black_out.r < 4000 && black_out.g < 4000 && black_out.b < 4000);
+
+        // Gamut check via liblcms2 (CMS_FLAGS_GAMUTCHECK):
+        // Neutral mid-gray is inside printer gamut; hyper-saturated ProPhoto RGB (65535, 0, 65535) is out of gamut.
+        assert!(!prof.is_out_of_gamut(
+            WorkingColorSpace::Srgb,
+            Rgb16::new(32768, 32768, 32768)
+        ));
+        assert!(prof.is_out_of_gamut(
+            WorkingColorSpace::ProPhotoRgb,
+            Rgb16::new(65535, 0, 65535)
+        ));
+
+        // Batch buffer transform via liblcms2
+        let mut print_buf = ImageBuffer16::new_solid(4, 4, Rgb16::WHITE).unwrap();
+        prof.transform_buffer_in_place(
+            WorkingColorSpace::Srgb,
+            &mut print_buf,
+            RenderingIntent::RelativeColorimetric,
+            true,
+        );
+        assert_eq!(print_buf.get_pixel(0, 0).unwrap(), Rgb16::WHITE);
 
         // Softproof test on a 2x2 16-bit buffer
         let mut buf = ImageBuffer16::new_solid(2, 2, Rgb16::new(32768, 16000, 48000)).unwrap();
