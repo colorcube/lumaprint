@@ -24,11 +24,11 @@ use egui::{
 use lumaprint_cms::{RenderingIntent, ViewingLight, WorkingColorSpace};
 use lumaprint_color::{AbwHighlightShift, AbwMidtone, AbwTonePreset, ImageBuffer16, Rgb8};
 use lumaprint_doc::{
-    CanvasBackdropTone, CanvasViewMode, CenteringMode, ColorManagementMode, DisplayColorSpaceMode,
-    ExportColorSpace, ExportFileFormat, ExportSettings, FilmstripPosition, FrameLineSpec,
-    GalleryWrapEffect, GalleryWrapSpec, LayoutMode, LayoutTemplate, MEDIA_TYPES, OutputSharpening,
-    PageListPosition, PaperSource, PrintQuality, PrintScope, SizingCriterion, SlotCaptionMode,
-    StandardLayoutSpec, TemplateLayoutSpec, find_media_type,
+    CanvasBackdropTone, CanvasViewMode, CenteringMode, ColorManagementMode, CropSpec,
+    DisplayColorSpaceMode, ExportColorSpace, ExportFileFormat, ExportSettings, FilmstripPosition,
+    FrameLineSpec, GalleryWrapEffect, GalleryWrapSpec, LayoutMode, LayoutTemplate, MEDIA_TYPES,
+    OutputSharpening, PageListPosition, PaperSource, PrintQuality, PrintScope, SizingCriterion,
+    SlotCaptionMode, StandardLayoutSpec, TemplateLayoutSpec, find_media_type,
 };
 use lumaprint_engine::{EngineCommand, Session, scan_folder_for_images};
 use lumaprint_geom::{
@@ -42,6 +42,7 @@ use std::collections::HashMap;
 use std::path::Path;
 pub use theme::{
     KdeTypography, ThemeKind, Tokens, apply_theme_and_typography, install_kde_system_fonts,
+    parse_kde_globals_tokens,
 };
 
 /// Standard photo & Fine-Art print size presets (`mm`) selectable per image in `"Sammel"` and `"Standard"` modes.
@@ -690,6 +691,19 @@ pub enum PrintJobUiState {
     Error(String),
 }
 
+/// State for interactive `Shift` + handle dragging on the sheet to directly crop or uncrop an image (`TODO #11d`).
+#[derive(Debug, Clone, Copy)]
+pub struct ShiftCropDragState {
+    pub page_index: usize,
+    pub slot_index: usize,
+    pub image_id: u64,
+    pub kind: FreeSlotDragKind,
+    pub start_pointer_mm: (f64, f64),
+    pub initial_rect_mm: RectMm,
+    pub initial_crop: CropSpec,
+    pub rotated_90: bool,
+}
+
 /// Main LumaPrint GUI Application state.
 pub struct LumaPrintApp {
     pub session: Session,
@@ -717,6 +731,7 @@ pub struct LumaPrintApp {
     pub export_path_input: String,
     active_drag: Option<DragPayload>,
     active_std_drag: Option<FreeSlotDragState>,
+    active_shift_crop_drag: Option<ShiftCropDragState>,
     last_drag_pos: Option<Pos2>,
     last_pool_rect: Rect,
     last_canvas_rect: Rect,
@@ -744,7 +759,7 @@ impl Default for LumaPrintApp {
 impl LumaPrintApp {
     pub fn new() -> Self {
         let session = Session::new();
-        let theme_kind = ThemeKind::BreezeDark;
+        let theme_kind = ThemeKind::KdeSystem;
         Self {
             session,
             theme_kind,
@@ -771,6 +786,7 @@ impl LumaPrintApp {
             export_path_input: String::from("/tmp/lumaprint_sheet.tif"),
             active_drag: None,
             active_std_drag: None,
+            active_shift_crop_drag: None,
             last_drag_pos: None,
             last_pool_rect: Rect::NOTHING,
             last_canvas_rect: Rect::NOTHING,
@@ -885,7 +901,7 @@ impl LumaPrintApp {
         }
     }
 
-    /// Renders a draggable Dock title or tab (KDE / JetBrains IDEA style).
+    /// Renders a draggable Dock title or genuine underline tab (`as_tab == true`).
     /// Returns `true` if clicked (or hovered while dragging an image to switch tabs).
     fn draggable_dock_tab(
         &mut self,
@@ -907,24 +923,9 @@ impl LumaPrintApp {
             RichText::new(text).strong().color(t.text)
         };
 
-        let btn = if as_tab {
-            egui::Button::new(rich)
-                .fill(if is_selected {
-                    t.accent.gamma_multiply(0.24)
-                } else {
-                    Color32::TRANSPARENT
-                })
-                .stroke(if is_selected {
-                    Stroke::new(1.0_f32, t.accent)
-                } else {
-                    Stroke::NONE
-                })
-                .sense(Sense::click_and_drag())
-        } else {
-            egui::Button::new(rich)
-                .frame(false)
-                .sense(Sense::click_and_drag())
-        };
+        let btn = egui::Button::new(rich)
+            .frame(false)
+            .sense(Sense::click_and_drag());
 
         let resp = ui
             .add(btn)
@@ -932,6 +933,30 @@ impl LumaPrintApp {
             .on_hover_text(
                 "Mit der Maus ziehen, um das Dock an eine andere Position zu verschieben (Rechtsklick für Menü)",
             );
+
+        if as_tab {
+            let tab_r = resp.rect.expand2(Vec2::new(6.0, 3.0));
+            let top_round = CornerRadius {
+                nw: 4,
+                ne: 4,
+                sw: 0,
+                se: 0,
+            };
+            if is_selected {
+                ui.painter()
+                    .rect_filled(tab_r, top_round, t.accent.gamma_multiply(0.14));
+                ui.painter().line_segment(
+                    [
+                        Pos2::new(tab_r.min.x + 2.0, tab_r.max.y),
+                        Pos2::new(tab_r.max.x - 2.0, tab_r.max.y),
+                    ],
+                    Stroke::new(2.5_f32, t.accent),
+                );
+            } else if resp.hovered() {
+                ui.painter()
+                    .rect_filled(tab_r, top_round, t.hover.gamma_multiply(0.55));
+            }
+        }
 
         if resp.drag_started() || resp.dragged() {
             let payload = DragPayload::DockPanel(item);
@@ -1085,7 +1110,7 @@ impl LumaPrintApp {
     pub fn apply_fine_art_theme(ctx: &Context) {
         ctx.options_mut(|opt| opt.zoom_with_keyboard = false);
         let kde = install_kde_system_fonts(ctx);
-        let _ = apply_theme_and_typography(ctx, ThemeKind::BreezeDark, &kde, 1.0);
+        let _ = apply_theme_and_typography(ctx, ThemeKind::KdeSystem, &kde, 1.0);
     }
 
     fn ensure_theme_and_fonts(&mut self, ctx: &Context) {
@@ -3828,7 +3853,19 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     _ => (false, false),
                 };
 
-                let interact_r = if std_can_resize {
+                let can_shift_crop = self.session.doc.canvas_view_mode == CanvasViewMode::SinglePage
+                    && matches!(
+                        self.session.doc.page_layout(page_index),
+                        LayoutMode::Standard(_)
+                            | LayoutMode::Template(_)
+                            | LayoutMode::FreeComposer(_)
+                    );
+                let shift_held = ui.ctx().input(|i| i.modifiers.shift);
+                let shift_crop_active_here = self
+                    .active_shift_crop_drag
+                    .is_some_and(|d| d.page_index == page_index && d.slot_index == slot.slot_index);
+
+                let interact_r = if std_can_resize || can_shift_crop {
                     img_r.expand(14.0)
                 } else {
                     img_r
@@ -3850,16 +3887,18 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     open_crop_for_id = Some(img_id);
                 }
 
-                // Draw selection frame (+ 8 resize handles in Standard and Sammel layout)
+                // Draw selection frame (+ 8 resize/crop handles in Standard, Sammel, or when holding Shift for crop)
+                let show_handles =
+                    std_can_resize || (shift_held && can_shift_crop) || shift_crop_active_here;
                 if is_active_slot && self.slot_selected {
                     let accent_col = Color32::from_rgb(0, 145, 255);
                     ui.painter().rect_stroke(
                         img_r,
                         CornerRadius::ZERO,
-                        Stroke::new(if std_can_resize { 1.8_f32 } else { 1.5_f32 }, accent_col),
+                        Stroke::new(if show_handles { 1.8_f32 } else { 1.5_f32 }, accent_col),
                         StrokeKind::Middle,
                     );
-                    if std_can_resize {
+                    if show_handles {
                         let hover_pos = ui.ctx().input(|i| i.pointer.hover_pos());
                         draw_resize_handles(ui.painter(), img_r, hover_pos, accent_col);
                     }
@@ -3902,17 +3941,24 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     }
                 }
 
-                // Shift + Left-Click Drag -> pan image inside slot (`pan_x`, `pan_y`) when zoomed or Fill
-                let shift_held = ui.ctx().input(|i| i.modifiers.shift);
-                if std_can_resize && !shift_held {
+                // Hover cursor for resize handles (normal or Shift-crop) and Move
+                if (std_can_resize && !shift_held)
+                    || (shift_held && can_shift_crop)
+                    || shift_crop_active_here
+                {
                     let hover_pos = ui.ctx().input(|i| i.pointer.hover_pos());
-                    let active_or_hover_kind = if let Some(drag) = self.active_std_drag {
+                    let active_or_hover_kind = if let Some(drag) = self.active_shift_crop_drag
+                        && drag.page_index == page_index
+                        && drag.slot_index == slot.slot_index
+                    {
+                        Some(drag.kind)
+                    } else if let Some(drag) = self.active_std_drag {
                         (drag.slot_index == slot.slot_index).then_some(drag.kind)
                     } else if let Some(hpos) = hover_pos
                         && interact_r.contains(hpos)
                     {
                         hit_test_resize_handles(img_r, hpos).or_else(|| {
-                            if std_can_move && img_r.contains(hpos) {
+                            if !shift_held && std_can_move && img_r.contains(hpos) {
                                 Some(FreeSlotDragKind::Move)
                             } else {
                                 None
@@ -3950,7 +3996,110 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 if resp.drag_started() || resp.dragged() {
                     self.session.doc.active_slot_index = slot.slot_index;
                     self.slot_selected = true;
-                    if shift_held {
+
+                    // Start Shift-crop drag when grabbing one of the 8 resize handles while holding Shift
+                    if resp.drag_started()
+                        && shift_held
+                        && can_shift_crop
+                        && scale > 0.01
+                        && self.active_shift_crop_drag.is_none()
+                    {
+                        let origin = ui
+                            .ctx()
+                            .input(|i| i.pointer.press_origin())
+                            .or_else(|| resp.interact_pointer_pos());
+                        if let Some(orig) = origin
+                            && let Some(kind) = hit_test_resize_handles(img_r, orig)
+                            && let Some(img) =
+                                self.session.doc.images.iter().find(|i| i.id == img_id)
+                        {
+                            let start_mm = (
+                                f64::from((orig.x - sheet_rect.min.x) / scale),
+                                f64::from((orig.y - sheet_rect.min.y) / scale),
+                            );
+                            self.active_shift_crop_drag = Some(ShiftCropDragState {
+                                page_index,
+                                slot_index: slot.slot_index,
+                                image_id: img_id,
+                                kind,
+                                start_pointer_mm: start_mm,
+                                initial_rect_mm: slot.image_draw_rect_mm,
+                                initial_crop: img.crop,
+                                rotated_90: slot.rotated_90,
+                            });
+                        }
+                    }
+
+                    if let Some(drag) = self.active_shift_crop_drag
+                        && drag.page_index == page_index
+                        && drag.slot_index == slot.slot_index
+                    {
+                        if resp.dragged()
+                            && scale > 0.01
+                            && let Some(cur_pos) = resp.interact_pointer_pos()
+                        {
+                            let cur_x_mm = f64::from((cur_pos.x - sheet_rect.min.x) / scale);
+                            let cur_y_mm = f64::from((cur_pos.y - sheet_rect.min.y) / scale);
+                            let dx = cur_x_mm - drag.start_pointer_mm.0;
+                            let dy = cur_y_mm - drag.start_pointer_mm.1;
+                            let pw = solved.paper_size_mm.width_mm;
+                            let ph = solved.paper_size_mm.height_mm;
+
+                            let (next_crop, next_rect) = compute_shift_crop_drag(
+                                drag.initial_rect_mm,
+                                drag.initial_crop,
+                                drag.rotated_90,
+                                drag.kind,
+                                dx,
+                                dy,
+                                pw,
+                                ph,
+                            );
+
+                            if !is_active_page {
+                                self.exec(EngineCommand::SelectPage { page_index });
+                            }
+                            self.exec(EngineCommand::SetImageCrop {
+                                image_id: drag.image_id,
+                                crop: next_crop,
+                            });
+
+                            match self.session.doc.page_layout(page_index).clone() {
+                                LayoutMode::Standard(mut std_spec) => {
+                                    std_spec.manual_rect_mm = next_rect;
+                                    std_spec.margins_mm.left_mm = next_rect.x_mm;
+                                    std_spec.margins_mm.top_mm = next_rect.y_mm;
+                                    std_spec.margins_mm.right_mm =
+                                        (pw - next_rect.right_mm()).max(0.0);
+                                    std_spec.margins_mm.bottom_mm =
+                                        (ph - next_rect.bottom_mm()).max(0.0);
+                                    pending_cmd = Some(EngineCommand::SetLayoutMode(
+                                        LayoutMode::Standard(std_spec),
+                                    ));
+                                }
+                                LayoutMode::FreeComposer(_) => {
+                                    let new_size = if drag.rotated_90 {
+                                        SizeMm {
+                                            width_mm: next_rect.height_mm,
+                                            height_mm: next_rect.width_mm,
+                                        }
+                                    } else {
+                                        SizeMm {
+                                            width_mm: next_rect.width_mm,
+                                            height_mm: next_rect.height_mm,
+                                        }
+                                    };
+                                    pending_cmd = Some(EngineCommand::SetComposerSlotSize {
+                                        page_index,
+                                        slot_index: Some(slot.slot_index),
+                                        size_mm: new_size,
+                                        orient_to_image: false,
+                                    });
+                                }
+                                _ => {}
+                            }
+                        }
+                    } else if shift_held {
                         let delta = resp.drag_delta();
                         if delta.length_sq() > 0.01
                             && (slot.uv_rect[2] < 0.999 || slot.uv_rect[3] < 0.999)
@@ -4096,6 +4245,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 }
                 if resp.drag_stopped() {
                     self.active_std_drag = None;
+                    self.active_shift_crop_drag = None;
                 }
 
                 resp.context_menu(|ui| {
@@ -4814,17 +4964,36 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 .strong()
                                 .color(if is_settings { t.text } else { t.text_dim }),
                         )
+                        .corner_radius(CornerRadius {
+                            nw: 4,
+                            ne: 4,
+                            sw: 0,
+                            se: 0,
+                        })
                         .fill(if is_settings {
-                            t.accent.gamma_multiply(0.24)
+                            t.accent.gamma_multiply(0.14)
                         } else {
                             Color32::TRANSPARENT
                         })
-                        .stroke(if is_settings {
-                            Stroke::new(1.0_f32, t.accent)
-                        } else {
-                            Stroke::NONE
-                        });
+                        .stroke(Stroke::NONE);
                         let s_resp = ui.add(settings_btn);
+                        if is_settings {
+                            ui.painter().line_segment(
+                                [
+                                    Pos2::new(s_resp.rect.min.x + 3.0, s_resp.rect.max.y - 1.0),
+                                    Pos2::new(s_resp.rect.max.x - 3.0, s_resp.rect.max.y - 1.0),
+                                ],
+                                Stroke::new(2.5_f32, t.accent),
+                            );
+                        } else if s_resp.hovered() {
+                            ui.painter().line_segment(
+                                [
+                                    Pos2::new(s_resp.rect.min.x + 5.0, s_resp.rect.max.y - 1.0),
+                                    Pos2::new(s_resp.rect.max.x - 5.0, s_resp.rect.max.y - 1.0),
+                                ],
+                                Stroke::new(1.5_f32, t.text_faint),
+                            );
+                        }
                         if s_resp.clicked() {
                             self.right_dock_tab = RightDockTab::Settings;
                         }
@@ -9552,7 +9721,7 @@ enum LayoutTypeIcon {
     FreeComposer,
 }
 
-/// Paints a visual icon tile button for selecting the sheet `LayoutMode` in the right dock.
+/// Paints a flat, frameless visual icon segment for selecting the sheet `LayoutMode` in the right dock.
 fn draw_layout_type_tile(
     ui: &mut Ui,
     tokens: &Tokens,
@@ -9565,20 +9734,13 @@ fn draw_layout_type_tile(
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
 
     let bg = if resp.is_pointer_button_down_on() {
-        tokens.accent.gamma_multiply(0.36)
+        tokens.accent.gamma_multiply(0.28)
     } else if active {
-        tokens.accent.gamma_multiply(0.22)
+        tokens.accent.gamma_multiply(0.16)
     } else if resp.hovered() {
-        tokens.hover
+        tokens.hover.gamma_multiply(0.65)
     } else {
-        tokens.field
-    };
-    let border_stroke = if active {
-        Stroke::new(1.6_f32, tokens.accent)
-    } else if resp.hovered() {
-        Stroke::new(1.2_f32, tokens.accent.gamma_multiply(0.75))
-    } else {
-        Stroke::new(1.0_f32, tokens.field_border)
+        Color32::TRANSPARENT
     };
     let fg = if active {
         tokens.accent
@@ -9594,8 +9756,16 @@ fn draw_layout_type_tile(
     };
 
     let p = ui.painter();
-    p.rect_filled(rect, CornerRadius::same(6), bg);
-    p.rect_stroke(rect, CornerRadius::same(6), border_stroke, StrokeKind::Middle);
+    p.rect_filled(rect, CornerRadius::same(5), bg);
+    if active {
+        p.line_segment(
+            [
+                Pos2::new(rect.min.x + 8.0, rect.max.y - 1.2),
+                Pos2::new(rect.max.x - 8.0, rect.max.y - 1.2),
+            ],
+            Stroke::new(2.2_f32, tokens.accent),
+        );
+    }
 
     let icon_c = Pos2::new(rect.center().x, rect.min.y + 19.0);
     let sheet_stroke = Stroke::new(1.2_f32, fg.gamma_multiply(0.85));
@@ -9714,7 +9884,7 @@ fn draw_layout_type_tile(
     resp
 }
 
-/// Paints a visual icon tile button for selecting `Orientation` (`Hochformat` vs `Querformat`).
+/// Paints a flat, frameless visual icon segment for selecting `Orientation` (`Hochformat` vs `Querformat`).
 fn draw_orientation_tile(
     ui: &mut Ui,
     tokens: &Tokens,
@@ -9726,20 +9896,13 @@ fn draw_orientation_tile(
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
 
     let bg = if resp.is_pointer_button_down_on() {
-        tokens.accent.gamma_multiply(0.36)
+        tokens.accent.gamma_multiply(0.28)
     } else if active {
-        tokens.accent.gamma_multiply(0.22)
+        tokens.accent.gamma_multiply(0.16)
     } else if resp.hovered() {
-        tokens.hover
+        tokens.hover.gamma_multiply(0.65)
     } else {
-        tokens.field
-    };
-    let border_stroke = if active {
-        Stroke::new(1.6_f32, tokens.accent)
-    } else if resp.hovered() {
-        Stroke::new(1.2_f32, tokens.accent.gamma_multiply(0.75))
-    } else {
-        Stroke::new(1.0_f32, tokens.field_border)
+        Color32::TRANSPARENT
     };
     let fg = if active {
         tokens.accent
@@ -9756,7 +9919,15 @@ fn draw_orientation_tile(
 
     let p = ui.painter();
     p.rect_filled(rect, CornerRadius::same(5), bg);
-    p.rect_stroke(rect, CornerRadius::same(5), border_stroke, StrokeKind::Middle);
+    if active {
+        p.line_segment(
+            [
+                Pos2::new(rect.min.x + 8.0, rect.max.y - 1.2),
+                Pos2::new(rect.max.x - 8.0, rect.max.y - 1.2),
+            ],
+            Stroke::new(2.2_f32, tokens.accent),
+        );
+    }
 
     let icon_c = Pos2::new(rect.min.x + 18.0, rect.center().y);
     let sheet_stroke = Stroke::new(1.2_f32, fg.gamma_multiply(0.85));
@@ -9792,7 +9963,7 @@ fn draw_orientation_tile(
     resp
 }
 
-/// Paints a visual icon tile button for selecting `CenteringMode` (`Mitte`, `Horiz.`, `Vert.`, `Frei`).
+/// Paints a flat, frameless visual icon segment for selecting `CenteringMode` (`Mitte`, `Horiz.`, `Vert.`, `Frei`).
 fn draw_centering_tile(
     ui: &mut Ui,
     tokens: &Tokens,
@@ -9804,20 +9975,13 @@ fn draw_centering_tile(
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
 
     let bg = if resp.is_pointer_button_down_on() {
-        tokens.accent.gamma_multiply(0.36)
+        tokens.accent.gamma_multiply(0.28)
     } else if active {
-        tokens.accent.gamma_multiply(0.22)
+        tokens.accent.gamma_multiply(0.16)
     } else if resp.hovered() {
-        tokens.hover
+        tokens.hover.gamma_multiply(0.65)
     } else {
-        tokens.field
-    };
-    let border_stroke = if active {
-        Stroke::new(1.6_f32, tokens.accent)
-    } else if resp.hovered() {
-        Stroke::new(1.2_f32, tokens.accent.gamma_multiply(0.75))
-    } else {
-        Stroke::new(1.0_f32, tokens.field_border)
+        Color32::TRANSPARENT
     };
     let fg = if active {
         tokens.accent
@@ -9834,7 +9998,15 @@ fn draw_centering_tile(
 
     let p = ui.painter();
     p.rect_filled(rect, CornerRadius::same(5), bg);
-    p.rect_stroke(rect, CornerRadius::same(5), border_stroke, StrokeKind::Middle);
+    if active {
+        p.line_segment(
+            [
+                Pos2::new(rect.min.x + 6.0, rect.max.y - 1.2),
+                Pos2::new(rect.max.x - 6.0, rect.max.y - 1.2),
+            ],
+            Stroke::new(2.2_f32, tokens.accent),
+        );
+    }
 
     let icon_c = Pos2::new(rect.center().x, rect.min.y + 17.0);
     let sheet = Rect::from_center_size(icon_c, Vec2::new(20.0, 22.0));
@@ -10267,6 +10439,134 @@ fn compute_std_free_drag_rect(
         next.y_mm = ((ph - next.height_mm) * 0.5).max(0.0);
     }
     next
+}
+
+/// Computes the updated `(CropSpec, RectMm)` when dragging one of the 8 resize handles while holding `Shift`.
+///
+/// - Dragging an edge/corner handle **inward** trims (`crops`) that edge in screen space.
+/// - Dragging an edge/corner handle **outward** restores (`uncrops`) previously cropped image content up to the
+///   original `[0.0..1.0]` source image boundaries and sheet bounds (`paper_w × paper_h`).
+/// - Respects any active 90°/180°/270° rotation and horizontal/vertical flip on the image or slot.
+#[allow(clippy::too_many_arguments)]
+fn compute_shift_crop_drag(
+    init_rect: RectMm,
+    init_crop: CropSpec,
+    rotated_90: bool,
+    kind: FreeSlotDragKind,
+    dx_mm: f64,
+    dy_mm: f64,
+    paper_w: f64,
+    paper_h: f64,
+) -> (CropSpec, RectMm) {
+    let w0 = init_rect.width_mm.max(1.0);
+    let h0 = init_rect.height_mm.max(1.0);
+    let nw0 = init_crop.norm_w.clamp(0.05, 1.0);
+    let nh0 = init_crop.norm_h.clamp(0.05, 1.0);
+    let nx0 = init_crop.norm_x.clamp(0.0, 1.0 - nw0);
+    let ny0 = init_crop.norm_y.clamp(0.0, 1.0 - nh0);
+
+    // Allowed range in unrotated initial-crop-relative coordinates `uc, vc` so `nx, ny` stay in `[0.0, 1.0]`
+    let uc_min = -nx0 / nw0;
+    let uc_max = (1.0 - nx0) / nw0;
+    let vc_min = -ny0 / nh0;
+    let vc_max = (1.0 - ny0) / nh0;
+
+    let total_rot = (init_crop.rotation_deg + if rotated_90 { 90 } else { 0 }) % 360;
+    // Map `uc, vc` bounds back to post-rotation `u_rf, v_rf` bounds
+    let (urf_min, urf_max, vrf_min, vrf_max) = match total_rot {
+        90 => (1.0 - vc_max, 1.0 - vc_min, uc_min, uc_max),
+        180 => (1.0 - uc_max, 1.0 - uc_min, 1.0 - vc_max, 1.0 - vc_min),
+        270 => (vc_min, vc_max, 1.0 - uc_max, 1.0 - uc_min),
+        _ => (uc_min, uc_max, vc_min, vc_max),
+    };
+    // Map `u_rf, v_rf` bounds back to screen-space normalized `su, sv` bounds
+    let (img_su_min, img_su_max) = if init_crop.flip_horizontal {
+        (1.0 - urf_max, 1.0 - urf_min)
+    } else {
+        (urf_min, urf_max)
+    };
+    let (img_sv_min, img_sv_max) = if init_crop.flip_vertical {
+        (1.0 - vrf_max, 1.0 - vrf_min)
+    } else {
+        (vrf_min, vrf_max)
+    };
+
+    // Also clamp to physical sheet boundaries `[0..paper_w, 0..paper_h]`
+    let sheet_su_min = (-init_rect.x_mm / w0).max(img_su_min);
+    let sheet_su_max = ((paper_w - init_rect.x_mm) / w0).min(img_su_max);
+    let sheet_sv_min = (-init_rect.y_mm / h0).max(img_sv_min);
+    let sheet_sv_max = ((paper_h - init_rect.y_mm) / h0).min(img_sv_max);
+
+    let min_su_span = (8.0 / w0).max(0.05 / nw0).min(0.95);
+    let min_sv_span = (8.0 / h0).max(0.05 / nh0).min(0.95);
+
+    let mut su0 = 0.0_f64;
+    let mut su1 = 1.0_f64;
+    let mut sv0 = 0.0_f64;
+    let mut sv1 = 1.0_f64;
+
+    if matches!(
+        kind,
+        FreeSlotDragKind::ResizeW | FreeSlotDragKind::ResizeNW | FreeSlotDragKind::ResizeSW
+    ) {
+        su0 = (dx_mm / w0).clamp(sheet_su_min, (su1 - min_su_span).max(sheet_su_min));
+    }
+    if matches!(
+        kind,
+        FreeSlotDragKind::ResizeE | FreeSlotDragKind::ResizeNE | FreeSlotDragKind::ResizeSE
+    ) {
+        su1 = (1.0 + dx_mm / w0).clamp((su0 + min_su_span).min(sheet_su_max), sheet_su_max);
+    }
+    if matches!(
+        kind,
+        FreeSlotDragKind::ResizeN | FreeSlotDragKind::ResizeNW | FreeSlotDragKind::ResizeNE
+    ) {
+        sv0 = (dy_mm / h0).clamp(sheet_sv_min, (sv1 - min_sv_span).max(sheet_sv_min));
+    }
+    if matches!(
+        kind,
+        FreeSlotDragKind::ResizeS | FreeSlotDragKind::ResizeSW | FreeSlotDragKind::ResizeSE
+    ) {
+        sv1 = (1.0 + dy_mm / h0).clamp((sv0 + min_sv_span).min(sheet_sv_max), sheet_sv_max);
+    }
+
+    // Transform screen `[su0, su1] × [sv0, sv1]` into unrotated source `[nx0..nx1] × [ny0..ny1]`
+    let (urf0, urf1) = if init_crop.flip_horizontal {
+        (1.0 - su1, 1.0 - su0)
+    } else {
+        (su0, su1)
+    };
+    let (vrf0, vrf1) = if init_crop.flip_vertical {
+        (1.0 - sv1, 1.0 - sv0)
+    } else {
+        (sv0, sv1)
+    };
+    let (uc0, uc1, vc0, vc1) = match total_rot {
+        90 => (vrf0, vrf1, 1.0 - urf1, 1.0 - urf0),
+        180 => (1.0 - urf1, 1.0 - urf0, 1.0 - vrf1, 1.0 - vrf0),
+        270 => (1.0 - vrf1, 1.0 - vrf0, urf0, urf1),
+        _ => (urf0, urf1, vrf0, vrf1),
+    };
+
+    let new_nx0 = (nx0 + uc0 * nw0).clamp(0.0, 0.95);
+    let new_nx1 = (nx0 + uc1 * nw0).clamp(new_nx0 + 0.05, 1.0);
+    let new_ny0 = (ny0 + vc0 * nh0).clamp(0.0, 0.95);
+    let new_ny1 = (ny0 + vc1 * nh0).clamp(new_ny0 + 0.05, 1.0);
+
+    let mut next_crop = init_crop;
+    next_crop.norm_x = new_nx0;
+    next_crop.norm_y = new_ny0;
+    next_crop.norm_w = (new_nx1 - new_nx0).clamp(0.05, 1.0 - new_nx0);
+    next_crop.norm_h = (new_ny1 - new_ny0).clamp(0.05, 1.0 - new_ny0);
+
+    let next_rect = RectMm::new(
+        (init_rect.x_mm + su0 * w0).max(0.0),
+        (init_rect.y_mm + sv0 * h0).max(0.0),
+        ((su1 - su0) * w0).max(8.0),
+        ((sv1 - sv0) * h0).max(8.0),
+    );
+
+    (next_crop, next_rect)
 }
 
 /// Paints a clean underline-style tab header (`[ 🖨 Drucken | 💾 Export ]`) with an open bottom edge
@@ -11225,6 +11525,64 @@ mod tests {
             "expected PrintJobUiState::Error on empty sheet, got {:?}",
             app.print_job_ui_state
         );
+
+        // 9. KDE Plasma color scheme parser (`~/.config/kdeglobals`)
+        let sample_kdeglobals = r#"
+[Colors:Window]
+BackgroundNormal=42,46,50
+ForegroundNormal=252,252,252
+ForegroundInactive=161,169,177
+
+[Colors:View]
+BackgroundNormal=27,30,32
+BackgroundAlternate=35,38,41
+DecorationFocus=61,174,233
+
+[Colors:Button]
+BackgroundNormal=49,54,59
+
+[Colors:Selection]
+BackgroundNormal=61,174,233
+"#;
+        let kde_tokens = parse_kde_globals_tokens(sample_kdeglobals)
+            .unwrap_or_else(|| Tokens::for_kind(ThemeKind::BreezeDark));
+        assert!(kde_tokens.is_dark());
+        assert_eq!(kde_tokens.dock, Color32::from_rgb(42, 46, 50));
+        assert_eq!(kde_tokens.field, Color32::from_rgb(27, 30, 32));
+        assert_eq!(kde_tokens.accent, Color32::from_rgb(61, 174, 233));
+
+        // 10. Interactive Shift-Crop handle dragging (inward crop + outward uncrop)
+        let init_rect = RectMm::new(20.0, 30.0, 120.0, 80.0);
+        let init_crop = CropSpec::default();
+        let (cropped, rect_cropped) = compute_shift_crop_drag(
+            init_rect,
+            init_crop,
+            false,
+            FreeSlotDragKind::ResizeE,
+            -30.0,
+            0.0,
+            210.0,
+            297.0,
+        );
+        assert!((cropped.norm_x - 0.0).abs() < 1e-6);
+        assert!((cropped.norm_w - 0.75).abs() < 1e-6);
+        assert!((rect_cropped.x_mm - 20.0).abs() < 1e-6);
+        assert!((rect_cropped.width_mm - 90.0).abs() < 1e-6);
+
+        // Dragging East handle back outward by +30 mm restores (`uncrops`) full width
+        let (uncropped, rect_uncropped) = compute_shift_crop_drag(
+            rect_cropped,
+            cropped,
+            false,
+            FreeSlotDragKind::ResizeE,
+            30.0,
+            0.0,
+            210.0,
+            297.0,
+        );
+        assert!((uncropped.norm_x - 0.0).abs() < 1e-6);
+        assert!((uncropped.norm_w - 1.0).abs() < 1e-6);
+        assert!((rect_uncropped.width_mm - 120.0).abs() < 1e-6);
     }
 }
 
