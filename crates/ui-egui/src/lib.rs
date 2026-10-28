@@ -4817,7 +4817,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                         .on_hover_text("Auftrag an den gewählten CUPS-Drucker senden")
                                         .clicked()
                                     {
-                                        if let Err(e) = self.session.send_print_job_to_printer(360)
+                                        if let Err(e) = self.session.send_print_job_to_printer(720)
                                         {
                                             self.session.status_message =
                                                 format!("Druckfehler: {e}");

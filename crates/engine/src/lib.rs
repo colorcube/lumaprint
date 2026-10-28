@@ -878,8 +878,6 @@ impl Session {
                         self.doc.printer.paper_source = base.default_feed;
                         self.doc.printer.input_slot_key =
                             base.default_feed.cups_slot_code().to_string();
-                        self.doc.printer.detailed.black_enhance_overcoat =
-                            base.supports_black_enhance_overcoat;
                     }
                     self.doc.printer.detailed.bottom_edge_priority = cm.bottom_edge_priority;
                     if let Some(ref icc_path) = cm.icc_profile_path {
@@ -895,8 +893,6 @@ impl Session {
                     self.doc.printer.paper_source = media.default_feed;
                     self.doc.printer.input_slot_key =
                         media.default_feed.cups_slot_code().to_string();
-                    self.doc.printer.detailed.black_enhance_overcoat =
-                        media.supports_black_enhance_overcoat;
                     if let Some(ppd_icc) = self
                         .active_system_printer()
                         .and_then(|sp| sp.capabilities.icc_profile_for_media(media.key))
@@ -2485,6 +2481,12 @@ mod tests {
             session.doc.printer.quality,
             PrintQuality::CarbonBlack5760x1440
         );
+        assert!(!session.doc.printer.detailed.black_enhance_overcoat);
+        let mut det = session.doc.printer.detailed;
+        det.black_enhance_overcoat = true;
+        session
+            .execute(EngineCommand::SetDetailedPrinterSettings(det))
+            .unwrap();
         assert!(session.doc.printer.detailed.black_enhance_overcoat);
 
         session
