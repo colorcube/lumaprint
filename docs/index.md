@@ -24,11 +24,15 @@ Willkommen im Handbuch von **LumaPrint** – dem professionellen, druckerunabhä
    - **Panorama:** Freie Rollenpapier- & Bannerlängen
    - **Gallerie Wrap:** Leinwand-Keilrahmen mit Spiegelkanten, Unschärfe/Schattierung & Schnittmarken
    - **Vorlage:** Multi-Bild-Raster (bis 5×5), Vorlagen-Editor & JSON-Import/Export
-5. **[Farbmanagement, Softproof & Advanced B&W Photo (ABW)](user-guide/color-and-abw.md)**
-   - ICC-Farbmanagement (Rendering Intents, Tiefenkompensation/BPC, Automatische Profilwahl)
+5. **[Grundlagen: Wie Farbräume und Farbprofile beim Drucken funktionieren](user-guide/color-spaces-explained.md)**
+   - Warum RGB nicht gleich RGB ist (`sRGB`, `Adobe RGB`, `Display P3`, `ProPhoto RGB`)
+   - Zwei Wege zum Druck: Drucker-Farbverwaltung (*Epson Print Layout Modus*) vs. Anwendungs-Farbmanagement (*ICC-Papierprofile*)
+   - Wie ICC-Profile für Fremdpapiere auf einem Basis-Medium aufbauen & Rolle des *Epson Media Installers*
+6. **[Farbmanagement, Softproof & Advanced B&W Photo (ABW)](user-guide/color-and-abw.md)**
+   - ICC-Farbmanagement (Rendering Intents, Tiefenkompensation/BPC, Automatische Profilwahl) & Treiber-Farbmodus
    - Interaktiver Softproof mit Papierweiß-Simulation, Lichttemperatur (`D50` / `D65` / `3200K`) & Gamut-Warnung
    - **Advanced B&W Photo (ABW):** 2D-Farbzirkel, Mittelgrauwert, Tonwertkurven & *Spitzlichtniveau verschieben*
-6. **[Profi-Zusatzfunktionen (Composer, Auto-Nesting, Probestreifen)](user-guide/pro-features.md)**
+7. **[Profi-Zusatzfunktionen (Composer, Auto-Nesting, Probestreifen)](user-guide/pro-features.md)**
    - Freies Multi-Bild-Layout & automatisches Papier-Sparen (*Auto-Nesting*)
    - *Probestreifen (Test-Strip)* im 1:1-Originalmaßstab
    - Adaptive Druck-Nachschärfung (*Output Sharpening*) & Passepartout-Signaturtext

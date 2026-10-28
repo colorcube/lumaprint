@@ -1,10 +1,14 @@
 # Farbmanagement, Softproof & Advanced B&W Photo (ABW)
 
-Unter **Farbeinstellungen** (vgl. EPL-Handbuch S. 29–31) arbeitet **LumaPrint** durchgängig mit 16-Bit-Präzision.
+Unter **Farbeinstellungen** (vgl. EPL-Handbuch S. 29–31) arbeitet **LumaPrint** durchgängig mit 16-Bit-Präzision und erhält beim Import den originalen Quellfarbraum jedes Bildes (`sRGB`, `Adobe RGB`, `Display P3`, `ProPhoto RGB`).
+
+> [!TIP]
+> **Hintergrundwissen zu Farbräumen & ICC-Profilen:**
+> Eine leicht verständliche Erklärung, wie Quellfarbräume, ICC-Papierprofile, Fremdpapiere und die druckerinterne Farbverwaltung zusammenspielen, finden Sie im Grundlagen-Kapitel **[Wie Farbräume und Farbprofile beim Drucken funktionieren](color-spaces-explained.md)**.
 
 ## 1. ICC-Profil verwenden (Anwendung verwaltet Farben)
 
-Empfohlen für farbverbindlichen Fine-Art-Druck mit den offiziellen Epson-Profilen (`EE2NE_00..14.ICC`) oder Papierhersteller-Profilen (Hahnemühle, Canson, Ilford, Marrutt):
+Empfohlen für farbverbindlichen Fine-Art-Druck mit den offiziellen Epson-Profilen (`EE2NE_00..14.ICC`) sowie zwingend für alle Drittanbieter-Papiere (Hahnemühle, Photolux, Canson, Ilford, Marrutt):
 - **ICC-Ausgabeprofil:**
   - *Automatische Auswahl:* Verwendet automatisch das dem gewählten Medientyp zugeordnete ICC-Profil.
   - *Manuelle Auswahl:* Beliebiges `.icc` / `.icm`-Profil aus dem Profilverzeichnis.
@@ -14,7 +18,14 @@ Empfohlen für farbverbindlichen Fine-Art-Druck mit den offiziellen Epson-Profil
   - *Sättigung:* Maximiert die Farbsättigung für Grafiken.
   - *Absolut Farbmetrisch:* Simuliert auch den Papierfarbton im Ausdruck (für Proofing).
 
-## 2. Interaktiver Softproof & Gamut-Warnung
+## 2. Treiber-Farbkorrektur (Drucker verwaltet Farben / EPL-Modus)
+
+Komfort-Modus für originale Hersteller-Papiere, bei dem die Farbabstimmung durch die interne Hardware-Farbtabelle des Druckers erfolgt:
+- **Intent / Übergabefarbraum:**
+  - *Adobe RGB (Standard / Automatik in Epson Print Layout):* Übergibt die Bilddaten im großen `Adobe RGB (1998)`-Farbraum an den Drucker (`LUT 0x06` beim Epson SC-P900), sodass gesättigte Blau-, Türkis- und Grüntöne erhalten bleiben.
+  - *sRGB (Epson Standard sRGB):* Übergibt die Bilddaten in `sRGB` (`LUT 0x00`).
+
+## 3. Interaktiver Softproof & Gamut-Warnung
 
 - **Softproof-Ansicht:** Simuliert das gewählte Papier-ICC-Profil live im Bearbeitungsbereich – inklusive des reduzierten Schwarzwerts auf matten Papieren und der **Papierweiß-Färbung**.
 - **Betrachtungs-Lichttemperatur:** Umschaltbar zwischen:
@@ -23,7 +34,7 @@ Empfohlen für farbverbindlichen Fine-Art-Druck mit den offiziellen Epson-Profil
   - `Galerie Warm (3200K)` – Warme Museums-/Wohnraumbeleuchtung
 - **Out-of-Gamut-Warnung:** Markiert Bildpartien, die außerhalb des darstellbaren Farbraums der gewählten Papier-/Tintenkombination liegen, mit einer Warnfarbe.
 
-## 3. Advanced B&W Photo (ABW – Erweiterter Schwarzweiß-Druck, S. 30–31)
+## 4. Advanced B&W Photo (ABW – Erweiterter Schwarzweiß-Druck, S. 30–31)
 
 Konvertiert Farb- oder Graustufenbilder in neutrale oder fein getonte Schwarzweiß-Prints unter Ausnutzung der 3 Schwarztinten (`PK`/`MK`, `LK` Gray, `LLK` Light Gray):
 - **Farbton-Presets:** *Neutral*, *Kühl*, *Warm*, *Sepia* oder *Feineinstellung*.
