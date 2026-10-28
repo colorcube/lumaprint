@@ -322,6 +322,11 @@ pub enum EngineCommand {
         norm_rect: [f64; 4],
     },
     SetColorMode(ColorManagementMode),
+    SetColorAdvancedMode(bool),
+    SetIccProfileSelection {
+        auto_select: bool,
+        custom_path: Option<String>,
+    },
     SetRenderingIntent(RenderingIntent),
     SetBlackPointCompensation(bool),
     SetAbwPreset(AbwTonePreset),
@@ -669,6 +674,36 @@ impl Session {
         self.icc_profiles.values().next()
     }
 
+    /// Returns a deduplicated, sorted list of `(profile_key, description)` for manual ICC profile selection.
+    pub fn available_icc_profile_list(&self) -> Vec<(String, String)> {
+        let mut by_desc: HashMap<String, String> = HashMap::new();
+        for (key, prof) in &self.icc_profiles {
+            let desc = if prof.description.trim().is_empty() {
+                key.clone()
+            } else {
+                prof.description.clone()
+            };
+            by_desc
+                .entry(desc)
+                .and_modify(|existing_key| {
+                    // Prefer human-readable basenames over full filesystem paths or win_EE2NE names
+                    let is_better = !key.contains('/')
+                        && !key.starts_with("win_")
+                        && (existing_key.contains('/') || existing_key.starts_with("win_"));
+                    if is_better {
+                        *existing_key = key.clone();
+                    }
+                })
+                .or_insert_with(|| key.clone());
+        }
+        let mut list: Vec<(String, String)> = by_desc
+            .into_iter()
+            .map(|(desc, key)| (key, desc))
+            .collect();
+        list.sort_by_key(|a| a.1.to_lowercase());
+        list
+    }
+
     /// Executes a typed `EngineCommand`, recording Undo state and enforcing constraints.
     pub fn execute(&mut self, cmd: EngineCommand) -> Result<(), EngineError> {
         self.doc.sync_active_page_to_list();
@@ -883,11 +918,28 @@ impl Session {
                     if let Some(ref icc_path) = cm.icc_profile_path {
                         self.ensure_icc_loaded(icc_path);
                     }
-                    self.apply_media_constraints();
-                    self.status_message = format!(
-                        "Custom-Medium '{}' (Basis: {}, Slot: {}) gewählt.",
-                        cm.name, cm.base_media_key, cm.user_media_id
-                    );
+                    if !self.doc.color.advanced_mode
+                        && matches!(
+                            self.doc.color.mode,
+                            ColorManagementMode::PrinterManagesColor { .. }
+                        )
+                    {
+                        self.doc.color.mode = ColorManagementMode::UseIccProfile;
+                        self.doc.color.auto_select_icc_for_media = true;
+                        self.doc.color.rendering_intent = RenderingIntent::RelativeColorimetric;
+                        self.doc.color.black_point_compensation = true;
+                        self.apply_media_constraints();
+                        self.status_message = format!(
+                            "Custom-Medium '{}' gewählt (für Fremdpapier automatisch auf ICC-Papierprofil umgeschaltet).",
+                            cm.name
+                        );
+                    } else {
+                        self.apply_media_constraints();
+                        self.status_message = format!(
+                            "Custom-Medium '{}' (Basis: {}, Slot: {}) gewählt.",
+                            cm.name, cm.base_media_key, cm.user_media_id
+                        );
+                    }
                 } else if let Some(media) = find_media_type(&key) {
                     self.doc.printer.media_key = media.key.to_string();
                     self.doc.printer.paper_source = media.default_feed;
@@ -986,6 +1038,17 @@ impl Session {
                 }
                 self.doc.printer.media_key = cm.key.clone();
                 self.doc.user_backup.custom_media.push(cm);
+                if !self.doc.color.advanced_mode
+                    && matches!(
+                        self.doc.color.mode,
+                        ColorManagementMode::PrinterManagesColor { .. }
+                    )
+                {
+                    self.doc.color.mode = ColorManagementMode::UseIccProfile;
+                    self.doc.color.auto_select_icc_for_media = true;
+                    self.doc.color.rendering_intent = RenderingIntent::RelativeColorimetric;
+                    self.doc.color.black_point_compensation = true;
+                }
                 self.apply_media_constraints();
             }
             EngineCommand::SetLayoutMode(mode) => {
@@ -1654,6 +1717,70 @@ impl Session {
             }
             EngineCommand::SetColorMode(mode) => {
                 self.doc.color.mode = mode;
+                if !self.doc.color.advanced_mode {
+                    match self.doc.color.mode {
+                        ColorManagementMode::UseIccProfile => {
+                            self.doc.color.auto_select_icc_for_media = true;
+                            self.doc.color.rendering_intent = RenderingIntent::RelativeColorimetric;
+                            self.doc.color.black_point_compensation = true;
+                        }
+                        ColorManagementMode::PrinterManagesColor { .. } => {
+                            self.doc.color.mode = ColorManagementMode::PrinterManagesColor {
+                                space: WorkingColorSpace::AdobeRgb1998,
+                            };
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            EngineCommand::SetColorAdvancedMode(advanced) => {
+                self.doc.color.advanced_mode = advanced;
+                if !advanced {
+                    // Normal mode: enforce clean automatic defaults
+                    self.doc.color.auto_select_icc_for_media = true;
+                    self.doc.color.rendering_intent = RenderingIntent::RelativeColorimetric;
+                    self.doc.color.black_point_compensation = true;
+                    let is_custom_media = self.find_custom_media(&self.doc.printer.media_key).is_some();
+                    match self.doc.color.mode {
+                        ColorManagementMode::PrinterManagesColor { .. } => {
+                            if is_custom_media || self.doc.color.softproof.enabled {
+                                self.doc.color.mode = ColorManagementMode::UseIccProfile;
+                            } else {
+                                self.doc.color.mode = ColorManagementMode::PrinterManagesColor {
+                                    space: WorkingColorSpace::AdobeRgb1998,
+                                };
+                            }
+                        }
+                        ColorManagementMode::AdvancedBwPhoto
+                        | ColorManagementMode::NoColorAdjustment
+                        | ColorManagementMode::Grayscale
+                        | ColorManagementMode::Vibrant => {
+                            self.doc.color.mode = ColorManagementMode::UseIccProfile;
+                        }
+                        ColorManagementMode::UseIccProfile => {}
+                    }
+                }
+            }
+            EngineCommand::SetIccProfileSelection {
+                auto_select,
+                custom_path,
+            } => {
+                self.doc.color.auto_select_icc_for_media = auto_select;
+                if let Some(path) = custom_path {
+                    self.ensure_icc_loaded(&path);
+                    self.doc.color.custom_icc_profile_path = Some(path.clone());
+                    // Also link to currently active CustomMediaSpec if it didn't have an ICC profile yet
+                    let cur_key = self.doc.printer.media_key.clone();
+                    if let Some(cm) = self.doc.user_backup.custom_media.iter_mut().find(|cm| {
+                        (!cm.key.is_empty() && cm.key.eq_ignore_ascii_case(&cur_key))
+                            || cm.name.eq_ignore_ascii_case(&cur_key)
+                    }) {
+                        if cm.icc_profile_path.is_none() {
+                            cm.icc_profile_path = Some(path.clone());
+                        }
+                    }
+                    self.status_message = format!("ICC-Profil '{}' geladen.", path);
+                }
             }
             EngineCommand::SetRenderingIntent(intent) => {
                 self.doc.color.rendering_intent = intent;
@@ -1671,7 +1798,23 @@ impl Session {
                 self.doc.color.abw = abw;
             }
             EngineCommand::SetSoftproof(sp) => {
+                let turned_on = sp.enabled && !self.doc.color.softproof.enabled;
                 self.doc.color.softproof = sp;
+                if turned_on
+                    && !self.doc.color.advanced_mode
+                    && matches!(
+                        self.doc.color.mode,
+                        ColorManagementMode::PrinterManagesColor { .. }
+                    )
+                {
+                    self.doc.color.mode = ColorManagementMode::UseIccProfile;
+                    self.doc.color.auto_select_icc_for_media = true;
+                    self.doc.color.rendering_intent = RenderingIntent::RelativeColorimetric;
+                    self.doc.color.black_point_compensation = true;
+                    self.status_message = String::from(
+                        "Softproof aktiviert: Für farbverbindliche Vorschau automatisch auf ICC-Papierprofil umgeschaltet.",
+                    );
+                }
             }
             EngineCommand::SetOutputSharpening(sh) => {
                 self.doc.color.output_sharpening = sh;
@@ -2731,5 +2874,81 @@ mod tests {
             .flatten()
             .count();
         assert_eq!(p0_after, 5);
+    }
+
+    #[test]
+    fn test_color_normal_vs_advanced_mode_and_custom_media_safeguards() {
+        let mut session = Session::new();
+        assert!(!session.doc.color.advanced_mode);
+
+        // In Normal mode, switching to PrinterManagesColor forces AdobeRgb1998
+        session
+            .execute(EngineCommand::SetColorMode(
+                ColorManagementMode::PrinterManagesColor {
+                    space: WorkingColorSpace::Srgb,
+                },
+            ))
+            .unwrap();
+        assert_eq!(
+            session.doc.color.mode,
+            ColorManagementMode::PrinterManagesColor {
+                space: WorkingColorSpace::AdobeRgb1998,
+            }
+        );
+
+        // Selecting a Custom Media while in Normal + PrinterManagesColor auto-switches to UseIccProfile
+        session
+            .execute(EngineCommand::AddCustomMedia(CustomMediaSpec {
+                key: "custom_hahnemuehle_photo_rag".into(),
+                name: "Hahnemühle Photo Rag 308".into(),
+                base_media_key: "VelvetFineArt".into(),
+                icc_profile_path: Some("HFA_EpsSC-P900_PhotoRag308.icc".into()),
+                ..CustomMediaSpec::default()
+            }))
+            .unwrap();
+        assert_eq!(session.doc.color.mode, ColorManagementMode::UseIccProfile);
+        assert_eq!(
+            session.doc.color.rendering_intent,
+            lumaprint_cms::RenderingIntent::RelativeColorimetric
+        );
+        assert!(session.doc.color.black_point_compensation);
+
+        // Enabling Softproof while in Normal + PrinterManagesColor also switches to UseIccProfile
+        session
+            .execute(EngineCommand::SetMediaKey("PremiumGlossy".into()))
+            .unwrap();
+        session
+            .execute(EngineCommand::SetColorMode(
+                ColorManagementMode::PrinterManagesColor {
+                    space: WorkingColorSpace::AdobeRgb1998,
+                },
+            ))
+            .unwrap();
+        session
+            .execute(EngineCommand::SetSoftproof(lumaprint_cms::SoftproofConfig {
+                enabled: true,
+                ..Default::default()
+            }))
+            .unwrap();
+        assert_eq!(session.doc.color.mode, ColorManagementMode::UseIccProfile);
+
+        // Switching to Erweitert allows AdvancedBwPhoto, and switching back to Normal resets to UseIccProfile
+        session
+            .execute(EngineCommand::SetColorAdvancedMode(true))
+            .unwrap();
+        assert!(session.doc.color.advanced_mode);
+        session
+            .execute(EngineCommand::SetColorMode(
+                ColorManagementMode::AdvancedBwPhoto,
+            ))
+            .unwrap();
+        assert_eq!(session.doc.color.mode, ColorManagementMode::AdvancedBwPhoto);
+
+        session
+            .execute(EngineCommand::SetColorAdvancedMode(false))
+            .unwrap();
+        assert!(!session.doc.color.advanced_mode);
+        assert_eq!(session.doc.color.mode, ColorManagementMode::UseIccProfile);
+        assert!(session.doc.color.auto_select_icc_for_media);
     }
 }

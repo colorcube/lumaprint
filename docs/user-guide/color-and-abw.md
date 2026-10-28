@@ -1,40 +1,80 @@
 # Farbmanagement, Softproof & Advanced B&W Photo (ABW)
 
-Unter **Farbeinstellungen** (vgl. EPL-Handbuch S. 29–31) arbeitet **LumaPrint** durchgängig mit 16-Bit-Präzision und erhält beim Import den originalen Quellfarbraum jedes Bildes (`sRGB`, `Adobe RGB`, `Display P3`, `ProPhoto RGB`).
+Unter **3. Farbeinstellungen** (vgl. EPL-Handbuch S. 29–31) arbeitet **LumaPrint** durchgängig mit 16-Bit-Präzision und erhält beim Import den originalen Quellfarbraum jedes Bildes (`sRGB`, `Adobe RGB`, `Display P3`, `ProPhoto RGB`).
 
 > [!TIP]
 > **Hintergrundwissen zu Farbräumen & ICC-Profilen:**
 > Eine leicht verständliche Erklärung, wie Quellfarbräume, ICC-Papierprofile, Fremdpapiere und die druckerinterne Farbverwaltung zusammenspielen, finden Sie im Grundlagen-Kapitel **[Wie Farbräume und Farbprofile beim Drucken funktionieren](color-spaces-explained.md)**.
 
-## 1. ICC-Profil verwenden (Anwendung verwaltet Farben)
+---
 
-Empfohlen für farbverbindlichen Fine-Art-Druck mit den offiziellen Epson-Profilen (`EE2NE_00..14.ICC`) sowie zwingend für alle Drittanbieter-Papiere (Hahnemühle, Photolux, Canson, Ilford, Marrutt):
-- **ICC-Ausgabeprofil:**
-  - *Automatische Auswahl:* Verwendet automatisch das dem gewählten Medientyp zugeordnete ICC-Profil.
-  - *Manuelle Auswahl:* Beliebiges `.icc` / `.icm`-Profil aus dem Profilverzeichnis.
-- **Rendering Intent:**
-  - *Wahrnehmung (Perceptual):* Komprimiert den gesamten Farbumfang harmonisch (ideal für kontrastreiche Landschafts- und Porträtfotos).
-  - *Relativ Farbmetrisch:* Bildet Farben innerhalb des Drucker-Gamuts exakt ab und verschiebt den Weißpunkt auf das Papierweiß (Standard für Fine-Art mit aktivierter **Tiefenkompensation / BPC**).
+## 1. Ansichts-Umschalter: `Normal` vs. `Erweitert`
+
+Damit die Farbeinstellungen im Alltag übersichtlich bleiben und Fehlkonfigurationen ausgeschlossen sind, bietet der Abschnitt **3. Farbeinstellungen** zwei Ansichten:
+
+### Ansicht `Normal` (Standard)
+Reduziert die Oberfläche auf die beiden wichtigsten Farb-Workflows und wählt alle technischen Detailparameter automatisch:
+- **Farbmodus-Auswahl:**
+  1. **`Farbverbindlich (ICC-Papierprofil)`** *(Standard)*:
+     - Wählt automatisch das zum eingestellten Papier gehörende ICC-Profil aus.
+     - Setzt im Hintergrund automatisch **Relativ Farbmetrisch** + **Tiefenkompensierung (BPC)** sowie `NoColorAdjustment` im Druckertreiber.
+  2. **`Drucker-Automatik (Epson Print Layout)`**:
+     - Übergibt das Bild automatisch im großen **`Adobe RGB (1998)`**-Farbraum (`LUT 0x06`) an den Druckertreiber.
+- **Druck-Schärfung:** Direkt wählbar (`Aus`, `Niedrig`, `Standard`, `Hoch`).
+- **Automatische Schutzfunktionen im Normalmodus:**
+  - Wird ein **Fremdpapier (Custom Media)** ausgewählt, schaltet LumaPrint automatisch auf **`Farbverbindlich (ICC-Papierprofil)`** um, da der Drucker Fremdpapiere intern nicht kennt.
+  - Wird in der oberen Werkzeugleiste **`👁 Softproof`** eingeschaltet, wechselt LumaPrint ebenfalls automatisch auf **`Farbverbindlich (ICC-Papierprofil)`**, damit Bildschirm-Simulation und späterer Ausdruck übereinstimmen.
+
+### Ansicht `Erweitert`
+Schaltet sämtliche Detail- und Spezialwerkzeuge frei:
+- Alle **4 Farbmodi** im Dropdown:
+  1. `Farbverbindlich (ICC-Papierprofil)`
+  2. `Drucker-Automatik (Epson Print Layout)`
+  3. `Schwarzweiß (Advanced B&W)`
+  4. `Kalibrierung (Kein Farbmanagement)`
+- **ICC-Profilwahl (`Automatisch` vs. `Manuell`):** Erlaubt die freie Auswahl jedes erkannten Profils oder das Laden einer beliebigen `.icc`- / `.icm`-Datei über den Dateidialog (`📂`).
+- **Manueller Rendering Intent & Tiefenkompensierung (BPC)**.
+- **Übergabefarbraum (`Adobe RGB` vs. `sRGB`)** im Modus `Drucker-Automatik`.
+- **Treiber-Status-Anzeige:** Zeigt transparent an, welches CUPS-Kommando (`EpsonColorMode=NoColorAdjustment`, `EpsonAdobeRGB` etc.) an den Treiber gesendet wird.
+
+---
+
+## 2. Farbverbindlich (ICC-Papierprofil)
+
+Empfohlen für farbverbindlichen Fine-Art-Druck mit den offiziellen Hersteller-Profilen (`EE2NE_00..14.ICC`) sowie **zwingend für alle Drittanbieter-Papiere** (Hahnemühle, Photolux, Canson, Ilford, Marrutt):
+- **ICC-Profilwahl:**
+  - *Automatisch:* Verwendet automatisch das dem gewählten Medientyp (oder Custom-Medium) zugeordnete ICC-Profil.
+  - *Manuell (in der Ansicht `Erweitert`):* Auswahl aus allen installierten Profilen oder direktes Laden einer `.icc`/`.icm`-Datei per Dateidialog (`📂`).
+- **Rendering Intent (in der Ansicht `Erweitert` manuell wählbar, in `Normal` automatisch *Relativ Farbmetrisch + BPC*):**
+  - *Relativ Farbmetrisch:* Bildet Farben innerhalb des Drucker-Gamuts exakt ab und verschiebt den Weißpunkt auf das Papierweiß (Standard für Fine-Art mit aktivierter **Tiefenkompensierung / BPC**).
+  - *Wahrnehmung (Perceptual):* Komprimiert den gesamten Farbumfang harmonisch (ideal für Motive mit extrem gesättigten Out-of-Gamut-Farben).
   - *Sättigung:* Maximiert die Farbsättigung für Grafiken.
-  - *Absolut Farbmetrisch:* Simuliert auch den Papierfarbton im Ausdruck (für Proofing).
+  - *Absolut Farbmetrisch:* Simuliert auch den Papierfarbton im Ausdruck (für Prüfdrucke/Proofing).
 
-## 2. Treiber-Farbkorrektur (Drucker verwaltet Farben / EPL-Modus)
+---
 
-Komfort-Modus für originale Hersteller-Papiere, bei dem die Farbabstimmung durch die interne Hardware-Farbtabelle des Druckers erfolgt:
-- **Intent / Übergabefarbraum:**
-  - *Adobe RGB (Standard / Automatik in Epson Print Layout):* Übergibt die Bilddaten im großen `Adobe RGB (1998)`-Farbraum an den Drucker (`LUT 0x06` beim Epson SC-P900), sodass gesättigte Blau-, Türkis- und Grüntöne erhalten bleiben.
-  - *sRGB (Epson Standard sRGB):* Übergibt die Bilddaten in `sRGB` (`LUT 0x00`).
+## 3. Drucker-Automatik (Epson Print Layout)
 
-## 3. Interaktiver Softproof & Gamut-Warnung
+Komfort-Modus für originale Hersteller-Papiere, bei dem die Farbabstimmung durch die interne Farbtabelle des Druckertreibers erfolgt:
+- **Übergabefarbraum (in `Normal` automatisch *Adobe RGB*, in `Erweitert` umschaltbar):**
+  - *Adobe RGB (EPL Automatisch / Empfohlen):* Übergibt die Bilddaten im großen `Adobe RGB (1998)`-Farbraum an den Druckertreiber (`LUT 0x06` beim Epson SC-P900), sodass gesättigte Blau-, Türkis- und Grüntöne erhalten bleiben.
+  - *sRGB (EPSON Standard):* Übergibt die Bilddaten im kleineren `sRGB`-Farbraum (`LUT 0x00`).
 
-- **Softproof-Ansicht:** Simuliert das gewählte Papier-ICC-Profil live im Bearbeitungsbereich – inklusive des reduzierten Schwarzwerts auf matten Papieren und der **Papierweiß-Färbung**.
+---
+
+## 4. Interaktiver Softproof & Monitor-Farbmanagement
+
+- **Softproof-Ansicht (Obere Leiste):** Simuliert das gewählte Papier-ICC-Profil live im Bearbeitungsbereich – inklusive des reduzierten Schwarzwerts auf matten Papieren und der **Papierweiß-Färbung**.
 - **Betrachtungs-Lichttemperatur:** Umschaltbar zwischen:
   - `D50 (5000K)` – Druckerei-/Normlicht
   - `D65 (6500K)` – Tageslicht / Monitor-Standard
   - `Galerie Warm (3200K)` – Warme Museums-/Wohnraumbeleuchtung
 - **Out-of-Gamut-Warnung:** Markiert Bildpartien, die außerhalb des darstellbaren Farbraums der gewählten Papier-/Tintenkombination liegen, mit einer Warnfarbe.
+- **Monitor-Farbraum & Wayland / KWin (`Einstellungen`-Menü oben):** Die globale Konfiguration des Monitor-Farbraums (`Automatisch Wayland`, `Display P3`, `Adobe RGB`, `sRGB`) sowie der Live-Status des Wayland-Farbmanagement-Protokolls (`wp_color_manager_v1`) befinden sich im oberen Menü **Einstellungen**.
 
-## 4. Advanced B&W Photo (ABW – Erweiterter Schwarzweiß-Druck, S. 30–31)
+---
+
+## 5. Schwarzweiß (Advanced B&W Photo — Ansicht `Erweitert`)
 
 Konvertiert Farb- oder Graustufenbilder in neutrale oder fein getonte Schwarzweiß-Prints unter Ausnutzung der 3 Schwarztinten (`PK`/`MK`, `LK` Gray, `LLK` Light Gray):
 - **Farbton-Presets:** *Neutral*, *Kühl*, *Warm*, *Sepia* oder *Feineinstellung*.

@@ -351,6 +351,7 @@ enum DragPayload {
 enum NativeDialogResult {
     AddPaths(Vec<std::path::PathBuf>),
     ExportPrintFile(std::path::PathBuf),
+    SelectIccProfile(std::path::PathBuf),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1403,6 +1404,52 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         });
     }
 
+    fn open_native_icc_picker(&mut self) {
+        if self.dialog_rx.is_some() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.dialog_rx = Some(rx);
+        let start_dir = self
+            .session
+            .icc_search_dirs
+            .iter()
+            .find(|d| d.exists())
+            .map(|d| d.to_string_lossy().into_owned())
+            .unwrap_or_else(default_dialog_start_dir);
+        std::thread::spawn(move || {
+            let out = std::process::Command::new("kdialog")
+                .args([
+                    "--title",
+                    "ICC-Papierprofil auswählen",
+                    "--getopenfilename",
+                    &start_dir,
+                    "ICC-Farbprofile (*.icc *.icm *.ICC *.ICM)|Alle Dateien (*)",
+                ])
+                .output()
+                .or_else(|_| {
+                    std::process::Command::new("zenity")
+                        .args([
+                            "--file-selection",
+                            "--title=ICC-Papierprofil auswählen",
+                            "--file-filter=ICC-Farbprofile (*.icc, *.icm) | *.icc *.icm *.ICC *.ICM",
+                            "--file-filter=Alle Dateien | *",
+                        ])
+                        .output()
+                });
+            if let Ok(output) = out {
+                if output.status.success() {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    if let Some(target) = stdout.lines().map(str::trim).find(|s| !s.is_empty()) {
+                        let _ = tx.send(NativeDialogResult::SelectIccProfile(
+                            std::path::PathBuf::from(target),
+                        ));
+                    }
+                }
+            }
+        });
+    }
+
     fn poll_native_dialog(&mut self, ctx: &Context) {
         let Some(ref rx) = self.dialog_rx else {
             return;
@@ -1438,6 +1485,13 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 self.session.status_message = format!("Export-Fehler: {e}");
                             }
                         }
+                    }
+                    NativeDialogResult::SelectIccProfile(path) => {
+                        let p_str = path.to_string_lossy().into_owned();
+                        self.exec(EngineCommand::SetIccProfileSelection {
+                            auto_select: false,
+                            custom_path: Some(p_str),
+                        });
                     }
                 }
             }
@@ -2268,6 +2322,45 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 self.session.doc.canvas_backdrop = tone;
                                 ui.close_menu();
                             }
+                        }
+                        ui.separator();
+                        ui.label(
+                            RichText::new("Monitor-Farbmanagement (Wayland / KWin)").strong(),
+                        );
+                        let cur_disp = self.session.doc.color.display_color_space;
+                        for dm in DisplayColorSpaceMode::ALL {
+                            if ui.radio(cur_disp == dm, dm.label_de()).clicked() {
+                                self.exec(EngineCommand::SetDisplayColorSpace(dm));
+                                self.sync_wayland_color_management();
+                                ui.close_menu();
+                            }
+                        }
+                        #[cfg(target_os = "linux")]
+                        {
+                            let wl_status = wayland_color_management_status();
+                            let (badge_text, badge_col) = if wl_status.protocol_supported {
+                                let mon_str = match wl_status.monitor_detected_gamut {
+                                    WaylandDetectedGamut::AdobeRgb => "Adobe RGB Monitor erkannt",
+                                    WaylandDetectedGamut::DisplayP3 => {
+                                        "Wide-Gamut (Display P3) erkannt"
+                                    }
+                                    WaylandDetectedGamut::Srgb => "Standard sRGB erkannt",
+                                    WaylandDetectedGamut::Unknown => "wp_color_manager_v1 aktiv",
+                                };
+                                let icc_str = if wl_status.monitor_has_icc_profile {
+                                    " + ICC"
+                                } else {
+                                    ""
+                                };
+                                let active_str = self.session.doc.color.resolved_display_space.name();
+                                (
+                                    format!("✓ {mon_str}{icc_str} → {active_str}"),
+                                    Color32::from_rgb(80, 215, 130),
+                                )
+                            } else {
+                                (String::from("sRGB (Standard-Oberfläche)"), t.text_dim)
+                            };
+                            ui.label(RichText::new(badge_text).small().color(badge_col));
                         }
                     });
 
@@ -4856,7 +4949,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
                         self.draw_dock_section(
                             ui,
-                            "3. Farbeinstellungen & ABW",
+                            "3. Farbeinstellungen",
                             true,
                             |app, ui| {
                                 app.draw_color_settings_section(ui);
@@ -6340,149 +6433,376 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
     fn draw_color_settings_section(&mut self, ui: &mut Ui) {
         let t = self.tokens;
         let cur_mode = self.session.doc.color.mode.clone();
+        let advanced = self.session.doc.color.advanced_mode;
         let mut sharp = self.session.doc.color.output_sharpening;
+
+        fn truncate_text(s: &str, max_chars: usize) -> String {
+            let count = s.chars().count();
+            if count <= max_chars {
+                s.to_string()
+            } else {
+                let prefix: String = s.chars().take(max_chars.saturating_sub(1)).collect();
+                format!("{prefix}…")
+            }
+        }
+
+        fn icc_file_display(p: &lumaprint_cms::IccProfile) -> String {
+            p.file_path
+                .as_ref()
+                .map(|pb| pb.display().to_string())
+                .unwrap_or_else(|| String::from("(integriert / synthetisch)"))
+        }
 
         egui::Grid::new("grid_color_top")
             .num_columns(2)
             .spacing([14.0, 10.0])
             .min_col_width(130.0)
             .show(ui, |ui| {
+                ui.label(RichText::new("Ansicht:").color(t.text_dim));
+                ui.horizontal(|ui| {
+                    if ui
+                        .selectable_label(!advanced, "Normal")
+                        .on_hover_text(
+                            "Vereinfachte Ansicht mit optimalen Standardwerten (Relativ Farbmetrisch + Tiefenkompensierung bzw. Adobe RGB).",
+                        )
+                        .clicked()
+                        && advanced
+                    {
+                        self.exec(EngineCommand::SetColorAdvancedMode(false));
+                    }
+                    if ui
+                        .selectable_label(advanced, "Erweitert")
+                        .on_hover_text(
+                            "Erweiterte Steuerung für manuelle ICC-Profilwahl, Rendering Intent, Schwarzweiß (ABW) und Kalibrierungs-Rohdruck.",
+                        )
+                        .clicked()
+                        && !advanced
+                    {
+                        self.exec(EngineCommand::SetColorAdvancedMode(true));
+                    }
+                });
+                ui.end_row();
+
                 ui.label(RichText::new("Farbmodus:").color(t.text_dim));
                 egui::ComboBox::from_id_salt("color_mode_combo")
-                    .selected_text(cur_mode.label_de())
+                    .selected_text(truncate_text(cur_mode.label_de(), 34))
                     .width(245.0)
                     .show_ui(ui, |ui| {
-                        for m in [
-                            ColorManagementMode::UseIccProfile,
-                            ColorManagementMode::PrinterManagesColor {
-                                space: lumaprint_cms::WorkingColorSpace::AdobeRgb1998,
-                            },
-                            ColorManagementMode::AdvancedBwPhoto,
-                            ColorManagementMode::Vibrant,
-                            ColorManagementMode::NoColorAdjustment,
-                        ] {
+                        let modes: &[ColorManagementMode] = if advanced {
+                            &[
+                                ColorManagementMode::UseIccProfile,
+                                ColorManagementMode::PrinterManagesColor {
+                                    space: lumaprint_cms::WorkingColorSpace::AdobeRgb1998,
+                                },
+                                ColorManagementMode::AdvancedBwPhoto,
+                                ColorManagementMode::NoColorAdjustment,
+                            ]
+                        } else {
+                            &[
+                                ColorManagementMode::UseIccProfile,
+                                ColorManagementMode::PrinterManagesColor {
+                                    space: lumaprint_cms::WorkingColorSpace::AdobeRgb1998,
+                                },
+                            ]
+                        };
+                        for m in modes {
                             let is_sel =
-                                std::mem::discriminant(&m) == std::mem::discriminant(&cur_mode);
+                                std::mem::discriminant(m) == std::mem::discriminant(&cur_mode);
                             if ui.selectable_label(is_sel, m.label_de()).clicked() {
-                                self.exec(EngineCommand::SetColorMode(m));
+                                self.exec(EngineCommand::SetColorMode(m.clone()));
                             }
                         }
                     });
                 ui.end_row();
 
-                if let ColorManagementMode::PrinterManagesColor { space } =
-                    self.session.doc.color.mode
-                {
-                    ui.label(RichText::new("Intent / Farbraum:").color(t.text_dim));
-                    let space_label = match space {
-                        lumaprint_cms::WorkingColorSpace::Srgb => "sRGB (EPSON Standard)",
-                        _ => "Adobe RGB (EPL Automatisch / Empfohlen)",
-                    };
-                    egui::ComboBox::from_id_salt("printer_color_space_combo")
-                        .selected_text(space_label)
-                        .width(245.0)
-                        .show_ui(ui, |ui| {
-                            for (sp, lbl) in [
-                                (
-                                    lumaprint_cms::WorkingColorSpace::AdobeRgb1998,
-                                    "Adobe RGB (EPL Automatisch / Empfohlen)",
-                                ),
-                                (
-                                    lumaprint_cms::WorkingColorSpace::Srgb,
-                                    "sRGB (EPSON Standard)",
-                                ),
-                            ] {
-                                if ui.selectable_label(space == sp, lbl).clicked() {
-                                    self.exec(EngineCommand::SetColorMode(
-                                        ColorManagementMode::PrinterManagesColor { space: sp },
-                                    ));
-                                }
+                if !advanced {
+                    // Normal mode: clean, self-explanatory summary rows
+                    match &self.session.doc.color.mode {
+                        ColorManagementMode::UseIccProfile => {
+                            ui.label(RichText::new("Aktives Profil:").color(t.text_dim));
+                            if let Some(prof) = self.session.active_icc_profile() {
+                                let short_desc = truncate_text(&prof.description, 31);
+                                let tip = format!(
+                                    "Profil: {}\nDatei: {}\nAutomatisch aktiv: Relativ Farbmetrisch + Tiefenkompensierung (BPC)\nDruckertreiber: NoColorAdjustment (Kein doppeltes Farbmanagement)",
+                                    prof.description,
+                                    icc_file_display(prof)
+                                );
+                                ui.label(
+                                    RichText::new(format!("✓ {short_desc}"))
+                                        .color(Color32::from_rgb(80, 215, 130))
+                                        .strong(),
+                                )
+                                .on_hover_text(tip);
+                            } else {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new("⚠ Kein Profil")
+                                            .small()
+                                            .color(t.warning),
+                                    )
+                                    .on_hover_text(
+                                        "Für das gewählte Papier wurde noch kein ICC-Profil gefunden. Wählen Sie eine .icc/.icm-Datei aus.",
+                                    );
+                                    if ui
+                                        .small_button("📂 ICC wählen…")
+                                        .on_hover_text("Eigene .icc / .icm Profildatei laden")
+                                        .clicked()
+                                    {
+                                        self.open_native_icc_picker();
+                                    }
+                                });
                             }
-                        });
-                    ui.end_row();
-
-                    ui.label(RichText::new("Treiber-Status:").color(t.text_dim));
-                    let (lut_badge, lut_tip) = match space {
-                        lumaprint_cms::WorkingColorSpace::Srgb => (
-                            "✓ Drucker-LUT aktiv (EpsonStandard sRGB, 0x00)",
-                            "Übergibt das Bild in sRGB mit EpsonColorMode=EpsonStandard (LUT 0x00) an die Firmware des Druckers.",
-                        ),
-                        _ => (
-                            "✓ Drucker-LUT aktiv (EPL Adobe RGB, 0x06)",
-                            "Konvertiert das Bild wie Epson Print Layout ('Intent: Automatisch') nach Adobe RGB (1998) und aktiviert die druckerinterne Adobe-RGB-LUT (EpsonColorMode=EpsonAdobeRGB, LUT 0x06).",
-                        ),
-                    };
-                    ui.label(
-                        RichText::new(lut_badge)
-                            .small()
-                            .color(Color32::from_rgb(80, 215, 130)),
-                    )
-                    .on_hover_text(lut_tip);
-                    ui.end_row();
-                }
-
-                if matches!(
-                    self.session.doc.color.mode,
-                    ColorManagementMode::UseIccProfile
-                        | ColorManagementMode::AdvancedBwPhoto
-                        | ColorManagementMode::NoColorAdjustment
-                ) {
-                    let drv_ctrl = self
-                        .session
-                        .active_system_printer()
-                        .map(|sp| sp.capabilities.driver_color_control)
-                        .unwrap_or_default();
-                    ui.label(RichText::new("Treiber-Status:").color(t.text_dim));
-                    let (prefix, badge_col) = if drv_ctrl.is_known_driver_disable() {
-                        ("✓", Color32::from_rgb(80, 215, 130))
-                    } else {
-                        ("⚠", t.warning)
-                    };
-                    ui.label(
-                        RichText::new(format!("{prefix} {}", drv_ctrl.status_badge_de()))
-                            .small()
-                            .color(badge_col),
-                    )
-                    .on_hover_text(drv_ctrl.status_tooltip_de());
-                    ui.end_row();
-                }
-
-                if matches!(
-                    self.session.doc.color.mode,
-                    ColorManagementMode::UseIccProfile
-                ) {
-                    let active_icc_desc = self
-                        .session
-                        .active_icc_profile()
-                        .map(|p| p.description.clone())
-                        .unwrap_or_else(|| String::from("Automatisch (aus Druckertreiber PPD)"));
-                    ui.label(RichText::new("Ausgabe-ICC:").color(t.text_dim));
-                    ui.label(RichText::new(active_icc_desc).color(t.accent).strong());
-                    ui.end_row();
-
-                    let mut intent = self.session.doc.color.rendering_intent;
-                    ui.label(RichText::new("Rendering Intent:").color(t.text_dim));
-                    egui::ComboBox::from_id_salt("intent_combo")
-                        .selected_text(intent.label_de())
-                        .width(245.0)
-                        .show_ui(ui, |ui| {
-                            for it in RenderingIntent::ALL {
-                                if ui
-                                    .selectable_value(&mut intent, it, it.label_de())
-                                    .changed()
-                                {
-                                    self.exec(EngineCommand::SetRenderingIntent(intent));
-                                }
-                            }
-                        });
-                    ui.end_row();
-
-                    let mut bpc = self.session.doc.color.black_point_compensation;
-                    ui.label(RichText::new("Tiefenkomp.:").color(t.text_dim));
-                    if ui.checkbox(&mut bpc, "Aktiviert (BPC)").changed() {
-                        self.exec(EngineCommand::SetBlackPointCompensation(bpc));
+                            ui.end_row();
+                        }
+                        ColorManagementMode::PrinterManagesColor { .. } => {
+                            ui.label(RichText::new("Übergabe:").color(t.text_dim));
+                            ui.label(
+                                RichText::new("✓ Adobe RGB (Automatisch)")
+                                    .small()
+                                    .color(Color32::from_rgb(80, 215, 130)),
+                            )
+                            .on_hover_text(
+                                "Übergibt die Druckdaten im großen Adobe-RGB-Farbraum an den Druckertreiber (wie Epson Print Layout 'Intent: Automatisch', LUT 0x06).",
+                            );
+                            ui.end_row();
+                        }
+                        _ => {}
                     }
-                    ui.end_row();
+                } else {
+                    // Erweitert mode: full manual controls
+                    if let ColorManagementMode::PrinterManagesColor { space } =
+                        self.session.doc.color.mode
+                    {
+                        ui.label(RichText::new("Intent / Farbraum:").color(t.text_dim));
+                        let space_label = match space {
+                            lumaprint_cms::WorkingColorSpace::Srgb => "sRGB (EPSON Standard)",
+                            _ => "Adobe RGB (EPL Automatisch / Empfohlen)",
+                        };
+                        egui::ComboBox::from_id_salt("printer_color_space_combo")
+                            .selected_text(truncate_text(space_label, 34))
+                            .width(245.0)
+                            .show_ui(ui, |ui| {
+                                for (sp, lbl) in [
+                                    (
+                                        lumaprint_cms::WorkingColorSpace::AdobeRgb1998,
+                                        "Adobe RGB (EPL Automatisch / Empfohlen)",
+                                    ),
+                                    (
+                                        lumaprint_cms::WorkingColorSpace::Srgb,
+                                        "sRGB (EPSON Standard)",
+                                    ),
+                                ] {
+                                    if ui.selectable_label(space == sp, lbl).clicked() {
+                                        self.exec(EngineCommand::SetColorMode(
+                                            ColorManagementMode::PrinterManagesColor { space: sp },
+                                        ));
+                                    }
+                                }
+                            });
+                        ui.end_row();
+
+                        ui.label(RichText::new("Treiber-Status:").color(t.text_dim));
+                        let (lut_badge, lut_tip) = match space {
+                            lumaprint_cms::WorkingColorSpace::Srgb => (
+                                "✓ Drucker-LUT aktiv (sRGB, 0x00)",
+                                "Übergibt das Bild in sRGB mit EpsonColorMode=EpsonStandard (LUT 0x00) an den Druckertreiber.",
+                            ),
+                            _ => (
+                                "✓ Drucker-LUT aktiv (Adobe RGB, 0x06)",
+                                "Konvertiert das Bild wie Epson Print Layout ('Intent: Automatisch') nach Adobe RGB (1998) und aktiviert EpsonColorMode=EpsonAdobeRGB (LUT 0x06).",
+                            ),
+                        };
+                        ui.label(
+                            RichText::new(lut_badge)
+                                .small()
+                                .color(Color32::from_rgb(80, 215, 130)),
+                        )
+                        .on_hover_text(lut_tip);
+                        ui.end_row();
+                    }
+
+                    if matches!(
+                        self.session.doc.color.mode,
+                        ColorManagementMode::UseIccProfile
+                    ) {
+                        let auto_icc = self.session.doc.color.auto_select_icc_for_media;
+                        ui.label(RichText::new("ICC-Profilwahl:").color(t.text_dim));
+                        ui.horizontal(|ui| {
+                            if ui
+                                .radio(auto_icc, "Automatisch")
+                                .on_hover_text("Passendes ICC-Profil automatisch anhand des gewählten Papiers auswählen")
+                                .clicked()
+                                && !auto_icc
+                            {
+                                self.exec(EngineCommand::SetIccProfileSelection {
+                                    auto_select: true,
+                                    custom_path: None,
+                                });
+                            }
+                            if ui
+                                .radio(!auto_icc, "Manuell")
+                                .on_hover_text("Beliebiges installiertes oder eigenes ICC-Profil (.icc / .icm) frei auswählen")
+                                .clicked()
+                                && auto_icc
+                            {
+                                let current_id = self
+                                    .session
+                                    .doc
+                                    .color
+                                    .custom_icc_profile_path
+                                    .clone()
+                                    .or_else(|| {
+                                        self.session
+                                            .active_icc_profile()
+                                            .and_then(|p| p.file_path.as_ref())
+                                            .map(|pb| pb.display().to_string())
+                                    })
+                                    .or_else(|| {
+                                        self.session
+                                            .available_icc_profile_list()
+                                            .first()
+                                            .map(|(k, _)| k.clone())
+                                    });
+                                self.exec(EngineCommand::SetIccProfileSelection {
+                                    auto_select: false,
+                                    custom_path: current_id,
+                                });
+                            }
+                        });
+                        ui.end_row();
+
+                        if !auto_icc {
+                            ui.label(RichText::new("Manuelles ICC:").color(t.text_dim));
+                            let avail = self.session.available_icc_profile_list();
+                            let cur_sel_label = self
+                                .session
+                                .active_icc_profile()
+                                .map(|p| p.description.clone())
+                                .or_else(|| self.session.doc.color.custom_icc_profile_path.clone())
+                                .unwrap_or_else(|| String::from("Profil wählen…"));
+                            ui.horizontal(|ui| {
+                                egui::ComboBox::from_id_salt("manual_icc_combo")
+                                    .selected_text(truncate_text(&cur_sel_label, 26))
+                                    .width(205.0)
+                                    .show_ui(ui, |ui| {
+                                        for (id, desc) in &avail {
+                                            let is_sel = self
+                                                .session
+                                                .doc
+                                                .color
+                                                .custom_icc_profile_path
+                                                .as_deref()
+                                                == Some(id.as_str());
+                                            if ui
+                                                .selectable_label(is_sel, truncate_text(desc, 48))
+                                                .on_hover_text(format!("{desc}\n({id})"))
+                                                .clicked()
+                                            {
+                                                self.exec(EngineCommand::SetIccProfileSelection {
+                                                    auto_select: false,
+                                                    custom_path: Some(id.clone()),
+                                                });
+                                            }
+                                        }
+                                    });
+                                if ui
+                                    .button("📂")
+                                    .on_hover_text("ICC-Profildatei (.icc / .icm) von der Festplatte laden…")
+                                    .clicked()
+                                {
+                                    self.open_native_icc_picker();
+                                }
+                            });
+                            ui.end_row();
+                        }
+
+                        let (active_icc_short, active_icc_tip) =
+                            if let Some(prof) = self.session.active_icc_profile() {
+                                (
+                                    truncate_text(&prof.description, 32),
+                                    format!(
+                                        "Profil: {}\nDatei: {}",
+                                        prof.description,
+                                        icc_file_display(prof)
+                                    ),
+                                )
+                            } else {
+                                (
+                                    String::from("Automatisch (aus PPD)"),
+                                    String::from("Kein separates ICC-Profil geladen."),
+                                )
+                            };
+                        ui.label(RichText::new("Aktives Profil:").color(t.text_dim));
+                        ui.label(RichText::new(active_icc_short).color(t.accent).strong())
+                            .on_hover_text(active_icc_tip);
+                        ui.end_row();
+
+                        let mut intent = self.session.doc.color.rendering_intent;
+                        ui.label(RichText::new("Rendering Intent:").color(t.text_dim));
+                        egui::ComboBox::from_id_salt("intent_combo")
+                            .selected_text(intent.label_de())
+                            .width(245.0)
+                            .show_ui(ui, |ui| {
+                                for it in RenderingIntent::ALL {
+                                    if ui
+                                        .selectable_value(&mut intent, it, it.label_de())
+                                        .changed()
+                                    {
+                                        self.exec(EngineCommand::SetRenderingIntent(intent));
+                                    }
+                                }
+                            });
+                        ui.end_row();
+
+                        let mut bpc = self.session.doc.color.black_point_compensation;
+                        ui.label(RichText::new("Tiefenkomp.:").color(t.text_dim));
+                        if ui.checkbox(&mut bpc, "Aktiviert (BPC)").changed() {
+                            self.exec(EngineCommand::SetBlackPointCompensation(bpc));
+                        }
+                        ui.end_row();
+                    }
+
+                    if matches!(
+                        self.session.doc.color.mode,
+                        ColorManagementMode::NoColorAdjustment
+                    ) {
+                        ui.label(RichText::new("Hinweis:").color(t.text_dim));
+                        ui.label(
+                            RichText::new("⚠ Unkorrigierte Rohdaten (nur für Testcharts)")
+                                .small()
+                                .color(t.warning),
+                        )
+                        .on_hover_text(
+                            "Sendet unkorrigierte RGB-Werte ohne Farbmanagement direkt an den Druckertreiber (nur zum Drucken von Kalibrierungs-Testcharts für die Profilerstellung).",
+                        );
+                        ui.end_row();
+                    }
+
+                    if matches!(
+                        self.session.doc.color.mode,
+                        ColorManagementMode::UseIccProfile
+                            | ColorManagementMode::AdvancedBwPhoto
+                            | ColorManagementMode::NoColorAdjustment
+                    ) {
+                        let drv_ctrl = self
+                            .session
+                            .active_system_printer()
+                            .map(|sp| sp.capabilities.driver_color_control)
+                            .unwrap_or_default();
+                        ui.label(RichText::new("Treiber-Status:").color(t.text_dim));
+                        let (prefix, badge_col) = if drv_ctrl.is_known_driver_disable() {
+                            ("✓", Color32::from_rgb(80, 215, 130))
+                        } else {
+                            ("⚠", t.warning)
+                        };
+                        ui.label(
+                            RichText::new(format!("{prefix} {}", drv_ctrl.status_badge_de()))
+                                .small()
+                                .color(badge_col),
+                        )
+                        .on_hover_text(drv_ctrl.status_tooltip_de());
+                        ui.end_row();
+                    }
                 }
 
                 ui.label(RichText::new("Druck-Schärfung:").color(t.text_dim));
@@ -6497,64 +6817,14 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
                     });
                 ui.end_row();
-
-                let mut disp_mode = self.session.doc.color.display_color_space;
-                ui.label(RichText::new("Monitor-Farbraum:").color(t.text_dim));
-                egui::ComboBox::from_id_salt("display_color_space_combo")
-                    .selected_text(disp_mode.label_de())
-                    .width(245.0)
-                    .show_ui(ui, |ui| {
-                        for dm in DisplayColorSpaceMode::ALL {
-                            if ui
-                                .selectable_value(&mut disp_mode, dm, dm.label_de())
-                                .changed()
-                            {
-                                self.exec(EngineCommand::SetDisplayColorSpace(disp_mode));
-                                self.sync_wayland_color_management();
-                            }
-                        }
-                    });
-                ui.end_row();
-
-                #[cfg(target_os = "linux")]
-                {
-                    let wl_status = wayland_color_management_status();
-                    ui.label(RichText::new("Wayland / KWin:").color(t.text_dim));
-                    let (badge_text, badge_col, tooltip) = if wl_status.protocol_supported {
-                        let mon_str = match wl_status.monitor_detected_gamut {
-                            WaylandDetectedGamut::AdobeRgb => "Adobe RGB Monitor erkannt",
-                            WaylandDetectedGamut::DisplayP3 => "Wide-Gamut (Display P3) erkannt",
-                            WaylandDetectedGamut::Srgb => "Standard sRGB erkannt",
-                            WaylandDetectedGamut::Unknown => "wp_color_manager_v1 aktiv",
-                        };
-                        let icc_str = if wl_status.monitor_has_icc_profile {
-                            " + ICC"
-                        } else {
-                            ""
-                        };
-                        let active_str = self.session.doc.color.resolved_display_space.name();
-                        (
-                            format!("✓ {mon_str}{icc_str} → {active_str}"),
-                            Color32::from_rgb(80, 215, 130),
-                            "KWin wp_color_manager_v1 ist aktiv: Die Fenster-Oberfläche wird von KWin direkt in das kalibrierte Monitor-Farbprofil überführt.",
-                        )
-                    } else {
-                        (
-                            String::from("sRGB (Standard-Oberfläche)"),
-                            t.text_dim,
-                            "Wayland wp_color_manager_v1 wurde vom Compositor nicht gemeldet (Fallback auf sRGB).",
-                        )
-                    };
-                    ui.label(RichText::new(badge_text).small().color(badge_col))
-                        .on_hover_text(tooltip);
-                    ui.end_row();
-                }
             });
 
-        if matches!(
-            self.session.doc.color.mode,
-            ColorManagementMode::AdvancedBwPhoto
-        ) {
+        if advanced
+            && matches!(
+                self.session.doc.color.mode,
+                ColorManagementMode::AdvancedBwPhoto
+            )
+        {
             ui.add_space(8.0);
             ui.separator();
             ui.add_space(6.0);

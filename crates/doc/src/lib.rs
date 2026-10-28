@@ -890,12 +890,12 @@ pub enum ColorManagementMode {
 impl ColorManagementMode {
     pub fn label_de(&self) -> &'static str {
         match self {
-            Self::UseIccProfile => "ICC-Profil verwenden (App verwaltet Farben)",
-            Self::AdvancedBwPhoto => "Advanced B&W Photo (Erweitertes S/W)",
-            Self::PrinterManagesColor { .. } => "Treiber-Farbkorrektur (Epson Print Layout Modus)",
+            Self::UseIccProfile => "Farbverbindlich (ICC-Papierprofil)",
+            Self::AdvancedBwPhoto => "Schwarzweiß (Advanced B&W)",
+            Self::PrinterManagesColor { .. } => "Drucker-Automatik (Epson Print Layout)",
             Self::Grayscale => "Graustufen",
             Self::Vibrant => "Photograph (Vibrant)",
-            Self::NoColorAdjustment => "Kein Farbmanagement (Kalibrierungs-Chart)",
+            Self::NoColorAdjustment => "Kalibrierung (Kein Farbmanagement)",
         }
     }
 }
@@ -959,6 +959,9 @@ impl DisplayColorSpaceMode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ColorSettings {
     pub mode: ColorManagementMode,
+    /// `false` = `Normal` (simplified automatic settings), `true` = `Erweitert` (full manual control, ABW, calibration).
+    #[serde(default)]
+    pub advanced_mode: bool,
     /// `true` = `Automatische Auswahl` (uses the ICC profile of the selected media type).
     pub auto_select_icc_for_media: bool,
     pub custom_icc_profile_path: Option<String>,
@@ -980,6 +983,7 @@ impl Default for ColorSettings {
     fn default() -> Self {
         Self {
             mode: ColorManagementMode::UseIccProfile,
+            advanced_mode: false,
             auto_select_icc_for_media: true,
             custom_icc_profile_path: None,
             rendering_intent: RenderingIntent::RelativeColorimetric,
