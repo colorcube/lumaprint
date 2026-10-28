@@ -5129,6 +5129,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     egui::ComboBox::from_id_salt("media_combo")
                         .selected_text(media_display)
                         .width(205.0)
+                        .height(480.0)
                         .show_ui(ui, |ui| {
                             if !custom_media_list.is_empty() {
                                 for cm in &custom_media_list {
@@ -5203,6 +5204,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 egui::ComboBox::from_id_salt("paper_size_combo")
                     .selected_text(size_display)
                     .width(245.0)
+                    .height(440.0)
                     .show_ui(ui, |ui| {
                         let has_ppd_sizes = active_printer
                             .as_ref()
@@ -6684,6 +6686,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 egui::ComboBox::from_id_salt("manual_icc_combo")
                                     .selected_text(truncate_text(&cur_sel_label, 26))
                                     .width(205.0)
+                                    .height(440.0)
                                     .show_ui(ui, |ui| {
                                         for (id, desc) in &avail {
                                             let is_sel = self

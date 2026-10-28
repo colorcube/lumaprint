@@ -892,7 +892,7 @@ impl ColorManagementMode {
         match self {
             Self::UseIccProfile => "Farbverbindlich (ICC-Papierprofil)",
             Self::AdvancedBwPhoto => "Schwarzweiß (Advanced B&W)",
-            Self::PrinterManagesColor { .. } => "Drucker-Automatik (Epson Print Layout)",
+            Self::PrinterManagesColor { .. } => "Drucker-Automatik",
             Self::Grayscale => "Graustufen",
             Self::Vibrant => "Photograph (Vibrant)",
             Self::NoColorAdjustment => "Kalibrierung (Kein Farbmanagement)",

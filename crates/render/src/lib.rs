@@ -63,12 +63,15 @@ pub fn render_page_at_16bit(
 
     // Base paper background color (white, or custom margin/template background color, or ABW FullPage shift)
     let mut base_fill = Rgb16::WHITE;
+    let mut has_custom_bg = false;
     match doc.page_layout(page_index) {
         LayoutMode::Standard(s) if s.margin_color_enabled => {
             base_fill = s.margin_color.to_rgb16();
+            has_custom_bg = true;
         }
         LayoutMode::Template(t) if t.background_color_enabled => {
             base_fill = t.background_color.to_rgb16();
+            has_custom_bg = true;
         }
         _ => {}
     }
@@ -76,6 +79,28 @@ pub fn render_page_at_16bit(
         && doc.color.abw.highlight_shift == AbwHighlightShift::FullPage
     {
         base_fill = Rgb16::new(64488, 64488, 64488);
+    }
+
+    // In screen preview with Softproof + Papierweiß enabled, tint the unprinted sheet background
+    // with the ICC profile's media white point (`wtpt`) + viewing light so the sheet margins match the paper.
+    if for_screen_preview
+        && !has_custom_bg
+        && doc.color.softproof.enabled
+        && doc.color.softproof.simulate_paper_white
+        && let Some(prof) = icc_profile
+        && let Ok(mut bg_px) = ImageBuffer16::new_solid(1, 1, base_fill)
+    {
+        let mut sp_no_warn = doc.color.softproof;
+        sp_no_warn.gamut_warning = false;
+        prof.apply_softproof_to_display(
+            WorkingColorSpace::Srgb,
+            doc.color.resolved_display_space,
+            &mut bg_px,
+            doc.color.rendering_intent,
+            doc.color.black_point_compensation,
+            sp_no_warn,
+        );
+        base_fill = bg_px.get_pixel(0, 0).unwrap_or(base_fill);
     }
 
     let mut page_buf = ImageBuffer16::new_solid(full_w, full_h, base_fill)?;
