@@ -305,9 +305,14 @@ fn apply_color_pipeline(
                 src_space.convert_buffer_to(buf, dst_display_space);
             }
         }
-        ColorManagementMode::PrinterManagesColor { .. }
-        | ColorManagementMode::Vibrant
-        | ColorManagementMode::NoColorAdjustment => {
+        ColorManagementMode::PrinterManagesColor { space } => {
+            if for_screen_preview {
+                src_space.convert_buffer_to(buf, dst_display_space);
+            } else {
+                src_space.convert_buffer_to(buf, *space);
+            }
+        }
+        ColorManagementMode::Vibrant | ColorManagementMode::NoColorAdjustment => {
             if for_screen_preview {
                 src_space.convert_buffer_to(buf, dst_display_space);
             }

@@ -1030,7 +1030,9 @@ pub fn build_lp_command_args(req: &CupsSpoolRequest, file_path: &Path) -> Vec<St
         // Always include standard CUPS / colord calibration bypass flag
         args.push(String::from("-o"));
         args.push(String::from("cm-calibration=true"));
-    } else if matches!(req.driver_color_control, DriverColorControl::EpsonEscpr { .. }) {
+    } else if matches!(req.driver_color_control, DriverColorControl::EpsonEscpr { .. })
+        && !req.extra_options.contains_key("EpsonColorMode")
+    {
         args.push(String::from("-o"));
         args.push(String::from("EpsonColorMode=EpsonICC"));
     }

@@ -6354,22 +6354,72 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     .show_ui(ui, |ui| {
                         for m in [
                             ColorManagementMode::UseIccProfile,
-                            ColorManagementMode::AdvancedBwPhoto,
                             ColorManagementMode::PrinterManagesColor {
-                                space: lumaprint_cms::WorkingColorSpace::Srgb,
+                                space: lumaprint_cms::WorkingColorSpace::AdobeRgb1998,
                             },
+                            ColorManagementMode::AdvancedBwPhoto,
                             ColorManagementMode::Vibrant,
                             ColorManagementMode::NoColorAdjustment,
                         ] {
-                            if ui
-                                .selectable_label(m == cur_mode, m.label_de())
-                                .clicked()
-                            {
+                            let is_sel =
+                                std::mem::discriminant(&m) == std::mem::discriminant(&cur_mode);
+                            if ui.selectable_label(is_sel, m.label_de()).clicked() {
                                 self.exec(EngineCommand::SetColorMode(m));
                             }
                         }
                     });
                 ui.end_row();
+
+                if let ColorManagementMode::PrinterManagesColor { space } =
+                    self.session.doc.color.mode
+                {
+                    ui.label(RichText::new("Intent / Farbraum:").color(t.text_dim));
+                    let space_label = match space {
+                        lumaprint_cms::WorkingColorSpace::Srgb => "sRGB (EPSON Standard)",
+                        _ => "Adobe RGB (EPL Automatisch / Empfohlen)",
+                    };
+                    egui::ComboBox::from_id_salt("printer_color_space_combo")
+                        .selected_text(space_label)
+                        .width(245.0)
+                        .show_ui(ui, |ui| {
+                            for (sp, lbl) in [
+                                (
+                                    lumaprint_cms::WorkingColorSpace::AdobeRgb1998,
+                                    "Adobe RGB (EPL Automatisch / Empfohlen)",
+                                ),
+                                (
+                                    lumaprint_cms::WorkingColorSpace::Srgb,
+                                    "sRGB (EPSON Standard)",
+                                ),
+                            ] {
+                                if ui.selectable_label(space == sp, lbl).clicked() {
+                                    self.exec(EngineCommand::SetColorMode(
+                                        ColorManagementMode::PrinterManagesColor { space: sp },
+                                    ));
+                                }
+                            }
+                        });
+                    ui.end_row();
+
+                    ui.label(RichText::new("Treiber-Status:").color(t.text_dim));
+                    let (lut_badge, lut_tip) = match space {
+                        lumaprint_cms::WorkingColorSpace::Srgb => (
+                            "✓ Drucker-LUT aktiv (EpsonStandard sRGB, 0x00)",
+                            "Übergibt das Bild in sRGB mit EpsonColorMode=EpsonStandard (LUT 0x00) an die Firmware des Druckers.",
+                        ),
+                        _ => (
+                            "✓ Drucker-LUT aktiv (EPL Adobe RGB, 0x06)",
+                            "Konvertiert das Bild wie Epson Print Layout ('Intent: Automatisch') nach Adobe RGB (1998) und aktiviert die druckerinterne Adobe-RGB-LUT (EpsonColorMode=EpsonAdobeRGB, LUT 0x06).",
+                        ),
+                    };
+                    ui.label(
+                        RichText::new(lut_badge)
+                            .small()
+                            .color(Color32::from_rgb(80, 215, 130)),
+                    )
+                    .on_hover_text(lut_tip);
+                    ui.end_row();
+                }
 
                 if matches!(
                     self.session.doc.color.mode,

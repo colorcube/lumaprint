@@ -2378,6 +2378,18 @@ impl Session {
             None
         };
 
+        let mut extra_options = BTreeMap::new();
+        if let ColorManagementMode::PrinterManagesColor { space } = self.doc.color.mode {
+            if matches!(driver_color_control, DriverColorControl::EpsonEscpr { .. }) {
+                let mode_val = match space {
+                    WorkingColorSpace::Srgb => "EpsonStandard",
+                    _ => "EpsonAdobeRGB",
+                };
+                extra_options.insert(String::from("EpsonColorMode"), String::from(mode_val));
+                extra_options.insert(String::from("cm-calibration"), String::from("true"));
+            }
+        }
+
         CupsSpoolRequest {
             queue_name: self.doc.printer.printer_queue.clone(),
             job_title: String::from("LumaPrint FineArt Sheet"),
@@ -2396,7 +2408,7 @@ impl Session {
             bottom_edge_priority,
             rubbing_reduction,
             overcoat,
-            extra_options: BTreeMap::new(),
+            extra_options,
         }
     }
 
