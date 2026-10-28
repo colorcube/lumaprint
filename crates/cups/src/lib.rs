@@ -603,6 +603,9 @@ pub fn parse_lpstat_output(lpstat_p_d: &str, lpstat_v: &str) -> Vec<SystemPrinte
                     .get(&q_name)
                     .cloned()
                     .unwrap_or_else(|| String::from("ipp://localhost/printers/unknown"));
+                if uri.contains("://-") {
+                    continue;
+                }
                 let is_def = default_queue.as_deref() == Some(q_name.as_str());
                 let display_name = q_name.replace('_', " ");
                 printers.push(SystemPrinter {
@@ -619,7 +622,10 @@ pub fn parse_lpstat_output(lpstat_p_d: &str, lpstat_v: &str) -> Vec<SystemPrinte
 
     // If `lpstat -p` had no lines but `lpstat -v` had devices, include them as well
     if printers.is_empty() {
-        let mut sorted_uris: Vec<(String, String)> = uris.into_iter().collect();
+        let mut sorted_uris: Vec<(String, String)> = uris
+            .into_iter()
+            .filter(|(_, uri)| !uri.contains("://-"))
+            .collect();
         sorted_uris.sort_by(|a, b| a.0.cmp(&b.0));
         for (q_name, uri) in sorted_uris {
             let is_def = default_queue.as_deref() == Some(q_name.as_str());
