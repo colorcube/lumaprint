@@ -13,7 +13,7 @@
 | **L1** | `lumaprint-doc` | Reines Datenmodell (`PrintJobDocument`, `LayoutMode`, `SourceImageEntry`, `CropSpec`, `MediaTypeSpec`, `CustomMediaSpec`, `ColorSettings`, `UserPreset`) mit vollständiger JSON-Serialisierung |
 | **L2** | `lumaprint-layout` | Geometrischer Layout-Solver für *Standard*, *Panorama*, *Gallerie Wrap*, *Vorlage* (inkl. EPL-Templates + 5×5 Generator) und *Auto-Nesting* (Rechteck-Packer für Sammelformen) |
 | **L3** | `lumaprint-render` | Speicherfreundlicher, multithreaded (`rayon`) 16-Bit Streifen-/Band-Renderer, Lanczos3-Skalierung, adaptive Druck-Nachschärfung (*Output Sharpening*), Gallery-Wrap-Spiegelung/Unschärfe & Probestreifen-Ausschnitt |
-| **L4** | `lumaprint-cups`, `lumaprint-ipp` | Generische Systemdrucker-Anbindung über CUPS (`lpstat`, `lpoptions`, PPD-Parser, 16-Bit-TIFF-Spooling via `lp`) sowie generischer IPP-Status-/Tintenstands-Client (`marker-levels`) |
+| **L4** | `lumaprint-cups`, `lumaprint-ipp` | Generische Systemdrucker-Anbindung über CUPS (`lpstat`, `lpoptions`, PPD-Parser, 8-Bit-PNG-Spooling via `lp`) sowie generischer IPP-Status-/Tintenstands-Client (`marker-levels`) |
 | **L5** | `lumaprint-engine` | `Session` mit Undo/Redo-Stack, Command-Registry (`every action is a command`) und Constraint-Engine |
 | **L6** | `lumaprint-ui-egui` | Dunkle Fine-Art-Desktop-Oberfläche (`egui`/`eframe`) + Offscreen-Snapshot-Renderer für visuelle Tests |
 
@@ -21,7 +21,7 @@
 
 1. **`lumaprint-cups` (Generische Systemdrucker- & CUPS-Pipeline):**
    - Erkennt alle im Betriebssystem eingerichteten CUPS-Drucker-Queues (`lpstat -p -d -v`) und liest deren Fähigkeiten (`PageSize`, `MediaType`, `InputSlot`, `Resolution`, `ColorModel`) aus `lpoptions -p <queue> -l` und `/etc/cups/ppd/<queue>.ppd` aus.
-   - Übergibt den fertig gesetzten und in 16-Bit farbtransformierten Druckbogen als unkomprimiertes **16-Bit RGB-TIFF** an `lp -d <queue>` samt allen gewählten Treiberoptionen.
-   - Wenn LumaPrint das Farbmanagement übernimmt (*ICC-Profil verwenden* oder *Advanced B&W Photo*), setzt `lumaprint-cups` automatisch die passenden Optionen (`StpColorCorrection=Uncorrected`, `cm-calibration=true`), damit der Druckertreiber (z. B. Gutenprint) keine doppelte Farbkorrektur durchführt.
+   - Rendert und farbtransformiert den Druckbogen in 16 Bit, rastert ihn erst an der Spool-Grenze per 4×4-Bayer-Dithering auf 8 Bit und übergibt ihn als **8-Bit RGB-PNG** in Treiberauflösung (`-o ppi=…`) an `lp -d <queue>` samt allen gewählten Treiberoptionen. CUPS-Raster und ESC/P-R übertragen ohnehin nur 8 Bit pro Kanal.
+   - Wenn LumaPrint das Farbmanagement übernimmt (*ICC-Profil verwenden* oder *Advanced B&W Photo*), setzt `lumaprint-cups` automatisch die passenden Optionen (`EpsonColorMode=NoColorAdjustment`, `StpColorCorrection=None` bzw. generisch `cm-calibration=true`), damit der Druckertreiber (z. B. Gutenprint) keine doppelte Farbkorrektur durchführt.
 2. **`lumaprint-ipp` (Generischer Netzwerk-/CUPS-Druckerstatus):**
    - Liest über IPP (`Get-Printer-Attributes`) generisch die vom Drucker gemeldeten Füllstände (`marker-names`, `marker-levels`, `marker-colors`) unabhängig von der Kanalanzahl aus.
