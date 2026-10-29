@@ -120,6 +120,27 @@ impl PrintQuality {
             Self::CarbonBlack5760x1440 => "5760x1440dpi",
         }
     }
+
+    /// Inverse of [`Self::cups_resolution_code`].
+    pub fn from_cups_resolution_code(code: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|q| q.cups_resolution_code().eq_ignore_ascii_case(code))
+    }
+
+    /// PPD choice keywords that select this quality, in order of preference: the generic
+    /// `Resolution` code first, then the `PrintQuality` keywords of `epson-p900-escpr-cups`
+    /// (`Normal`, `Fine`, `High`, `Max`, `CarbonBlack`).
+    pub const fn ppd_choice_aliases(self) -> &'static [&'static str] {
+        match self {
+            Self::Draft360 => &["360dpi", "Draft", "Normal"],
+            Self::Normal720 => &["720dpi", "720x720dpi", "Normal"],
+            Self::SuperFine1440x720 => &["1440x720dpi", "Fine", "SuperFine"],
+            Self::High1440x1440 => &["1440x1440dpi", "1440dpi", "High", "Photo"],
+            Self::MaxQuality2880x1440 => &["2880x1440dpi", "Max", "SuperPhoto"],
+            Self::CarbonBlack5760x1440 => &["5760x1440dpi", "CarbonBlack"],
+        }
+    }
 }
 
 /// Standard Fine-Art Media Type specification with ICC profile association hints.

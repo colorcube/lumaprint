@@ -673,7 +673,9 @@ impl Session {
                 return Some(p);
             }
         }
-        self.icc_profiles.values().next()
+        // No fallback to an arbitrary cached profile: printing with another paper's profile
+        // is worse than reporting that none was found.
+        None
     }
 
     /// Returns a deduplicated, sorted list of `(profile_key, description)` for manual ICC profile selection.
@@ -2523,11 +2525,21 @@ impl Session {
         let effective_resolution = self
             .active_system_printer()
             .and_then(|sp| {
-                sp.capabilities
-                    .resolutions
-                    .iter()
-                    .find(|r| r.code.eq_ignore_ascii_case(&self.doc.printer.resolution_key))
-                    .map(|r| r.code.clone())
+                let res = &sp.capabilities.resolutions;
+                let find = |code: &str| {
+                    res.iter()
+                        .find(|r| r.code.eq_ignore_ascii_case(code))
+                        .map(|r| r.code.clone())
+                };
+                find(&self.doc.printer.resolution_key)
+                    .or_else(|| {
+                        // Generic codes from `SetPrintQuality` (e.g. CLI `--quality carbon` ->
+                        // "5760x1440dpi") are not PPD choices of every driver; map them to
+                        // the driver's keyword (e.g. "CarbonBlack") instead of silently
+                        // falling back to the default quality.
+                        PrintQuality::from_cups_resolution_code(&self.doc.printer.resolution_key)
+                            .and_then(|q| q.ppd_choice_aliases().iter().find_map(|a| find(a)))
+                    })
                     .or_else(|| {
                         if sp.capabilities.resolutions.is_empty() {
                             None
@@ -2619,6 +2631,21 @@ impl Session {
         }
     }
 
+    /// Rejects printing in ICC mode without a resolvable profile: the sheet would go out
+    /// unconverted while the driver is told `NoColorAdjustment`, i.e. with no color management.
+    pub fn ensure_icc_profile_for_print(&self) -> Result<(), EngineError> {
+        if self.doc.color.mode == ColorManagementMode::UseIccProfile
+            && self.active_icc_profile().is_none()
+        {
+            return Err(EngineError::InvalidParam(format!(
+                "Für das Papier '{}' wurde kein ICC-Profil gefunden. Bitte ein Profil wählen \
+                 oder einen anderen Farbmodus verwenden.",
+                self.doc.printer.media_key
+            )));
+        }
+        Ok(())
+    }
+
     /// Renders the 16-bit print sheet(s) and submits them to the selected CUPS system printer queue via `lp`.
     pub fn send_print_job_to_printer(&mut self, dpi: u32) -> Result<String, EngineError> {
         self.doc.sync_active_page_to_list();
@@ -2652,6 +2679,8 @@ impl Session {
             .find(|p| p.queue_name == self.doc.printer.printer_queue)
             .map(|p| p.device_uri.as_str());
         verify_printer_reachable(&self.doc.printer.printer_queue, known_uri)?;
+
+        self.ensure_icc_profile_for_print()?;
 
         let mut last_msg = String::new();
         for &pi in &page_indices {
@@ -2774,6 +2803,83 @@ mod tests {
                 })
                 .is_err()
         );
+    }
+
+    #[test]
+    fn print_in_icc_mode_without_profile_is_rejected() {
+        let mut session = Session::new();
+        session.doc.color.mode = ColorManagementMode::UseIccProfile;
+        session.doc.color.auto_select_icc_for_media = true;
+        session.doc.printer.media_key = String::from("UnknownPaper_WithoutProfile");
+        assert!(session.active_icc_profile().is_none());
+        let err = session
+            .ensure_icc_profile_for_print()
+            .expect_err("ICC mode without profile must not print");
+        assert!(err.to_string().contains("kein ICC-Profil"), "{err}");
+
+        // Modes that do not need a paper profile are not affected.
+        session.doc.color.mode = ColorManagementMode::PrinterManagesColor {
+            space: WorkingColorSpace::AdobeRgb1998,
+        };
+        assert!(session.ensure_icc_profile_for_print().is_ok());
+    }
+
+    #[test]
+    fn generic_print_quality_maps_to_driver_ppd_keyword() {
+        use lumaprint_cups::{PrinterCapabilities, PrinterOptionChoice};
+
+        let mut session = Session::new();
+        let choice = |code: &str, is_default: bool| PrinterOptionChoice {
+            code: code.into(),
+            label: code.into(),
+            is_default,
+        };
+        let caps = PrinterCapabilities {
+            resolutions: vec![
+                choice("Normal", false),
+                choice("Fine", false),
+                choice("High", true),
+                choice("Max", false),
+                choice("CarbonBlack", false),
+            ],
+            resolution_option_key: String::from("PrintQuality"),
+            driver_color_control: DriverColorControl::EpsonEscpr {
+                supports_advanced_bw: true,
+            },
+            ..PrinterCapabilities::default()
+        };
+        session.system_printers = vec![SystemPrinter {
+            queue_name: String::from("TestQueue_P900"),
+            display_name: String::from("Test P900"),
+            device_uri: String::from("socket://192.0.2.10:9100"),
+            is_default: true,
+            state_message: String::new(),
+            capabilities: caps,
+        }];
+        session.doc.printer.printer_queue = String::from("TestQueue_P900");
+        session
+            .execute(EngineCommand::SetMediaKey("Baryta".into()))
+            .unwrap();
+
+        for (quality, expected) in [
+            (PrintQuality::Normal720, "Normal"),
+            (PrintQuality::SuperFine1440x720, "Fine"),
+            (PrintQuality::MaxQuality2880x1440, "Max"),
+            (PrintQuality::CarbonBlack5760x1440, "CarbonBlack"),
+        ] {
+            session
+                .execute(EngineCommand::SetPrintQuality(quality))
+                .unwrap();
+            let req = session.build_cups_spool_request();
+            assert_eq!(req.resolution, expected, "{quality:?}");
+            assert_eq!(req.resolution_option_key, "PrintQuality");
+        }
+
+        // A PPD keyword chosen in the GUI is passed through unchanged.
+        session
+            .execute(EngineCommand::SetResolutionKey("Fine".into()))
+            .unwrap();
+        assert_eq!(session.build_cups_spool_request().resolution, "Fine");
     }
 
     #[test]

@@ -45,6 +45,7 @@ Empfohlen für farbverbindlichen Fine-Art-Druck mit den offiziellen Hersteller-P
 - **ICC-Profilwahl:**
   - *Automatisch:* Verwendet automatisch das dem gewählten Medientyp (oder Custom-Medium) zugeordnete ICC-Profil.
   - *Manuell (in der Ansicht `Erweitert`):* Auswahl aus allen installierten Profilen oder direktes Laden einer `.icc`/`.icm`-Datei per Dateidialog (`📂`).
+  - *Kein Profil gefunden:* Die Anzeige zeigt **`⚠ Kein Profil`**, und **Drucken wird abgelehnt**. Ohne Profil würde das Bild unverändert mit `NoColorAdjustment` – also ganz ohne Farbmanagement – gedruckt. LumaPrint weicht dabei bewusst nicht auf das Profil eines anderen Papiers aus. Abhilfe: Profil per `📂` laden oder einen anderen Farbmodus wählen.
 - **Rendering Intent (in der Ansicht `Erweitert` manuell wählbar, in `Normal` automatisch *Relativ Farbmetrisch + BPC*):**
   - *Relativ Farbmetrisch:* Bildet Farben innerhalb des Drucker-Gamuts exakt ab und verschiebt den Weißpunkt auf das Papierweiß (Standard für Fine-Art mit aktivierter **Tiefenkompensierung / BPC**).
   - *Wahrnehmung (Perceptual):* Komprimiert den gesamten Farbumfang harmonisch (ideal für Motive mit extrem gesättigten Out-of-Gamut-Farben).

@@ -341,7 +341,13 @@ fn apply_color_pipeline(
 
     match &doc.color.mode {
         ColorManagementMode::AdvancedBwPhoto | ColorManagementMode::Grayscale => {
+            // The toning uses Rec.709 (sRGB) luminance weights, and the driver's default
+            // `EpsonICC` mode expects sRGB input, so tone in sRGB.
+            src_space.convert_buffer_to(buf, WorkingColorSpace::Srgb);
             doc.color.abw.apply_to_buffer(buf);
+            if for_screen_preview {
+                WorkingColorSpace::Srgb.convert_buffer_to(buf, dst_display_space);
+            }
         }
         ColorManagementMode::UseIccProfile => {
             if let Some(prof) = icc_profile {
@@ -373,7 +379,16 @@ fn apply_color_pipeline(
                 src_space.convert_buffer_to(buf, *space);
             }
         }
-        ColorManagementMode::Vibrant | ColorManagementMode::NoColorAdjustment => {
+        ColorManagementMode::Vibrant => {
+            // Printed through the driver's `EpsonICC` mode, which treats its input as sRGB.
+            let dst = if for_screen_preview {
+                dst_display_space
+            } else {
+                WorkingColorSpace::Srgb
+            };
+            src_space.convert_buffer_to(buf, dst);
+        }
+        ColorManagementMode::NoColorAdjustment => {
             if for_screen_preview {
                 src_space.convert_buffer_to(buf, dst_display_space);
             }
@@ -1016,5 +1031,35 @@ mod tests {
         // In native Display P3 preview, the pixel stays unclipped; in sRGB it gets clamped
         assert_eq!(p3_out.get_pixel(0, 0), Some(Rgb16::new(0, 62000, 12000)));
         assert_ne!(srgb_out.get_pixel(0, 0), p3_out.get_pixel(0, 0));
+    }
+
+    #[test]
+    fn vibrant_and_grayscale_print_output_is_srgb() {
+        let src = ImageBuffer16::new_solid(2, 2, Rgb16::new(52000, 30000, 9000)).unwrap();
+        let mut doc = PrintJobDocument::default();
+
+        // Vibrant: adjustments in the source space, then converted to sRGB for `EpsonICC`.
+        doc.color.mode = ColorManagementMode::Vibrant;
+        let mut out = src.clone();
+        apply_color_pipeline(&doc, &mut out, WorkingColorSpace::AdobeRgb1998, None, false);
+        let mut expected = src.clone();
+        doc.color.adjustments.apply_to_buffer(&mut expected, true);
+        WorkingColorSpace::AdobeRgb1998.convert_buffer_to(&mut expected, WorkingColorSpace::Srgb);
+        assert_eq!(out.get_pixel(0, 0), expected.get_pixel(0, 0));
+        let mut unconverted = src.clone();
+        doc.color
+            .adjustments
+            .apply_to_buffer(&mut unconverted, true);
+        assert_ne!(out.get_pixel(0, 0), unconverted.get_pixel(0, 0));
+
+        // Grayscale: toned with sRGB luminance after converting to sRGB.
+        doc.color.mode = ColorManagementMode::Grayscale;
+        let mut out = src.clone();
+        apply_color_pipeline(&doc, &mut out, WorkingColorSpace::AdobeRgb1998, None, false);
+        let mut expected = src;
+        doc.color.adjustments.apply_to_buffer(&mut expected, false);
+        WorkingColorSpace::AdobeRgb1998.convert_buffer_to(&mut expected, WorkingColorSpace::Srgb);
+        doc.color.abw.apply_to_buffer(&mut expected);
+        assert_eq!(out.get_pixel(0, 0), expected.get_pixel(0, 0));
     }
 }
