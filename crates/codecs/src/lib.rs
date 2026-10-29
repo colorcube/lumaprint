@@ -131,41 +131,20 @@ pub fn load_image_from_bytes(bytes: &[u8], source_label: &str) -> Result<LoadedI
     })
 }
 
+/// Converts `buf` from its embedded profile into a builtin working space via `liblcms2`, based on the
+/// profile's actual colorants and tone curves (not its description). Profiles `liblcms2` cannot use as an
+/// RGB source (gray, CMYK) are ignored and the buffer is treated as sRGB.
 fn classify_and_apply_icc_profile(
     buf: &mut ImageBuffer16,
     prof: &IccProfile,
 ) -> (WorkingColorSpace, String) {
-    let desc_low = prof.description.to_ascii_lowercase();
-    if desc_low.contains("adobe") || desc_low.contains("clayrgb") {
-        return (WorkingColorSpace::AdobeRgb1998, prof.description.clone());
+    match prof.convert_embedded_buffer_to_working_space(buf) {
+        Some(ws) => (ws, prof.description.clone()),
+        None => (
+            WorkingColorSpace::Srgb,
+            format!("{} (ignoriert, als sRGB behandelt)", prof.description),
+        ),
     }
-    if desc_low.contains("prophoto") || desc_low.contains("romm") {
-        return (WorkingColorSpace::ProPhotoRgb, prof.description.clone());
-    }
-    if desc_low.contains("p3") {
-        return (WorkingColorSpace::DisplayP3, prof.description.clone());
-    }
-    if desc_low.contains("srgb") || desc_low.contains("iec61966") {
-        return (WorkingColorSpace::Srgb, prof.description.clone());
-    }
-
-    // For custom/non-standard embedded ICC profiles (e.g. ECI RGB v2, camera profiles, linear profiles),
-    // choose the closest wide-gamut WorkingColorSpace and let liblcms2 convert the 16-bit buffer into it.
-    let target_ws = if let Some(r_xyz) = prof.red_primary_xyz {
-        if r_xyz[0] > 0.70 {
-            WorkingColorSpace::ProPhotoRgb
-        } else if r_xyz[0] > 0.56 {
-            WorkingColorSpace::AdobeRgb1998
-        } else if r_xyz[0] > 0.48 {
-            WorkingColorSpace::DisplayP3
-        } else {
-            WorkingColorSpace::Srgb
-        }
-    } else {
-        WorkingColorSpace::ProPhotoRgb
-    };
-    prof.convert_buffer_to_working_space(buf, target_ws);
-    (target_ws, prof.description.clone())
 }
 
 /// Inspects decompressed ICC profile bytes from `ImageDecoder::icc_profile()` or raw file bytes
