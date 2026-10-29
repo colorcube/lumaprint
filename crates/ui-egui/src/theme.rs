@@ -302,6 +302,39 @@ impl Tokens {
         color_luma(self.dock) < 128
     }
 
+    /// Returns the background fill for an active/selected tab header.
+    /// Per design: slightly darker than the dock background, or slightly lighter for very dark themes.
+    #[inline]
+    pub fn tab_active_fill(&self) -> Color32 {
+        let luma = color_luma(self.dock);
+        if luma <= 45 {
+            mix_color(self.dock, Color32::WHITE, 0.12)
+        } else if self.is_dark() {
+            mix_color(self.dock, Color32::BLACK, 0.22)
+        } else {
+            mix_color(self.dock, Color32::BLACK, 0.10)
+        }
+    }
+
+    /// Returns the background fill for an inactive tab header.
+    #[inline]
+    pub fn tab_inactive_fill(&self) -> Color32 {
+        Color32::TRANSPARENT
+    }
+
+    /// Returns the background fill for a hovered inactive tab header.
+    #[inline]
+    pub fn tab_hover_fill(&self) -> Color32 {
+        let luma = color_luma(self.dock);
+        if luma <= 45 {
+            mix_color(self.dock, Color32::WHITE, 0.06)
+        } else if self.is_dark() {
+            mix_color(self.dock, Color32::BLACK, 0.12)
+        } else {
+            mix_color(self.dock, Color32::BLACK, 0.05)
+        }
+    }
+
     pub fn for_kind(kind: ThemeKind) -> Self {
         match kind {
             ThemeKind::KdeSystem => read_kde_system_tokens().unwrap_or_else(|| {
@@ -402,8 +435,8 @@ impl Tokens {
                 text: Color32::from_rgb(242, 242, 242),
                 text_dim: Color32::from_rgb(212, 212, 212),
                 text_faint: Color32::from_rgb(168, 168, 168),
-                accent: Color32::from_rgb(202, 142, 52),
-                accent_soft: Color32::from_rgb(92, 66, 32),
+                accent: Color32::from_rgb(136, 136, 136),
+                accent_soft: Color32::from_rgb(96, 96, 96),
                 accent_text: Color32::WHITE,
                 separator: Color32::from_rgb(112, 112, 112),
                 danger: Color32::from_rgb(235, 85, 85),
