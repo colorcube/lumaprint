@@ -308,18 +308,25 @@ impl Tokens {
     pub fn tab_active_fill(&self) -> Color32 {
         let luma = color_luma(self.dock);
         if luma <= 45 {
-            mix_color(self.dock, Color32::WHITE, 0.12)
+            mix_color(self.dock, Color32::WHITE, 0.14)
         } else if self.is_dark() {
-            mix_color(self.dock, Color32::BLACK, 0.22)
+            mix_color(self.dock, Color32::BLACK, 0.24)
         } else {
-            mix_color(self.dock, Color32::BLACK, 0.10)
+            mix_color(self.dock, Color32::BLACK, 0.13)
         }
     }
 
     /// Returns the background fill for an inactive tab header.
     #[inline]
     pub fn tab_inactive_fill(&self) -> Color32 {
-        Color32::TRANSPARENT
+        let luma = color_luma(self.dock);
+        if luma <= 45 {
+            mix_color(self.dock, Color32::WHITE, 0.05)
+        } else if self.is_dark() {
+            mix_color(self.dock, Color32::BLACK, 0.10)
+        } else {
+            mix_color(self.dock, Color32::BLACK, 0.05)
+        }
     }
 
     /// Returns the background fill for a hovered inactive tab header.
@@ -327,11 +334,11 @@ impl Tokens {
     pub fn tab_hover_fill(&self) -> Color32 {
         let luma = color_luma(self.dock);
         if luma <= 45 {
-            mix_color(self.dock, Color32::WHITE, 0.06)
+            mix_color(self.dock, Color32::WHITE, 0.09)
         } else if self.is_dark() {
-            mix_color(self.dock, Color32::BLACK, 0.12)
+            mix_color(self.dock, Color32::BLACK, 0.17)
         } else {
-            mix_color(self.dock, Color32::BLACK, 0.05)
+            mix_color(self.dock, Color32::BLACK, 0.09)
         }
     }
 

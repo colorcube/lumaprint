@@ -922,12 +922,14 @@ impl LumaPrintApp {
             );
 
         let p = ui.painter();
-        let cr = CornerRadius::same(t.radius.min(4));
-        if is_selected {
-            p.rect_filled(rect, cr, t.tab_active_fill());
+        let fill = if is_selected {
+            t.tab_active_fill()
         } else if resp.hovered() {
-            p.rect_filled(rect, cr, t.tab_hover_fill());
-        }
+            t.tab_hover_fill()
+        } else {
+            t.tab_inactive_fill()
+        };
+        p.rect_filled(rect, CornerRadius::ZERO, fill);
 
         let fg = if is_selected {
             t.text
@@ -2673,12 +2675,13 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
                 let avail_w = ui.available_width();
                 let collapse_w = 22.0;
-                let tabs_area_w = (avail_w - collapse_w - 6.0).max(60.0);
+                let tabs_area_w = (avail_w - collapse_w).max(60.0);
 
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 4.0;
+                let tab_row_resp = ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
                     if has_left_pool && has_left_pages {
-                        let tab_w = ((tabs_area_w - 4.0) * 0.5).floor();
+                        let tab_w1 = (tabs_area_w * 0.5).floor();
+                        let tab_w2 = (tabs_area_w - tab_w1).max(50.0);
                         let pool_lbl = format!("🖼 Pool ({})", self.session.doc.images.len());
                         let pages_lbl = format!("📄 Bögen ({})", self.session.doc.page_count());
                         if self.draggable_dock_tab(
@@ -2686,7 +2689,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             DockDragItem::Pool,
                             pool_lbl,
                             self.left_dock_tab == SharedDockTab::Pool,
-                            tab_w,
+                            tab_w1,
                         ) {
                             self.left_dock_tab = SharedDockTab::Pool;
                         }
@@ -2695,7 +2698,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             DockDragItem::PageList,
                             pages_lbl,
                             self.left_dock_tab == SharedDockTab::PageList,
-                            tab_w,
+                            tab_w2,
                         ) {
                             self.left_dock_tab = SharedDockTab::PageList;
                         }
@@ -2730,6 +2733,12 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         self.session.doc.left_dock_collapsed = true;
                     }
                 });
+
+                ui.painter().hline(
+                    panel_rect.x_range(),
+                    tab_row_resp.response.rect.max.y,
+                    Stroke::new(1.0_f32, t.separator),
+                );
 
                 ui.add_space(6.0);
 
@@ -2873,15 +2882,15 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
     ) {
         let t = self.tokens;
         let outer_rect = ui.max_rect().expand2(Vec2::new(12.0, 6.0));
-        ui.painter().hline(
-            outer_rect.x_range(),
-            outer_rect.min.y,
-            Stroke::new(1.0_f32, t.separator),
-        );
+        let avail_w = ui.available_width();
+        let collapse_w = 22.0;
+        let tabs_area_w = (avail_w - collapse_w).max(60.0);
 
-        ui.horizontal(|ui| {
+        let tab_row_resp = ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
             if has_pages && has_pool {
-                let tab_w = 175.0_f32;
+                let tab_w1 = (tabs_area_w * 0.5).floor();
+                let tab_w2 = (tabs_area_w - tab_w1).max(50.0);
                 let pages_lbl = format!("📄 Bogenliste ({})", self.session.doc.page_count());
                 let pool_lbl = format!("🖼 Bilder-Pool ({})", self.session.doc.images.len());
                 if self.draggable_dock_tab(
@@ -2889,7 +2898,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     DockDragItem::PageList,
                     pages_lbl,
                     self.bottom_dock_tab == SharedDockTab::PageList,
-                    tab_w,
+                    tab_w1,
                 ) {
                     self.bottom_dock_tab = SharedDockTab::PageList;
                 }
@@ -2898,20 +2907,62 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     DockDragItem::Pool,
                     pool_lbl,
                     self.bottom_dock_tab == SharedDockTab::Pool,
-                    tab_w,
+                    tab_w2,
                 ) {
                     self.bottom_dock_tab = SharedDockTab::Pool;
                 }
             } else if has_pages {
                 let lbl = format!("📄 Bogenliste ({})", self.session.doc.page_count());
-                let _ = self.draggable_dock_tab(ui, DockDragItem::PageList, lbl, true, 190.0);
+                let _ = self.draggable_dock_tab(
+                    ui,
+                    DockDragItem::PageList,
+                    lbl,
+                    true,
+                    tabs_area_w,
+                );
             } else {
                 let lbl = format!("🖼 Bilder-Pool ({})", self.session.doc.images.len());
-                let _ = self.draggable_dock_tab(ui, DockDragItem::Pool, lbl, true, 190.0);
+                let _ = self.draggable_dock_tab(
+                    ui,
+                    DockDragItem::Pool,
+                    lbl,
+                    true,
+                    tabs_area_w,
+                );
             }
 
-            if show_pool {
-                ui.separator();
+            if ui
+                .add_sized(
+                    [collapse_w, 28.0],
+                    egui::Button::new(RichText::new("▼").color(t.text_dim)).frame(false),
+                )
+                .on_hover_text("Unteres Dock einklappen (F8)")
+                .clicked()
+            {
+                self.session.doc.bottom_dock_collapsed = true;
+            }
+        });
+
+        ui.painter().hline(
+            outer_rect.x_range(),
+            tab_row_resp.response.rect.max.y,
+            Stroke::new(1.0_f32, t.separator),
+        );
+
+        ui.add_space(4.0);
+        if show_pool {
+            self.draw_filmstrip_contents(ui, true);
+        } else {
+            self.draw_page_navigator_strip(ui, false);
+        }
+    }
+
+    fn draw_filmstrip_contents(&mut self, ui: &mut Ui, is_horizontal: bool) {
+        let panel_w = ui.available_width();
+        ui.set_max_width(panel_w);
+
+        if is_horizontal {
+            ui.horizontal(|ui| {
                 if ui
                     .small_button("➕ Hinzufügen")
                     .on_hover_text(
@@ -2936,35 +2987,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     &mut self.session.doc.pool_filter_unassigned_only,
                     "Nur unplatzierte zeigen",
                 );
-            }
-
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .add(
-                        egui::Button::new(RichText::new("▼").color(t.text_dim))
-                            .frame(false),
-                    )
-                    .on_hover_text("Unteres Dock einklappen (F8)")
-                    .clicked()
-                {
-                    self.session.doc.bottom_dock_collapsed = true;
-                }
             });
-        });
-
-        ui.add_space(2.0);
-        if show_pool {
-            self.draw_filmstrip_contents(ui, true);
+            ui.add_space(2.0);
         } else {
-            self.draw_page_navigator_strip(ui, false);
-        }
-    }
-
-    fn draw_filmstrip_contents(&mut self, ui: &mut Ui, is_horizontal: bool) {
-        let panel_w = ui.available_width();
-        ui.set_max_width(panel_w);
-
-        if !is_horizontal {
             // Single "Hinzufügen" button (images and folders allowed) + "Auf Bögen verteilen"
             ui.horizontal(|ui| {
                 if ui
@@ -4977,27 +5002,31 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     .stroke(Stroke::new(1.0_f32, t.separator)),
             )
             .show(ctx, |ui| {
-                // Dock Header Bar: Tabs (when Pool is docked right) + Collapse Button
-                // Dock Header Bar: Tabs (when Pool is docked right) + Collapse Button
-                let avail_w = ui.available_width();
-                let collapse_w = 22.0;
-                let tabs_area_w = (avail_w - collapse_w - 6.0).max(60.0);
+                let right_panel_rect = ui.max_rect().expand2(Vec2::new(16.0, 10.0));
 
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 4.0;
-                    if has_right_pool {
-                        let tab_w = ((tabs_area_w - 4.0) * 0.5).floor();
+                // Dock Header Bar: Tabs (when Pool is docked right) or plain title + Collapse Button
+                if has_right_pool {
+                    let avail_w = ui.available_width();
+                    let collapse_w = 22.0;
+                    let tabs_area_w = (avail_w - collapse_w).max(60.0);
+
+                    let tab_row_resp = ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        let tab_w1 = (tabs_area_w * 0.5).floor();
+                        let tab_w2 = (tabs_area_w - tab_w1).max(50.0);
                         let is_settings = self.right_dock_tab == RightDockTab::Settings;
-                        let s_size = Vec2::new(tab_w, 28.0);
+                        let s_size = Vec2::new(tab_w1, 28.0);
                         let (s_rect, s_resp) = ui.allocate_exact_size(s_size, Sense::click());
                         let s_resp = s_resp.on_hover_cursor(egui::CursorIcon::PointingHand);
                         let p = ui.painter();
-                        let cr = CornerRadius::same(t.radius.min(4));
-                        if is_settings {
-                            p.rect_filled(s_rect, cr, t.tab_active_fill());
+                        let fill = if is_settings {
+                            t.tab_active_fill()
                         } else if s_resp.hovered() {
-                            p.rect_filled(s_rect, cr, t.tab_hover_fill());
-                        }
+                            t.tab_hover_fill()
+                        } else {
+                            t.tab_inactive_fill()
+                        };
+                        p.rect_filled(s_rect, CornerRadius::ZERO, fill);
                         p.text(
                             s_rect.center(),
                             egui::Align2::CENTER_CENTER,
@@ -5019,42 +5048,62 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             DockDragItem::Pool,
                             pool_lbl,
                             self.right_dock_tab == RightDockTab::Pool,
-                            tab_w,
+                            tab_w2,
                         ) {
                             self.right_dock_tab = RightDockTab::Pool;
                         }
-                    } else {
-                        self.right_dock_tab = RightDockTab::Settings;
-                        let s_size = Vec2::new(tabs_area_w, 28.0);
-                        let (s_rect, s_resp) = ui.allocate_exact_size(s_size, Sense::click());
-                        let p = ui.painter();
-                        let cr = CornerRadius::same(t.radius.min(4));
-                        p.rect_filled(s_rect, cr, t.tab_active_fill());
-                        p.text(
-                            s_rect.center(),
-                            egui::Align2::CENTER_CENTER,
-                            "⚙ Druck-Einstellungen",
-                            FontId::proportional(12.5),
-                            t.text,
+
+                        if ui
+                            .add_sized(
+                                [collapse_w, 28.0],
+                                egui::Button::new(RichText::new("▶").color(t.text_dim))
+                                    .frame(false),
+                            )
+                            .on_hover_text("Rechtes Dock an den Rand einklappen (F10)")
+                            .clicked()
+                        {
+                            self.session.doc.right_dock_collapsed = true;
+                        }
+                    });
+
+                    ui.painter().hline(
+                        right_panel_rect.x_range(),
+                        tab_row_resp.response.rect.max.y,
+                        Stroke::new(1.0_f32, t.separator),
+                    );
+                    ui.add_space(6.0);
+                } else {
+                    self.right_dock_tab = RightDockTab::Settings;
+                    ui.horizontal(|ui| {
+                        let lbl_resp = ui.add(
+                            egui::Label::new(
+                                RichText::new("⚙ Druck-Einstellungen")
+                                    .strong()
+                                    .color(t.text),
+                            )
+                            .sense(Sense::click()),
                         );
-                        s_resp.context_menu(|ui| {
+                        lbl_resp.context_menu(|ui| {
                             self.draw_dock_placement_menu(ui);
                         });
-                    }
 
-                    if ui
-                        .add_sized(
-                            [collapse_w, 28.0],
-                            egui::Button::new(RichText::new("▶").color(t.text_dim)).frame(false),
-                        )
-                        .on_hover_text("Rechtes Dock an den Rand einklappen (F10)")
-                        .clicked()
-                    {
-                        self.session.doc.right_dock_collapsed = true;
-                    }
-                });
-
-                ui.add_space(6.0);
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .add(
+                                    egui::Button::new(RichText::new("▶").color(t.text_dim))
+                                        .frame(false),
+                                )
+                                .on_hover_text("Rechtes Dock an den Rand einklappen (F10)")
+                                .clicked()
+                            {
+                                self.session.doc.right_dock_collapsed = true;
+                            }
+                        });
+                    });
+                    ui.add_space(4.0);
+                    ui.separator();
+                    ui.add_space(4.0);
+                }
 
                 if has_right_pool && self.right_dock_tab == RightDockTab::Pool {
                     self.draw_filmstrip_contents(ui, false);
@@ -5067,21 +5116,22 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     .frame(
                         egui::Frame::new()
                             .fill(t.dock)
-                            .inner_margin(egui::Margin::symmetric(6, 8))
+                            .inner_margin(egui::Margin::symmetric(0, 8))
                             .stroke(Stroke::NONE),
                     )
                     .show_inside(ui, |ui| {
-                        // Tab Header Bar: [ 🖨 Drucken | 💾 Export ] - full width 50/50 without border lines
+                        // Tab Header Bar: [ 🖨 Drucken | 💾 Export ] - full width 50/50 sitting on a continuous line
                         let avail_w = ui.available_width().max(180.0);
-                        let tab_w = ((avail_w - 4.0) * 0.5).floor().max(80.0);
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 4.0;
+                        let tab_w1 = (avail_w * 0.5).floor().max(80.0);
+                        let tab_w2 = (avail_w - tab_w1).max(80.0);
+                        let footer_tab_row = ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
                             if draw_footer_tab(
                                 ui,
                                 &t,
                                 self.print_footer_tab == PrintFooterTab::Print,
                                 "🖨 Drucken",
-                                tab_w,
+                                tab_w1,
                             )
                             .clicked()
                             {
@@ -5092,13 +5142,18 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 &t,
                                 self.print_footer_tab == PrintFooterTab::Export,
                                 "💾 Export",
-                                tab_w,
+                                tab_w2,
                             )
                             .clicked()
                             {
                                 self.print_footer_tab = PrintFooterTab::Export;
                             }
                         });
+                        ui.painter().hline(
+                            right_panel_rect.x_range(),
+                            footer_tab_row.response.rect.max.y,
+                            Stroke::new(1.0_f32, t.separator),
+                        );
                         ui.add_space(8.0);
 
                         match self.print_footer_tab {
@@ -10604,12 +10659,14 @@ fn draw_footer_tab(
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
 
     let p = ui.painter();
-    let cr = CornerRadius::same(tokens.radius.min(4));
-    if active {
-        p.rect_filled(rect, cr, tokens.tab_active_fill());
+    let fill = if active {
+        tokens.tab_active_fill()
     } else if resp.hovered() {
-        p.rect_filled(rect, cr, tokens.tab_hover_fill());
-    }
+        tokens.tab_hover_fill()
+    } else {
+        tokens.tab_inactive_fill()
+    };
+    p.rect_filled(rect, CornerRadius::ZERO, fill);
 
     let fg = if active {
         tokens.text
