@@ -979,7 +979,11 @@ impl LumaPrintApp {
 
     fn compute_dock_drop_zones(&self, ctx: &Context, item: DockDragItem) -> Vec<DockDropZone> {
         let screen = ctx.screen_rect();
-        let top_y = (screen.min.y + 44.0).min(screen.max.y);
+        let top_y = if self.last_canvas_rect.height() > 50.0 {
+            self.last_canvas_rect.min.y
+        } else {
+            (screen.min.y + 76.0).min(screen.max.y)
+        };
         let left_w = 295.0_f32.min(screen.width() * 0.28).max(160.0);
         let right_w = 430.0_f32.min(screen.width() * 0.36).max(200.0);
         let cx_min = if self.last_canvas_rect.width() > 80.0 {
@@ -996,13 +1000,19 @@ impl LumaPrintApp {
         let split_y = (screen.max.y - 72.0).max(top_y + 40.0);
         let inner_top_y = (screen.max.y - 150.0).max(top_y);
 
-        let left_preview = Rect::from_min_max(
-            Pos2::new(screen.min.x, top_y),
-            Pos2::new(screen.min.x + left_w, screen.max.y),
-        );
+        let left_preview = if self.session.doc.filmstrip_position == FilmstripPosition::Left
+            && self.last_pool_rect.width() > 50.0
+        {
+            self.last_pool_rect
+        } else {
+            Rect::from_min_max(
+                Pos2::new(screen.min.x, top_y),
+                Pos2::new(screen.min.x + left_w, screen.max.y),
+            )
+        };
         let left_hit = Rect::from_min_max(
-            Pos2::new(screen.min.x, top_y),
-            Pos2::new(screen.min.x + left_w, inner_top_y.max(top_y + 60.0)),
+            left_preview.min,
+            Pos2::new(left_preview.max.x, inner_top_y.max(top_y + 60.0)),
         );
 
         match item {
@@ -2362,7 +2372,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     });
 
                     ui.menu_button("Einstellungen", |ui| {
+                        ui.spacing_mut().item_spacing = Vec2::new(8.0, 5.0);
                         ui.menu_button("Darstellung", |ui| {
+                            ui.spacing_mut().item_spacing = Vec2::new(8.0, 5.0);
                             ui.label(RichText::new("Oberflächen-Theme").strong());
                             for tk in ThemeKind::ALL {
                                 if ui.radio(self.theme_kind == tk, tk.label()).clicked() {
@@ -2394,6 +2406,11 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             }
                         });
                         ui.separator();
+                        ui.menu_button("Docks platzieren", |ui| {
+                            ui.spacing_mut().item_spacing = Vec2::new(8.0, 5.0);
+                            self.draw_dock_placement_menu(ui);
+                        });
+                        ui.separator();
                         ui.label(RichText::new("Maßeinheit").strong());
                         for unit in [DisplayUnit::Mm, DisplayUnit::Inch] {
                             if ui
@@ -2410,8 +2427,6 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 ui.close_menu();
                             }
                         }
-                        ui.separator();
-                        self.draw_dock_placement_menu(ui);
                         ui.separator();
                         ui.label(RichText::new("Arbeitsbereich-Hintergrundfarbe").strong());
                         for tone in CanvasBackdropTone::ALL {
@@ -2461,7 +2476,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 let active_str = self.session.doc.color.resolved_display_space.name();
                                 (
                                     format!("✓ {mon_str}{icc_str} → {active_str}"),
-                                    Color32::from_rgb(80, 215, 130),
+                                    t.success,
                                 )
                             } else {
                                 (String::from("sRGB (Standard-Oberfläche)"), t.text_dim)
@@ -2704,7 +2719,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
-                            .small_button("◀")
+                            .add(
+                                egui::Button::new(RichText::new("◀").color(t.text_dim))
+                                    .frame(false),
+                            )
                             .on_hover_text("Linkes Dock einklappen (F9)")
                             .clicked()
                         {
@@ -2923,7 +2941,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .small_button("▼")
+                    .add(
+                        egui::Button::new(RichText::new("▼").color(t.text_dim))
+                            .frame(false),
+                    )
                     .on_hover_text("Unteres Dock einklappen (F8)")
                     .clicked()
                 {
@@ -5031,7 +5052,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
-                            .small_button("▶")
+                            .add(
+                                egui::Button::new(RichText::new("▶").color(t.text_dim))
+                                    .frame(false),
+                            )
                             .on_hover_text("Rechtes Dock an den Rand einklappen (F10)")
                             .clicked()
                         {
@@ -5094,12 +5118,6 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 self.print_footer_tab = PrintFooterTab::Export;
                             }
                         });
-                        let tab_line_y = ui.cursor().min.y;
-                        ui.painter().hline(
-                            panel_rect.x_range(),
-                            tab_line_y,
-                            Stroke::new(1.0_f32, t.separator),
-                        );
                         ui.add_space(8.0);
 
                         match self.print_footer_tab {
@@ -5121,27 +5139,41 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             ui,
                             "★ Voreinstellungen (Presets)",
                             true,
+                            true,
                             |app, ui| {
                                 app.draw_presets_section(ui);
                             },
                         );
 
-                        self.draw_dock_section(ui, "1. Druckereinstellungen", true, |app, ui| {
-                            app.draw_printer_settings_section(ui);
-                        });
+                        self.draw_dock_section(
+                            ui,
+                            "1. Druckereinstellungen",
+                            true,
+                            true,
+                            |app, ui| {
+                                app.draw_printer_settings_section(ui);
+                            },
+                        );
 
                         let layout_title = format!(
                             "2. Bogen-Layout (Bogen {}/{})",
                             self.session.doc.active_page_index + 1,
                             self.session.doc.page_count()
                         );
-                        self.draw_dock_section(ui, &layout_title, true, |app, ui| {
-                            app.draw_layout_settings_section(ui);
-                        });
+                        self.draw_dock_section(
+                            ui,
+                            &layout_title,
+                            true,
+                            true,
+                            |app, ui| {
+                                app.draw_layout_settings_section(ui);
+                            },
+                        );
 
                         self.draw_dock_section(
                             ui,
                             "3. Farbeinstellungen",
+                            true,
                             true,
                             |app, ui| {
                                 app.draw_color_settings_section(ui);
@@ -5152,6 +5184,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             ui,
                             "4. Druckerstatus & Tintenstände (IPP)",
                             true,
+                            false,
                             |app, ui| {
                                 app.draw_ink_levels_section(ui);
                             },
@@ -5247,7 +5280,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         ui.add_space(7.0);
         let is_sending = matches!(self.print_job_ui_state, PrintJobUiState::Sending { .. });
         let btn_w = ui.available_width().max(160.0);
-        if draw_print_button(ui, btn_w, is_sending)
+        if draw_print_button(ui, &t, btn_w, is_sending)
             .on_hover_text("Auftrag an den gewählten CUPS-Drucker senden")
             .clicked()
             && !is_sending
@@ -5465,6 +5498,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         ui: &mut Ui,
         title: &str,
         default_open: bool,
+        with_separator: bool,
         add_body: impl FnOnce(&mut Self, &mut Ui),
     ) {
         let t = self.tokens;
@@ -5475,9 +5509,13 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 ui.add_space(8.0);
                 add_body(self, ui);
             });
-        ui.add_space(10.0);
-        ui.separator();
-        ui.add_space(6.0);
+        if with_separator {
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(6.0);
+        } else {
+            ui.add_space(6.0);
+        }
     }
 
     fn draw_presets_section(&mut self, ui: &mut Ui) {
@@ -7180,7 +7218,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 );
                                 ui.label(
                                     RichText::new(format!("✓ {short_desc}"))
-                                        .color(Color32::from_rgb(80, 215, 130))
+                                        .color(t.success)
                                         .strong(),
                                 )
                                 .on_hover_text(tip);
@@ -7210,7 +7248,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             ui.label(
                                 RichText::new("✓ Adobe RGB (Automatisch)")
                                     .small()
-                                    .color(Color32::from_rgb(80, 215, 130)),
+                                    .color(t.success),
                             )
                             .on_hover_text(
                                 "Übergibt die Druckdaten im großen Adobe-RGB-Farbraum an den Druckertreiber (wie Epson Print Layout 'Intent: Automatisch', LUT 0x06).",
@@ -7266,7 +7304,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         ui.label(
                             RichText::new(lut_badge)
                                 .small()
-                                .color(Color32::from_rgb(80, 215, 130)),
+                                .color(t.success),
                         )
                         .on_hover_text(lut_tip);
                         ui.end_row();
@@ -7443,7 +7481,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             .unwrap_or_default();
                         ui.label(RichText::new("Treiber-Status:").color(t.text_dim));
                         let (prefix, badge_col) = if drv_ctrl.is_known_driver_disable() {
-                            ("✓", Color32::from_rgb(80, 215, 130))
+                            ("✓", t.success)
                         } else {
                             ("⚠", t.warning)
                         };
@@ -10638,7 +10676,12 @@ fn draw_footer_tab(
 
 /// Paints the primary `"Drucken"` action button with a crisp vector printer icon and
 /// vertically centered label so there is no emoji font baseline shift.
-fn draw_print_button(ui: &mut Ui, width: f32, is_sending: bool) -> egui::Response {
+fn draw_print_button(
+    ui: &mut Ui,
+    tokens: &Tokens,
+    width: f32,
+    is_sending: bool,
+) -> egui::Response {
     let size = Vec2::new(width.max(148.0), 34.0);
     let sense = if is_sending {
         Sense::hover()
@@ -10653,21 +10696,21 @@ fn draw_print_button(ui: &mut Ui, width: f32, is_sending: bool) -> egui::Respons
     };
 
     let bg = if is_sending {
-        Color32::from_rgb(20, 95, 165)
+        tokens.accent.gamma_multiply(0.60)
     } else if resp.is_pointer_button_down_on() {
-        Color32::from_rgb(0, 98, 180)
+        tokens.pressed
     } else if resp.hovered() {
-        Color32::from_rgb(18, 138, 235)
+        tokens.accent.gamma_multiply(1.12)
     } else {
-        Color32::from_rgb(0, 120, 215)
+        tokens.accent
     };
 
     let p = ui.painter();
-    p.rect_filled(rect, CornerRadius::same(5), bg);
+    p.rect_filled(rect, CornerRadius::same(tokens.radius), bg);
     p.rect_stroke(
         rect,
-        CornerRadius::same(5),
-        Stroke::new(1.0_f32, Color32::from_rgb(70, 175, 255)),
+        CornerRadius::same(tokens.radius),
+        Stroke::new(1.0_f32, tokens.accent_soft),
         StrokeKind::Middle,
     );
 
@@ -10678,24 +10721,24 @@ fn draw_print_button(ui: &mut Ui, width: f32, is_sending: bool) -> egui::Respons
         "Drucken"
     };
     let icon_cx = rect.center().x - if is_sending { 95.0 } else { 32.0 };
-    let white_stroke = Stroke::new(1.4_f32, Color32::WHITE);
+    let icon_stroke = Stroke::new(1.4_f32, tokens.accent_text);
 
     // Vector Printer Icon (top paper tray, main body, bottom output sheet) vertically centered at `cy`
     let top_sheet = Rect::from_center_size(Pos2::new(icon_cx, cy - 5.0), Vec2::new(8.0, 4.0));
     let body = Rect::from_center_size(Pos2::new(icon_cx, cy), Vec2::new(14.0, 7.0));
     let bot_sheet = Rect::from_center_size(Pos2::new(icon_cx, cy + 5.0), Vec2::new(8.0, 4.5));
 
-    p.rect_stroke(top_sheet, CornerRadius::ZERO, white_stroke, StrokeKind::Middle);
+    p.rect_stroke(top_sheet, CornerRadius::ZERO, icon_stroke, StrokeKind::Middle);
     p.rect_filled(body, CornerRadius::same(1), bg);
-    p.rect_stroke(body, CornerRadius::same(1), white_stroke, StrokeKind::Middle);
-    p.rect_filled(bot_sheet, CornerRadius::ZERO, Color32::WHITE);
+    p.rect_stroke(body, CornerRadius::same(1), icon_stroke, StrokeKind::Middle);
+    p.rect_filled(bot_sheet, CornerRadius::ZERO, tokens.accent_text);
 
     p.text(
         Pos2::new(icon_cx + 13.0, cy),
         egui::Align2::LEFT_CENTER,
         label_text,
         FontId::proportional(14.0),
-        Color32::WHITE,
+        tokens.accent_text,
     );
 
     resp
