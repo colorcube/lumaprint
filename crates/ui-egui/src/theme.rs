@@ -302,6 +302,12 @@ impl Tokens {
         color_luma(self.dock) < 128
     }
 
+    /// Colours for a status/message box tinted with `base` (e.g. `danger`): a subtle tinted
+    /// background, `base` as border and the regular text colour, readable in light and dark themes.
+    pub fn status_box(&self, base: Color32) -> (Color32, Color32, Color32) {
+        (mix_color(self.card, base, 0.14), base, self.text)
+    }
+
     /// Returns the background fill for an active/selected tab header.
     /// Per design: slightly darker than the dock background, or slightly lighter for very dark themes.
     #[inline]

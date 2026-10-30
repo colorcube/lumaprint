@@ -47,6 +47,29 @@ pub use theme::{
     parse_kde_globals_tokens,
 };
 
+/// `DragValue` with German decimal comma: shows `12,5` and accepts both `12,5` and `12.5`.
+fn de_drag<Num: egui::emath::Numeric>(value: &mut Num) -> egui::DragValue<'_> {
+    egui::DragValue::new(value)
+        .custom_formatter(|n, decimals| {
+            egui::emath::format_with_decimals_in_range(n, decimals).replace('.', ",")
+        })
+        .custom_parser(parse_decimal_de)
+}
+
+/// Parses a number typed with decimal comma or point (whitespace and U+2212 minus tolerated).
+fn parse_decimal_de(text: &str) -> Option<f64> {
+    let normalized: String = text
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .map(|c| match c {
+            ',' => '.',
+            '−' => '-',
+            other => other,
+        })
+        .collect();
+    normalized.parse().ok()
+}
+
 /// Standard photo & Fine-Art print size presets (`mm`) selectable per image in `"Sammel"` and `"Standard"` modes.
 const PHOTO_SIZE_PRESETS_MM: &[(&str, SizeMm)] = &[
     (
@@ -222,7 +245,7 @@ fn draw_frame_line_rows(
         if frame_line.enabled
             && ui
                 .add(
-                    egui::DragValue::new(&mut frame_line.thickness_mm)
+                    de_drag(&mut frame_line.thickness_mm)
                         .range(0.1..=5.0)
                         .speed(0.1)
                         .prefix("Stärke ")
@@ -779,7 +802,7 @@ impl LumaPrintApp {
             show_crop_modal: false,
             show_template_builder_modal: false,
             show_about_modal: false,
-            new_preset_name: String::from("Meine Baryta Voreinstellung"),
+            new_preset_name: String::new(),
             new_template_name: String::from("Kontaktbogen 2x2"),
             new_template_rows: 2,
             new_template_cols: usize::from(2u8),
@@ -4363,7 +4386,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 ui.horizontal(|ui| {
                                     let w_changed = ui
                                         .add(
-                                            egui::DragValue::new(&mut cur_size.width_mm)
+                                            de_drag(&mut cur_size.width_mm)
                                                 .range(10.0..=800.0)
                                                 .speed(0.5)
                                                 .suffix(" mm"),
@@ -4372,7 +4395,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                     ui.label("×");
                                     let h_changed = ui
                                         .add(
-                                            egui::DragValue::new(&mut cur_size.height_mm)
+                                            de_drag(&mut cur_size.height_mm)
                                                 .range(10.0..=800.0)
                                                 .speed(0.5)
                                                 .suffix(" mm"),
@@ -5302,7 +5325,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     let mut copies = self.session.doc.printer.copies;
                     if ui
                         .add(
-                            egui::DragValue::new(&mut copies)
+                            de_drag(&mut copies)
                                 .range(1..=99)
                                 .prefix("Kopien: "),
                         )
@@ -5482,33 +5505,19 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         }
 
         ui.add_space(6.0);
-        let (bg, border, text_col, prefix, msg, can_dismiss) = match &state {
+        let t = self.tokens;
+        let (base, prefix, msg, can_dismiss) = match &state {
             PrintJobUiState::Idle => return,
             PrintJobUiState::Sending { .. } => (
-                Color32::from_rgba_unmultiplied(0, 120, 215, 36),
-                Color32::from_rgb(55, 155, 245),
-                Color32::from_rgb(175, 220, 255),
+                t.accent,
                 "⏳",
                 "Druckbogen wird in 720 DPI gerendert und an CUPS übergeben…",
                 false,
             ),
-            PrintJobUiState::Success(m) => (
-                Color32::from_rgba_unmultiplied(35, 150, 75, 42),
-                Color32::from_rgb(65, 195, 110),
-                Color32::from_rgb(180, 245, 200),
-                "✓",
-                m.as_str(),
-                true,
-            ),
-            PrintJobUiState::Error(e) => (
-                Color32::from_rgba_unmultiplied(195, 45, 45, 48),
-                Color32::from_rgb(235, 85, 85),
-                Color32::from_rgb(255, 195, 195),
-                "⚠",
-                e.as_str(),
-                true,
-            ),
+            PrintJobUiState::Success(m) => (t.success, "✓", m.as_str(), true),
+            PrintJobUiState::Error(e) => (t.danger, "⚠", e.as_str(), true),
         };
+        let (bg, border, text_col) = t.status_box(base);
 
         let mut dismiss = false;
         egui::Frame::new()
@@ -5609,14 +5618,22 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
                 ui.label(RichText::new("Neu speichern:").color(t.text_dim));
                 ui.horizontal(|ui| {
+                    let row_h = ui.spacing().interact_size.y;
                     ui.add(
                         egui::TextEdit::singleline(&mut self.new_preset_name)
+                            .hint_text("Name der Voreinstellung")
                             .desired_width(150.0)
+                            .min_size(Vec2::new(0.0, row_h))
+                            .vertical_align(egui::Align::Center)
                             .clip_text(true),
                     );
-                    if ui.button("+ Speichern").clicked() {
-                        let name = self.new_preset_name.clone();
+                    let name = self.new_preset_name.trim().to_string();
+                    if ui
+                        .add_enabled(!name.is_empty(), egui::Button::new("+ Speichern"))
+                        .clicked()
+                    {
                         self.exec(EngineCommand::SavePreset { name });
+                        self.new_preset_name.clear();
                     }
                 });
                 ui.end_row();
@@ -6321,7 +6338,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             ui.horizontal(|ui| {
                                 let top_changed = ui
                                     .add(
-                                        egui::DragValue::new(&mut std_spec.margins_mm.top_mm)
+                                        de_drag(&mut std_spec.margins_mm.top_mm)
                                             .range(0.0..=800.0)
                                             .speed(0.5)
                                             .max_decimals(1)
@@ -6331,7 +6348,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 ui.label("×");
                                 let bottom_changed = ui
                                     .add(
-                                        egui::DragValue::new(&mut std_spec.margins_mm.bottom_mm)
+                                        de_drag(&mut std_spec.margins_mm.bottom_mm)
                                             .range(0.0..=800.0)
                                             .speed(0.5)
                                             .max_decimals(1)
@@ -6370,7 +6387,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             ui.horizontal(|ui| {
                                 let left_changed = ui
                                     .add(
-                                        egui::DragValue::new(&mut std_spec.margins_mm.left_mm)
+                                        de_drag(&mut std_spec.margins_mm.left_mm)
                                             .range(0.0..=800.0)
                                             .speed(0.5)
                                             .max_decimals(1)
@@ -6380,7 +6397,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 ui.label("×");
                                 let right_changed = ui
                                     .add(
-                                        egui::DragValue::new(&mut std_spec.margins_mm.right_mm)
+                                        de_drag(&mut std_spec.margins_mm.right_mm)
                                             .range(0.0..=800.0)
                                             .speed(0.5)
                                             .max_decimals(1)
@@ -6419,7 +6436,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             ui.horizontal(|ui| {
                                 let w_changed = ui
                                     .add(
-                                        egui::DragValue::new(&mut std_spec.manual_rect_mm.width_mm)
+                                        de_drag(&mut std_spec.manual_rect_mm.width_mm)
                                             .range(10.0..=600.0)
                                             .speed(1.0)
                                             .max_decimals(1)
@@ -6429,7 +6446,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 ui.label("×");
                                 let h_changed = ui
                                     .add(
-                                        egui::DragValue::new(
+                                        de_drag(
                                             &mut std_spec.manual_rect_mm.height_mm,
                                         )
                                         .range(10.0..=800.0)
@@ -6476,7 +6493,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                     if ui
                                         .add_enabled(
                                             can_x,
-                                            egui::DragValue::new(&mut std_spec.manual_rect_mm.x_mm)
+                                            de_drag(&mut std_spec.manual_rect_mm.x_mm)
                                                 .range(0.0..=800.0)
                                                 .speed(0.5)
                                                 .max_decimals(1)
@@ -6491,7 +6508,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                     if ui
                                         .add_enabled(
                                             can_y,
-                                            egui::DragValue::new(&mut std_spec.manual_rect_mm.y_mm)
+                                            de_drag(&mut std_spec.manual_rect_mm.y_mm)
                                                 .range(0.0..=800.0)
                                                 .speed(0.5)
                                                 .max_decimals(1)
@@ -6559,14 +6576,14 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         ui.horizontal(|ui| {
                             if ui
                                 .add(
-                                    egui::DragValue::new(&mut gw.canvas_size_mm.width_mm)
+                                    de_drag(&mut gw.canvas_size_mm.width_mm)
                                         .range(50.0..=500.0)
                                         .suffix(" mm"),
                                 )
                                 .changed()
                                 || ui
                                     .add(
-                                        egui::DragValue::new(&mut gw.canvas_size_mm.height_mm)
+                                        de_drag(&mut gw.canvas_size_mm.height_mm)
                                             .range(50.0..=700.0)
                                             .suffix(" mm"),
                                     )
@@ -6581,7 +6598,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         ui.horizontal(|ui| {
                             if ui
                                 .add(
-                                    egui::DragValue::new(&mut gw.thickness_mm)
+                                    de_drag(&mut gw.thickness_mm)
                                         .range(5.0..=60.0)
                                         .suffix(" mm"),
                                 )
@@ -6592,7 +6609,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             ui.label("+ Rückseite:");
                             if ui
                                 .add(
-                                    egui::DragValue::new(&mut gw.back_extension_mm)
+                                    de_drag(&mut gw.back_extension_mm)
                                         .range(0.0..=12.7)
                                         .speed(0.1)
                                         .suffix(" mm"),
@@ -6952,7 +6969,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         ui.horizontal(|ui| {
                             if ui
                                 .add(
-                                    egui::DragValue::new(&mut comp.page_margin_mm)
+                                    de_drag(&mut comp.page_margin_mm)
                                         .range(0.0..=50.0)
                                         .speed(0.5)
                                         .prefix("Rand ")
@@ -6965,7 +6982,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             }
                             if ui
                                 .add(
-                                    egui::DragValue::new(&mut comp.nest_gap_mm)
+                                    de_drag(&mut comp.nest_gap_mm)
                                         .range(0.0..=30.0)
                                         .speed(0.5)
                                         .prefix("Abst. ")
@@ -7049,7 +7066,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         ui.horizontal(|ui| {
                             let w_changed = ui
                                 .add(
-                                    egui::DragValue::new(&mut cur_size.width_mm)
+                                    de_drag(&mut cur_size.width_mm)
                                         .range(10.0..=800.0)
                                         .speed(0.5)
                                         .suffix(" mm"),
@@ -7058,7 +7075,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             ui.label("×");
                             let h_changed = ui
                                 .add(
-                                    egui::DragValue::new(&mut cur_size.height_mm)
+                                    de_drag(&mut cur_size.height_mm)
                                         .range(10.0..=800.0)
                                         .speed(0.5)
                                         .suffix(" mm"),
@@ -7224,35 +7241,34 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 ui.end_row();
 
                 ui.label(RichText::new("Farbmodus:").color(t.text_dim));
-                egui::ComboBox::from_id_salt("color_mode_combo")
-                    .selected_text(truncate_text(cur_mode.label_de(), 34))
-                    .width(245.0)
-                    .show_ui(ui, |ui| {
-                        let modes: &[ColorManagementMode] = if advanced {
-                            &[
-                                ColorManagementMode::UseIccProfile,
-                                ColorManagementMode::PrinterManagesColor {
-                                    space: lumaprint_cms::WorkingColorSpace::AdobeRgb1998,
-                                },
-                                ColorManagementMode::AdvancedBwPhoto,
-                                ColorManagementMode::NoColorAdjustment,
-                            ]
-                        } else {
-                            &[
-                                ColorManagementMode::UseIccProfile,
-                                ColorManagementMode::PrinterManagesColor {
-                                    space: lumaprint_cms::WorkingColorSpace::AdobeRgb1998,
-                                },
-                            ]
-                        };
-                        for m in modes {
-                            let is_sel =
-                                std::mem::discriminant(m) == std::mem::discriminant(&cur_mode);
-                            if ui.selectable_label(is_sel, m.label_de()).clicked() {
-                                self.exec(EngineCommand::SetColorMode(m.clone()));
-                            }
+                // Radio list instead of a combo box: with only 2–4 modes there is no need for a popup,
+                // which egui clips at the bottom screen edge (only two rows visible).
+                ui.vertical(|ui| {
+                    let modes: &[ColorManagementMode] = if advanced {
+                        &[
+                            ColorManagementMode::UseIccProfile,
+                            ColorManagementMode::PrinterManagesColor {
+                                space: lumaprint_cms::WorkingColorSpace::AdobeRgb1998,
+                            },
+                            ColorManagementMode::AdvancedBwPhoto,
+                            ColorManagementMode::NoColorAdjustment,
+                        ]
+                    } else {
+                        &[
+                            ColorManagementMode::UseIccProfile,
+                            ColorManagementMode::PrinterManagesColor {
+                                space: lumaprint_cms::WorkingColorSpace::AdobeRgb1998,
+                            },
+                        ]
+                    };
+                    for m in modes {
+                        let is_sel =
+                            std::mem::discriminant(m) == std::mem::discriminant(&cur_mode);
+                        if ui.radio(is_sel, m.label_de()).clicked() && !is_sel {
+                            self.exec(EngineCommand::SetColorMode(m.clone()));
                         }
-                    });
+                    }
+                });
                 ui.end_row();
 
                 if !advanced {
@@ -7681,7 +7697,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         ui.label("H:");
                         if ui
                             .add(
-                                egui::DragValue::new(&mut abw.circle_x)
+                                de_drag(&mut abw.circle_x)
                                     .range(-ABW_WHEEL_RANGE..=ABW_WHEEL_RANGE),
                             )
                             .changed()
@@ -7692,7 +7708,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         ui.label("V:");
                         if ui
                             .add(
-                                egui::DragValue::new(&mut abw.circle_y)
+                                de_drag(&mut abw.circle_y)
                                     .range(-ABW_WHEEL_RANGE..=ABW_WHEEL_RANGE),
                             )
                             .changed()
@@ -8351,7 +8367,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     ui.horizontal(|ui| {
                         grid_changed |= ui
                             .add(
-                                egui::DragValue::new(&mut self.template_studio.rows)
+                                de_drag(&mut self.template_studio.rows)
                                     .range(1..=10)
                                     .prefix("Z: "),
                             )
@@ -8359,7 +8375,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         ui.label("×");
                         grid_changed |= ui
                             .add(
-                                egui::DragValue::new(&mut self.template_studio.cols)
+                                de_drag(&mut self.template_studio.cols)
                                     .range(1..=10)
                                     .prefix("S: "),
                             )
@@ -8379,7 +8395,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         let mut m = self.template_studio.margins_mm.top_mm;
                         if ui
                             .add(
-                                egui::DragValue::new(&mut m)
+                                de_drag(&mut m)
                                     .range(0.0..=80.0)
                                     .speed(0.5)
                                     .suffix(" mm"),
@@ -8393,14 +8409,14 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         ui.label(RichText::new("Oben / Unten:").color(t.text_dim));
                         ui.horizontal(|ui| {
                             ui.add(
-                                egui::DragValue::new(&mut self.template_studio.margins_mm.top_mm)
+                                de_drag(&mut self.template_studio.margins_mm.top_mm)
                                     .range(0.0..=80.0)
                                     .speed(0.5)
                                     .suffix(" mm"),
                             );
                             ui.label("×");
                             ui.add(
-                                egui::DragValue::new(
+                                de_drag(
                                     &mut self.template_studio.margins_mm.bottom_mm,
                                 )
                                 .range(0.0..=80.0)
@@ -8413,14 +8429,14 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         ui.label(RichText::new("Links / Rechts:").color(t.text_dim));
                         ui.horizontal(|ui| {
                             ui.add(
-                                egui::DragValue::new(&mut self.template_studio.margins_mm.left_mm)
+                                de_drag(&mut self.template_studio.margins_mm.left_mm)
                                     .range(0.0..=80.0)
                                     .speed(0.5)
                                     .suffix(" mm"),
                             );
                             ui.label("×");
                             ui.add(
-                                egui::DragValue::new(
+                                de_drag(
                                     &mut self.template_studio.margins_mm.right_mm,
                                 )
                                 .range(0.0..=80.0)
@@ -8434,14 +8450,14 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     ui.label(RichText::new("Steg H / V:").color(t.text_dim));
                     ui.horizontal(|ui| {
                         ui.add(
-                            egui::DragValue::new(&mut self.template_studio.gap_h_mm)
+                            de_drag(&mut self.template_studio.gap_h_mm)
                                 .range(0.0..=50.0)
                                 .speed(0.5)
                                 .prefix("H: ")
                                 .suffix(" mm"),
                         );
                         ui.add(
-                            egui::DragValue::new(&mut self.template_studio.gap_v_mm)
+                            de_drag(&mut self.template_studio.gap_v_mm)
                                 .range(0.0..=50.0)
                                 .speed(0.5)
                                 .prefix("V: ")
@@ -8644,14 +8660,14 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         ui.label(RichText::new("Position X / Y:").color(t.text_dim));
                         ui.horizontal(|ui| {
                             ui.add(
-                                egui::DragValue::new(&mut slot.x_mm)
+                                de_drag(&mut slot.x_mm)
                                     .range(0.0..=(max_w - 10.0))
                                     .speed(0.5)
                                     .prefix("X: ")
                                     .suffix(" mm"),
                             );
                             ui.add(
-                                egui::DragValue::new(&mut slot.y_mm)
+                                de_drag(&mut slot.y_mm)
                                     .range(0.0..=(max_h - 10.0))
                                     .speed(0.5)
                                     .prefix("Y: ")
@@ -8663,14 +8679,14 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         ui.label(RichText::new("Breite / Höhe:").color(t.text_dim));
                         ui.horizontal(|ui| {
                             ui.add(
-                                egui::DragValue::new(&mut slot.width_mm)
+                                de_drag(&mut slot.width_mm)
                                     .range(10.0..=max_w)
                                     .speed(0.5)
                                     .prefix("B: ")
                                     .suffix(" mm"),
                             );
                             ui.add(
-                                egui::DragValue::new(&mut slot.height_mm)
+                                de_drag(&mut slot.height_mm)
                                     .range(10.0..=max_h)
                                     .speed(0.5)
                                     .prefix("H: ")
@@ -11040,6 +11056,16 @@ fn percent_decode_path(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decimal_input_accepts_comma_and_point() {
+        assert_eq!(parse_decimal_de("112,9"), Some(112.9));
+        assert_eq!(parse_decimal_de(" 112.9 "), Some(112.9));
+        assert_eq!(parse_decimal_de("−3,5"), Some(-3.5));
+        assert_eq!(parse_decimal_de("12"), Some(12.0));
+        assert_eq!(parse_decimal_de("1,2,3"), None);
+        assert_eq!(parse_decimal_de("abc"), None);
+    }
 
     #[test]
     fn empty_startup_and_menu_demo_images_load_into_pool_only() {
