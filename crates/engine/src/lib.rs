@@ -2670,15 +2670,19 @@ impl Session {
     /// plus `EpsonAbw*` options, as Epson Print Layout does): LumaPrint then sends sRGB and only
     /// emulates the toning for the screen preview. Drivers without ABW get software toning.
     pub fn driver_handles_abw(&self) -> bool {
-        self.doc.color.mode == ColorManagementMode::AdvancedBwPhoto
-            && self.active_system_printer().is_some_and(|sp| {
-                matches!(
-                    sp.capabilities.driver_color_control,
-                    DriverColorControl::EpsonEscpr {
-                        supports_advanced_bw: true
-                    }
-                )
-            })
+        self.doc.color.mode == ColorManagementMode::AdvancedBwPhoto && self.printer_supports_abw()
+    }
+
+    /// `true` if the active printer's driver offers firmware Advanced B&W (`EpsonColorMode=AdvancedBW`).
+    pub fn printer_supports_abw(&self) -> bool {
+        self.active_system_printer().is_some_and(|sp| {
+            matches!(
+                sp.capabilities.driver_color_control,
+                DriverColorControl::EpsonEscpr {
+                    supports_advanced_bw: true
+                }
+            )
+        })
     }
 
     /// Rejects printing in ICC mode without a resolvable profile: the sheet would go out
@@ -2748,7 +2752,11 @@ impl Session {
             let icc = self.active_icc_profile();
             let (buf, _) =
                 render_cups_spool_page_at_16bit(&print_doc, pi, &self.image_buffers, icc, dpi)?;
-            let dithered_rgb8 = buf.to_rgb8_dithered_vec();
+            let rgb8 = if self.doc.printer.detailed.spool_dithering {
+                buf.to_rgb8_dithered_vec()
+            } else {
+                buf.to_rgb8_vec()
+            };
             let tmp = tempfile::Builder::new()
                 .prefix(&format!("lumaprint_p{}_", pi + 1))
                 .suffix(".png")
@@ -2759,7 +2767,7 @@ impl Session {
                         reason: e.to_string(),
                     })
                 })?;
-            save_png8_with_dpi(buf.width, buf.height, &dithered_rgb8, dpi, tmp.path())?;
+            save_png8_with_dpi(buf.width, buf.height, &rgb8, dpi, tmp.path())?;
 
             let mut req = self.build_cups_spool_request();
             req.extra_options

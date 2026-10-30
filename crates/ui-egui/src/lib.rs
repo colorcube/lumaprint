@@ -7243,6 +7243,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 ui.label(RichText::new("Farbmodus:").color(t.text_dim));
                 // Radio list instead of a combo box: with only 2–4 modes there is no need for a popup,
                 // which egui clips at the bottom screen edge (only two rows visible).
+                let abw_in_printer = self.session.printer_supports_abw();
                 ui.vertical(|ui| {
                     let modes: &[ColorManagementMode] = if advanced {
                         &[
@@ -7264,7 +7265,14 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     for m in modes {
                         let is_sel =
                             std::mem::discriminant(m) == std::mem::discriminant(&cur_mode);
-                        if ui.radio(is_sel, m.label_de()).clicked() && !is_sel {
+                        let label = match m {
+                            ColorManagementMode::AdvancedBwPhoto if abw_in_printer => {
+                                "Schwarzweiß (Advanced B&W im Drucker)"
+                            }
+                            ColorManagementMode::AdvancedBwPhoto => "Schwarzweiß (LumaPrint-Tonung)",
+                            _ => m.label_de(),
+                        };
+                        if ui.radio(is_sel, label).clicked() && !is_sel {
                             self.exec(EngineCommand::SetColorMode(m.clone()));
                         }
                     }
@@ -7585,6 +7593,21 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
                     });
                 ui.end_row();
+
+                if advanced {
+                    let mut detailed = self.session.doc.printer.detailed;
+                    ui.label(RichText::new("Dithering:").color(t.text_dim));
+                    if ui
+                        .checkbox(&mut detailed.spool_dithering, "16 → 8 Bit mit Dithering")
+                        .on_hover_text(
+                            "An (Standard): verhindert Tonwertstufen in feinen Verläufen.\nAus: einfaches Runden – 8-Bit-Bilder gehen unverändert an den Drucker (wie Epson Print Layout), die Druckdatei wird deutlich kleiner.",
+                        )
+                        .changed()
+                    {
+                        self.exec(EngineCommand::SetDetailedPrinterSettings(detailed));
+                    }
+                    ui.end_row();
+                }
             });
 
         if advanced

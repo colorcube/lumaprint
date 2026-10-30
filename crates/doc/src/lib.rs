@@ -432,6 +432,11 @@ pub struct DetailedPrinterSettings {
     pub bottom_edge_priority: bool,
     /// App-Papiereinstellungen anwenden (`Override Printer Panel Settings`).
     pub apply_app_paper_settings: bool,
+    /// 4×4 Bayer dithering when reducing the 16-bit sheet to the 8-bit spool PNG. Off = plain
+    /// rounding: 8-bit sources pass bit-exact (comparable with Epson Print Layout) and the spool
+    /// file compresses much better, at the risk of banding in smooth gradients.
+    #[serde(default = "default_true")]
+    pub spool_dithering: bool,
 }
 
 impl Default for DetailedPrinterSettings {
@@ -441,6 +446,7 @@ impl Default for DetailedPrinterSettings {
             gloss_smoothing: false,
             bottom_edge_priority: false,
             apply_app_paper_settings: true,
+            spool_dithering: true,
         }
     }
 }
@@ -1474,6 +1480,14 @@ impl PrintJobDocument {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spool_dithering_defaults_on_for_older_documents() {
+        let old = r#"{"black_enhance_overcoat":true,"gloss_smoothing":false,"bottom_edge_priority":false,"apply_app_paper_settings":true}"#;
+        let parsed: DetailedPrinterSettings = serde_json::from_str(old).unwrap();
+        assert!(parsed.spool_dithering);
+        assert!(DetailedPrinterSettings::default().spool_dithering);
+    }
 
     #[test]
     fn media_specs_and_gallery_wrap_calculations_are_exact() {
