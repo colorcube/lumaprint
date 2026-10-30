@@ -22,7 +22,9 @@ use egui::{
     StrokeKind, TextureHandle, TextureOptions, Ui, Vec2,
 };
 use lumaprint_cms::{RenderingIntent, ViewingLight, WorkingColorSpace};
-use lumaprint_color::{AbwHighlightShift, AbwMidtone, AbwTonePreset, ImageBuffer16, Rgb8};
+use lumaprint_color::{
+    ABW_WHEEL_RANGE, AbwHighlightShift, AbwMidtone, AbwTonePreset, ImageBuffer16, Rgb8,
+};
 use lumaprint_doc::{
     CanvasBackdropTone, CanvasViewMode, CenteringMode, ColorManagementMode, CropSpec,
     DisplayColorSpaceMode, ExportColorSpace, ExportFileFormat, ExportSettings, FilmstripPosition,
@@ -7529,17 +7531,28 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             .map(|sp| sp.capabilities.driver_color_control)
                             .unwrap_or_default();
                         ui.label(RichText::new("Treiber-Status:").color(t.text_dim));
-                        let (prefix, badge_col) = if drv_ctrl.is_known_driver_disable() {
-                            ("✓", t.success)
+                        if self.session.driver_handles_abw() {
+                            ui.label(
+                                RichText::new("✓ Advanced B&W im Drucker")
+                                    .small()
+                                    .color(t.success),
+                            )
+                            .on_hover_text(
+                                "Sendet sRGB mit EpsonColorMode=AdvancedBW und den ABW-Einstellungen (EpsonAbw*) wie Epson Print Layout. Graukonvertierung und Tonung übernimmt die Drucker-Firmware; die Vorschau ist eine Annäherung.",
+                            );
                         } else {
-                            ("⚠", t.warning)
-                        };
-                        ui.label(
-                            RichText::new(format!("{prefix} {}", drv_ctrl.status_badge_de()))
-                                .small()
-                                .color(badge_col),
-                        )
-                        .on_hover_text(drv_ctrl.status_tooltip_de());
+                            let (prefix, badge_col) = if drv_ctrl.is_known_driver_disable() {
+                                ("✓", t.success)
+                            } else {
+                                ("⚠", t.warning)
+                            };
+                            ui.label(
+                                RichText::new(format!("{prefix} {}", drv_ctrl.status_badge_de()))
+                                    .small()
+                                    .color(badge_col),
+                            )
+                            .on_hover_text(drv_ctrl.status_tooltip_de());
+                        }
                         ui.end_row();
                     }
                 }
@@ -7648,16 +7661,18 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
                     if wheel_resp.clicked() || wheel_resp.dragged() {
                         if let Some(pos) = wheel_resp.interact_pointer_pos() {
-                            let dx = ((pos.x - center.x) / radius * 100.0).round() as i32;
-                            let dy = ((center.y - pos.y) / radius * 100.0).round() as i32;
+                            let dx = ((pos.x - center.x) / radius * ABW_WHEEL_RANGE as f32).round()
+                                as i32;
+                            let dy = ((center.y - pos.y) / radius * ABW_WHEEL_RANGE as f32).round()
+                                as i32;
                             abw.set_wheel_coords(dx, dy);
                             changed = true;
                         }
                     }
 
                     let dot_pos = Pos2::new(
-                        center.x + (abw.circle_x as f32 / 100.0) * radius,
-                        center.y - (abw.circle_y as f32 / 100.0) * radius,
+                        center.x + (abw.circle_x as f32 / ABW_WHEEL_RANGE as f32) * radius,
+                        center.y - (abw.circle_y as f32 / ABW_WHEEL_RANGE as f32) * radius,
                     );
                     painter.circle_filled(dot_pos, 5.5, t.accent);
                     painter.circle_stroke(dot_pos, 5.5, Stroke::new(1.5_f32, Color32::WHITE));
@@ -7665,7 +7680,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     ui.horizontal(|ui| {
                         ui.label("H:");
                         if ui
-                            .add(egui::DragValue::new(&mut abw.circle_x).range(-100..=100))
+                            .add(
+                                egui::DragValue::new(&mut abw.circle_x)
+                                    .range(-ABW_WHEEL_RANGE..=ABW_WHEEL_RANGE),
+                            )
                             .changed()
                         {
                             abw.preset = AbwTonePreset::Custom;
@@ -7673,7 +7691,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
                         ui.label("V:");
                         if ui
-                            .add(egui::DragValue::new(&mut abw.circle_y).range(-100..=100))
+                            .add(
+                                egui::DragValue::new(&mut abw.circle_y)
+                                    .range(-ABW_WHEEL_RANGE..=ABW_WHEEL_RANGE),
+                            )
                             .changed()
                         {
                             abw.preset = AbwTonePreset::Custom;

@@ -214,14 +214,19 @@ pub enum AbwTonePreset {
     Custom,
 }
 
+/// Range of each toning wheel axis (`-75..=75`), as encoded by Epson Print Layout in `ESC q setb`.
+pub const ABW_WHEEL_RANGE: i32 = 75;
+
 impl AbwTonePreset {
-    /// Returns the default 2D color wheel coordinates `(circle_x, circle_y)` in `-100..=100`.
+    /// Returns the default 2D color wheel coordinates `(circle_x, circle_y)` in `-75..=75`.
+    /// Neutral, Cool and Warm are the values Epson Print Layout sets (verified from captures);
+    /// Sepia is not verified.
     pub const fn default_wheel_coords(self) -> (i32, i32) {
         match self {
             AbwTonePreset::Neutral => (0, 0),
-            AbwTonePreset::Cool => (-4, -30),
-            AbwTonePreset::Warm => (6, 26),
-            AbwTonePreset::Sepia => (14, 52),
+            AbwTonePreset::Cool => (-8, -45),
+            AbwTonePreset::Warm => (4, 20),
+            AbwTonePreset::Sepia => (11, 39),
             AbwTonePreset::Custom => (0, 0),
         }
     }
@@ -231,22 +236,30 @@ impl AbwTonePreset {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum AbwMidtone {
     Light,
-    #[default]
     Normal,
     Dark,
+    /// Epson Print Layout default.
+    #[default]
     Darker,
     Darkest,
 }
 
 impl AbwMidtone {
-    pub fn gamma_exponent(self) -> f32 {
+    /// Gamma the printer firmware applies (`ESC q setb`): 1.6 / 1.8 / 2.0 / 2.2 / 2.4.
+    pub const fn firmware_gamma_x100(self) -> i32 {
         match self {
-            AbwMidtone::Light => 0.86,
-            AbwMidtone::Normal => 1.00,
-            AbwMidtone::Dark => 1.12,
-            AbwMidtone::Darker => 1.25,
-            AbwMidtone::Darkest => 1.40,
+            AbwMidtone::Light => 160,
+            AbwMidtone::Normal => 180,
+            AbwMidtone::Dark => 200,
+            AbwMidtone::Darker => 220,
+            AbwMidtone::Darkest => 240,
         }
+    }
+
+    /// Exponent for the software emulation (preview, drivers without ABW): firmware gamma relative
+    /// to the 2.2 of the sRGB input, so the EPL default `Darker` leaves the gray tones unchanged.
+    pub fn gamma_exponent(self) -> f32 {
+        self.firmware_gamma_x100() as f32 / 220.0
     }
 }
 
@@ -264,9 +277,9 @@ pub enum AbwHighlightShift {
 pub struct AbwSettings {
     pub preset: AbwTonePreset,
     pub midtone: AbwMidtone,
-    /// Horizontal wheel axis: `-100` (Green) .. `+100` (Magenta).
+    /// Horizontal wheel axis: `-75` (Green) .. `+75` (Magenta).
     pub circle_x: i32,
-    /// Vertical wheel axis: `-100` (Blue) .. `+100` (Yellow).
+    /// Vertical wheel axis: `-75` (Blue) .. `+75` (Yellow).
     pub circle_y: i32,
     /// Overall brightness (`-25..=25`).
     pub brightness: i32,
@@ -286,7 +299,7 @@ impl Default for AbwSettings {
     fn default() -> Self {
         Self {
             preset: AbwTonePreset::Neutral,
-            midtone: AbwMidtone::Normal,
+            midtone: AbwMidtone::Darker,
             circle_x: 0,
             circle_y: 0,
             brightness: 0,
@@ -312,8 +325,8 @@ impl AbwSettings {
 
     /// Sets custom 2D color wheel coordinates (automatically switching `preset` to `Custom`).
     pub fn set_wheel_coords(&mut self, x: i32, y: i32) {
-        self.circle_x = x.clamp(-100, 100);
-        self.circle_y = y.clamp(-100, 100);
+        self.circle_x = x.clamp(-ABW_WHEEL_RANGE, ABW_WHEEL_RANGE);
+        self.circle_y = y.clamp(-ABW_WHEEL_RANGE, ABW_WHEEL_RANGE);
         self.preset = AbwTonePreset::Custom;
     }
 
@@ -334,8 +347,9 @@ impl AbwSettings {
         };
 
         // 2D Toning wheel tint in RGB delta (midtones receive strongest tint, pure white/black stay clean)
-        let cx = (self.circle_x.clamp(-100, 100) as f32) / 100.0; // -Green .. +Magenta
-        let cy = (self.circle_y.clamp(-100, 100) as f32) / 100.0; // -Blue .. +Yellow
+        let range = ABW_WHEEL_RANGE as f32;
+        let cx = (self.circle_x.clamp(-ABW_WHEEL_RANGE, ABW_WHEEL_RANGE) as f32) / range; // -Green .. +Magenta
+        let cy = (self.circle_y.clamp(-ABW_WHEEL_RANGE, ABW_WHEEL_RANGE) as f32) / range; // -Blue .. +Yellow
 
         for i in 0..=65535u32 {
             let mut y = (i as f32) / 65535.0;

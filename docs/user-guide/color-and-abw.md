@@ -35,7 +35,7 @@ Schaltet sämtliche Detail- und Spezialwerkzeuge frei:
 - **ICC-Profilwahl (`Automatisch` vs. `Manuell`):** Erlaubt die freie Auswahl jedes erkannten Profils oder das Laden einer beliebigen `.icc`- / `.icm`-Datei über den Dateidialog (`📂`).
 - **Manueller Rendering Intent & Tiefenkompensierung (BPC)**.
 - **Übergabefarbraum (`Adobe RGB` vs. `sRGB`)** im Modus `Drucker-Automatik`.
-- **Treiber-Status-Anzeige:** Zeigt transparent an, welches CUPS-Kommando (`EpsonColorMode=NoColorAdjustment`, `EpsonAdobeRGB` etc.) an den Treiber gesendet wird.
+- **Treiber-Status-Anzeige:** Zeigt transparent an, welches CUPS-Kommando (`EpsonColorMode=NoColorAdjustment`, `EpsonAdobeRGB`, `AdvancedBW` etc.) an den Treiber gesendet wird.
 
 ---
 
@@ -78,9 +78,12 @@ Komfort-Modus für originale Hersteller-Papiere, bei dem die Farbabstimmung durc
 ## 5. Schwarzweiß (Advanced B&W Photo — Ansicht `Erweitert`)
 
 Konvertiert Farb- oder Graustufenbilder in neutrale oder fein getonte Schwarzweiß-Prints unter Ausnutzung der 3 Schwarztinten (`PK`/`MK`, `LK` Gray, `LLK` Light Gray):
-- **Farbton-Presets:** *Neutral*, *Kühl*, *Warm*, *Sepia* oder *Feineinstellung*.
-- **2D-Farbzirkel:** Interaktives Tonungsrad mit numerischer Eingabe (`Horizontal: Grün ↔ Magenta`, `Vertikal: Blau ↔ Gelb`).
-- **Mittelgrauwert (Gamma-Grundcharakteristik):** *Hell*, *Normal*, *Dunkel*, *Dunkler*, *Dunkelste*.
+- **Wer rechnet?**
+  - *Epson SC-P900/P700 mit `epson-p900-escpr-cups`:* Wie in Epson Print Layout übernimmt die **Drucker-Firmware** Graukonvertierung und Tonung. LumaPrint sendet das Bild in `sRGB` mit `EpsonColorMode=AdvancedBW` und allen Reglerwerten (`EpsonAbw*`); die Treiber-Status-Anzeige zeigt **`✓ Advanced B&W im Drucker`**. Die Bildschirmvorschau ist dabei eine Annäherung an das Firmware-Ergebnis.
+  - *Andere Drucker/Treiber:* LumaPrint rechnet die Tonung selbst und sendet das Ergebnis mit abgeschalteter Treiber-Farbkorrektur.
+- **Farbton-Presets:** *Neutral*, *Kühl*, *Warm*, *Sepia* oder *Feineinstellung*. *Kühl* (`−8 / −45`) und *Warm* (`4 / 20`) entsprechen den Werten von Epson Print Layout; die Koordinaten von *Sepia* sind nicht mit EPL abgeglichen.
+- **2D-Farbzirkel:** Interaktives Tonungsrad mit numerischer Eingabe (`Horizontal: Grün ↔ Magenta`, `Vertikal: Blau ↔ Gelb`, jeweils `-75 .. +75` wie in EPL).
+- **Mittelgrauwert (Gamma-Grundcharakteristik):** *Hell* (1,6), *Normal* (1,8), *Dunkel* (2,0), *Dunkler* (2,2, Standard wie in EPL), *Dunkelste* (2,4).
 - **Tonwert-Feinregler:**
   - *Helligkeit* (`-25 .. +25`)
   - *Kontrast* (`-25 .. +25`)

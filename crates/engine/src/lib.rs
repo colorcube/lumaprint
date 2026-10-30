@@ -15,7 +15,9 @@ use lumaprint_codecs::{
     CodecError, generate_test_chart_16bit, load_image_file, save_png8_with_dpi, save_png16,
     save_tiff16,
 };
-use lumaprint_color::{AbwSettings, AbwTonePreset, ImageBuffer16, Rgb8, Rgb16};
+use lumaprint_color::{
+    AbwHighlightShift, AbwMidtone, AbwSettings, AbwTonePreset, ImageBuffer16, Rgb8, Rgb16,
+};
 use lumaprint_cups::{
     CupsError, CupsSpoolRequest, DriverColorControl, SystemPrinter, discover_custom_media_json,
     discover_system_printers, sn_id_to_base_media_key, submit_cups_job, verify_printer_reachable,
@@ -38,6 +40,7 @@ use lumaprint_render::{
     render_page_at_16bit,
 };
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -2505,12 +2508,14 @@ impl Session {
     /// parameters (`MediaType=<base>`, `UserMediaID`, `PrintDuty`, `DryingTime`, `BottomEdgePriority`)
     /// and auto-detected `DriverColorControl`.
     pub fn build_cups_spool_request(&self) -> CupsSpoolRequest {
-        let app_manages_color = matches!(
-            self.doc.color.mode,
-            ColorManagementMode::UseIccProfile
-                | ColorManagementMode::AdvancedBwPhoto
-                | ColorManagementMode::NoColorAdjustment
-        );
+        let driver_abw = self.driver_handles_abw();
+        let app_manages_color = !driver_abw
+            && matches!(
+                self.doc.color.mode,
+                ColorManagementMode::UseIccProfile
+                    | ColorManagementMode::AdvancedBwPhoto
+                    | ColorManagementMode::NoColorAdjustment
+            );
 
         let driver_color_control = self
             .active_system_printer()
@@ -2608,6 +2613,36 @@ impl Session {
                 extra_options.insert(String::from("cm-calibration"), String::from("true"));
             }
         }
+        if driver_abw {
+            let abw = &self.doc.color.abw;
+            extra_options.insert(String::from("EpsonColorMode"), String::from("AdvancedBW"));
+            extra_options.insert(String::from("cm-calibration"), String::from("true"));
+            let midtone = match abw.midtone {
+                AbwMidtone::Light => "Light",
+                AbwMidtone::Normal => "Normal",
+                AbwMidtone::Dark => "Dark",
+                AbwMidtone::Darker => "Darker",
+                AbwMidtone::Darkest => "Darkest",
+            };
+            let shift = match abw.highlight_shift {
+                AbwHighlightShift::Off => "Off",
+                AbwHighlightShift::ImageArea => "ImageArea",
+                AbwHighlightShift::FullPage => "FullPage",
+            };
+            for (key, value) in [
+                ("EpsonAbwToneH", abw.circle_x.to_string()),
+                ("EpsonAbwToneV", abw.circle_y.to_string()),
+                ("EpsonAbwMidtone", midtone.to_string()),
+                ("EpsonAbwBrightness", abw.brightness.to_string()),
+                ("EpsonAbwContrast", abw.contrast.to_string()),
+                ("EpsonAbwShadowTone", abw.shadow_toning.to_string()),
+                ("EpsonAbwHighlightTone", abw.highlight_toning.to_string()),
+                ("EpsonAbwMaxDensity", abw.max_optical_density.to_string()),
+                ("EpsonAbwHighlightShift", shift.to_string()),
+            ] {
+                extra_options.insert(String::from(key), value);
+            }
+        }
 
         CupsSpoolRequest {
             queue_name: self.doc.printer.printer_queue.clone(),
@@ -2629,6 +2664,21 @@ impl Session {
             overcoat,
             extra_options,
         }
+    }
+
+    /// `true` when Advanced B&W is delegated to the printer firmware (`EpsonColorMode=AdvancedBW`
+    /// plus `EpsonAbw*` options, as Epson Print Layout does): LumaPrint then sends sRGB and only
+    /// emulates the toning for the screen preview. Drivers without ABW get software toning.
+    pub fn driver_handles_abw(&self) -> bool {
+        self.doc.color.mode == ColorManagementMode::AdvancedBwPhoto
+            && self.active_system_printer().is_some_and(|sp| {
+                matches!(
+                    sp.capabilities.driver_color_control,
+                    DriverColorControl::EpsonEscpr {
+                        supports_advanced_bw: true
+                    }
+                )
+            })
     }
 
     /// Rejects printing in ICC mode without a resolvable profile: the sheet would go out
@@ -2682,16 +2732,22 @@ impl Session {
 
         self.ensure_icc_profile_for_print()?;
 
+        // With firmware ABW the sheet goes out as sRGB; gray conversion and toning happen in the printer.
+        let print_doc = if self.driver_handles_abw() {
+            let mut d = self.doc.clone();
+            d.color.mode = ColorManagementMode::PrinterManagesColor {
+                space: WorkingColorSpace::Srgb,
+            };
+            Cow::Owned(d)
+        } else {
+            Cow::Borrowed(&self.doc)
+        };
+
         let mut last_msg = String::new();
         for &pi in &page_indices {
             let icc = self.active_icc_profile();
-            let (buf, _) = render_cups_spool_page_at_16bit(
-                &self.doc,
-                pi,
-                &self.image_buffers,
-                icc,
-                dpi,
-            )?;
+            let (buf, _) =
+                render_cups_spool_page_at_16bit(&print_doc, pi, &self.image_buffers, icc, dpi)?;
             let dithered_rgb8 = buf.to_rgb8_dithered_vec();
             let tmp = tempfile::Builder::new()
                 .prefix(&format!("lumaprint_p{}_", pi + 1))
@@ -2880,6 +2936,66 @@ mod tests {
             .execute(EngineCommand::SetResolutionKey("Fine".into()))
             .unwrap();
         assert_eq!(session.build_cups_spool_request().resolution, "Fine");
+    }
+
+    #[test]
+    fn advanced_bw_is_delegated_to_epson_driver_firmware() {
+        use lumaprint_cups::{PrinterCapabilities, build_lp_command_args};
+
+        let mut session = Session::new();
+        let printer = |control| SystemPrinter {
+            queue_name: String::from("TestQueue_P900"),
+            display_name: String::from("Test P900"),
+            device_uri: String::from("socket://192.0.2.10:9100"),
+            is_default: true,
+            state_message: String::new(),
+            capabilities: PrinterCapabilities {
+                driver_color_control: control,
+                ..PrinterCapabilities::default()
+            },
+        };
+        session.system_printers = vec![printer(DriverColorControl::EpsonEscpr {
+            supports_advanced_bw: true,
+        })];
+        session.doc.printer.printer_queue = String::from("TestQueue_P900");
+        session
+            .execute(EngineCommand::SetColorAdvancedMode(true))
+            .unwrap();
+        session
+            .execute(EngineCommand::SetColorMode(
+                ColorManagementMode::AdvancedBwPhoto,
+            ))
+            .unwrap();
+        session
+            .execute(EngineCommand::SetAbwPreset(AbwTonePreset::Cool))
+            .unwrap();
+
+        assert!(session.driver_handles_abw());
+        let req = session.build_cups_spool_request();
+        assert!(
+            !req.app_manages_color,
+            "firmware ABW must not force NoColorAdjustment"
+        );
+        let opt = |k: &str| req.extra_options.get(k).map(String::as_str);
+        assert_eq!(opt("EpsonColorMode"), Some("AdvancedBW"));
+        assert_eq!(opt("EpsonAbwToneH"), Some("-8"));
+        assert_eq!(opt("EpsonAbwToneV"), Some("-45"));
+        assert_eq!(opt("EpsonAbwMidtone"), Some("Darker"));
+        assert_eq!(opt("EpsonAbwHighlightShift"), Some("Off"));
+        let args = build_lp_command_args(&req, Path::new("/tmp/sheet.png"));
+        assert!(args.iter().any(|a| a == "EpsonColorMode=AdvancedBW"));
+        assert!(
+            !args
+                .iter()
+                .any(|a| a.contains("NoColorAdjustment") || a.contains("EpsonICC"))
+        );
+
+        // Drivers without firmware ABW keep LumaPrint's software toning with color correction off.
+        session.system_printers = vec![printer(DriverColorControl::GenericCups)];
+        assert!(!session.driver_handles_abw());
+        let req = session.build_cups_spool_request();
+        assert!(req.app_manages_color);
+        assert!(!req.extra_options.contains_key("EpsonColorMode"));
     }
 
     #[test]
