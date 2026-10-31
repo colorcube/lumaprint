@@ -175,6 +175,10 @@ The user guide is currently written in German.
 
 Epson, SureColor and Epson Print Layout are trademarks of Seiko Epson Corporation; TurboPrint is a trademark of ZEDOnet. LumaPrint is an independent project and is not affiliated with or endorsed by these companies. Their names are used only to describe compatibility and the workflow LumaPrint is modeled after.
 
+## About the development
+
+LumaPrint was developed with extensive help from AI. The code, the tests and the documentation were written by Google's Gemini and Anthropic's Claude under my direction. Requirements, design decisions, review and all tests with real hardware are my own.
+
 ## License
 
 LumaPrint is free software: you can redistribute it and/or modify it under the terms of the **GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version** (`GPL-3.0-or-later`). See [`LICENSE`](LICENSE).
