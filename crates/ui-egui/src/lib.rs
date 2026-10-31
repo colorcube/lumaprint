@@ -30,8 +30,8 @@ use lumaprint_doc::{
     DisplayColorSpaceMode, ExportColorSpace, ExportFileFormat, ExportSettings, FilmstripPosition,
     FrameLineSpec, GalleryWrapEffect, GalleryWrapSpec, LayoutMode, LayoutTemplate, MEDIA_TYPES,
     OutputSharpening, PageListPosition, PaperSource, PersistentSettings, PrintQuality, PrintScope,
-    SizingCriterion, SlotCaptionMode, SourceImageEntry, StandardLayoutSpec, TemplateLayoutSpec,
-    find_media_type,
+    SPOOL_DITHERING_OPTION, SizingCriterion, SlotCaptionMode, SourceImageEntry, StandardLayoutSpec,
+    TemplateLayoutSpec, find_media_type,
 };
 use lumaprint_engine::{
     EngineCommand, Session, SettingsLoad, load_settings_file, save_settings_file,
@@ -7755,7 +7755,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     });
                 ui.end_row();
 
-                if advanced {
+                if advanced && SPOOL_DITHERING_OPTION {
                     let mut detailed = self.session.doc.printer.detailed;
                     ui.label(RichText::new("Dithering:").color(t.text_dim));
                     if ui

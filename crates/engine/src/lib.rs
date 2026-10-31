@@ -28,7 +28,7 @@ use lumaprint_doc::{
     DetailedPrinterSettings, DisplayColorSpaceMode, DocError, ExportSettings, FrameLineSpec,
     GalleryWrapSpec, LayoutMode, LayoutTemplate, OutputSharpening, PaperSource, PersistentSettings,
     PlatenGap, PrintJobDocument, PrintPreset, PrintQuality, PrintScope, PrintSheetPage,
-    SizingCriterion, SourceImageEntry, TemplateLayoutSpec, find_media_type,
+    SPOOL_DITHERING_OPTION, SizingCriterion, SourceImageEntry, TemplateLayoutSpec, find_media_type,
 };
 use lumaprint_geom::{MarginsMm, Orientation, RectMm, SizeMm};
 use lumaprint_ipp::{IppError, PrinterStatus, query_printer_status_ipp};
@@ -2853,7 +2853,7 @@ impl Session {
             let icc = self.active_icc_profile();
             let (buf, _) =
                 render_cups_spool_page_at_16bit(&print_doc, pi, &self.image_buffers, icc, dpi)?;
-            let rgb8 = if self.doc.printer.detailed.spool_dithering {
+            let rgb8 = if SPOOL_DITHERING_OPTION && self.doc.printer.detailed.spool_dithering {
                 buf.to_rgb8_dithered_vec()
             } else {
                 buf.to_rgb8_vec()

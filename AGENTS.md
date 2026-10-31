@@ -26,7 +26,7 @@ docs/                        Markdown documentation structured for Zensical manu
    - Always validate input-derived numbers, dimensions, margins, and indices (`get()` instead of `[i]`, `checked_*` / `saturating_*`).
 2. **Printer Independence (Separation of Concerns):**
    - LumaPrint is responsible for page layout, 16-bit color management (ICC / ABW), softproofing, and rendering high-bit-depth page sheets.
-   - Hardware rasterization and printer wire protocols (e.g., ESC/P3, Gutenprint) belong strictly to the system printer driver in CUPS. LumaPrint discovers installed printers via `lumaprint-cups`, renders each sheet at 16 bit, dithers it to 8 bit (4×4 Bayer) only at the spool boundary, and spools it as an 8-bit RGB PNG at the driver resolution (`-o ppi=…`) to `lp`. CUPS raster and the ESC/P-R protocol carry 8 bits per channel.
+   - Hardware rasterization and printer wire protocols (e.g., ESC/P3, Gutenprint) belong strictly to the system printer driver in CUPS. LumaPrint discovers installed printers via `lumaprint-cups`, renders each sheet at 16 bit, rounds it to 8 bit only at the spool boundary (4×4 Bayer dithering exists but is disabled via `SPOOL_DITHERING_OPTION`; test prints showed no visible difference), and spools it as an 8-bit RGB PNG at the driver resolution (`-o ppi=…`) to `lp`. CUPS raster and the ESC/P-R protocol carry 8 bits per channel.
 3. **Everything is a command:**
    - Every user-visible change to document state goes through `lumaprint-engine` commands so the GUI, CLI, batch/hotfolder runner, and tests execute identical code paths.
 4. **16-bit & Color-Accurate Pipeline:**

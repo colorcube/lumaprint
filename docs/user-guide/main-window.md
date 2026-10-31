@@ -38,7 +38,7 @@ Der Hauptbildschirm von **LumaPrint** orientiert sich direkt am klaren Workflow 
 
 LumaPrint merkt sich beim Beenden – und laufend etwa einmal pro Sekunde nach jeder Änderung – alle Einstellungen in `~/.config/lumaprint/settings.json` (bzw. `$XDG_CONFIG_HOME/lumaprint/settings.json`):
 
-- Drucker, Medium, Papierformat, Papierzufuhr, Qualität und *Detaillierte Einstellungen* (Overcoat, Dithering …)
+- Drucker, Medium, Papierformat, Papierzufuhr, Qualität und *Detaillierte Einstellungen* (Overcoat …)
 - Farbeinstellungen (Farbmodus, ICC-Profil, Rendering Intent, BPC, ABW-Regler, Druck-Schärfung) und Export-Einstellungen
 - Ansicht (Einheiten, Lineale, Dock-Positionen, Hintergrund) sowie Theme und Skalierung
 - Voreinstellungen, eigene Papiere, Papier- und Leinwandformate, Vorlagen, ABW-Tonungen und Rahmenfarben

@@ -35,7 +35,6 @@ Schaltet sämtliche Detail- und Spezialwerkzeuge frei:
 - **ICC-Profilwahl (`Automatisch` vs. `Manuell`):** Erlaubt die freie Auswahl jedes erkannten Profils oder das Laden einer beliebigen `.icc`- / `.icm`-Datei über den Dateidialog (`📂`).
 - **Manueller Rendering Intent & Tiefenkompensierung (BPC)**.
 - **Übergabefarbraum (`Adobe RGB` vs. `sRGB`)** im Modus `Drucker-Automatik`.
-- **Dithering (16 → 8 Bit):** Standardmäßig an – verhindert Tonwertstufen in feinen Verläufen. Aus: einfaches Runden; 8-Bit-Bilder gehen unverändert an den Drucker (wie bei Epson Print Layout) und die Druckdatei wird deutlich kleiner.
 - **Treiber-Status-Anzeige:** Zeigt transparent an, welches CUPS-Kommando (`EpsonColorMode=NoColorAdjustment`, `EpsonAdobeRGB`, `AdvancedBW` etc.) an den Treiber gesendet wird.
 
 ---

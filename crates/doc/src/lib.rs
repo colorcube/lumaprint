@@ -435,9 +435,15 @@ pub struct DetailedPrinterSettings {
     /// 4×4 Bayer dithering when reducing the 16-bit sheet to the 8-bit spool PNG. Off = plain
     /// rounding: 8-bit sources pass bit-exact (comparable with Epson Print Layout) and the spool
     /// file compresses much better, at the risk of banding in smooth gradients.
-    #[serde(default = "default_true")]
+    /// Only honoured while [`SPOOL_DITHERING_OPTION`] is enabled.
+    #[serde(default)]
     pub spool_dithering: bool,
 }
+
+/// Enables the spool dithering option (`DetailedPrinterSettings::spool_dithering`) in engine and GUI.
+/// Disabled because test prints of gray ramps showed no visible difference to plain rounding;
+/// set to `true` to bring the "Dithering" checkbox back.
+pub const SPOOL_DITHERING_OPTION: bool = false;
 
 impl Default for DetailedPrinterSettings {
     fn default() -> Self {
@@ -446,7 +452,7 @@ impl Default for DetailedPrinterSettings {
             gloss_smoothing: false,
             bottom_edge_priority: false,
             apply_app_paper_settings: true,
-            spool_dithering: true,
+            spool_dithering: false,
         }
     }
 }
@@ -1582,11 +1588,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn spool_dithering_defaults_on_for_older_documents() {
+    fn spool_dithering_defaults_off_for_older_documents() {
         let old = r#"{"black_enhance_overcoat":true,"gloss_smoothing":false,"bottom_edge_priority":false,"apply_app_paper_settings":true}"#;
         let parsed: DetailedPrinterSettings = serde_json::from_str(old).unwrap();
-        assert!(parsed.spool_dithering);
-        assert!(DetailedPrinterSettings::default().spool_dithering);
+        assert!(!parsed.spool_dithering);
+        assert!(!DetailedPrinterSettings::default().spool_dithering);
     }
 
     #[test]
