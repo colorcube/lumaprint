@@ -19,7 +19,8 @@ use lumaprint_color::{
     AbwHighlightShift, AbwMidtone, AbwSettings, AbwTonePreset, ImageBuffer16, Rgb8, Rgb16,
 };
 use lumaprint_cups::{
-    CupsError, CupsSpoolRequest, DriverColorControl, SystemPrinter, VIRTUAL_EXPORT_QUEUE,
+    CupsError, CupsSpoolRequest, DriverColorControl, SYSTEM_CUSTOM_ICC_DIR, SystemPrinter,
+    VIRTUAL_EXPORT_QUEUE,
     discover_custom_media_json,
     discover_system_printers, sn_id_to_base_media_key, submit_cups_job, verify_printer_reachable,
 };
@@ -441,8 +442,8 @@ impl Session {
             PathBuf::from("/usr/share/color/icc"),
             PathBuf::from("/usr/share/color/icc/epson-scp900"),
             PathBuf::from("/usr/local/share/color/icc"),
-            // Sibling checkout of the epson-p900-escpr-cups driver (development).
-            PathBuf::from("../epson-p900-escpr-cups/icc"),
+            // Custom media profiles installed by ep-media-installer (epson-p900-media-install).
+            PathBuf::from(SYSTEM_CUSTOM_ICC_DIR),
         ];
         if let Some(home) = std::env::var_os("HOME") {
             let h = PathBuf::from(home);
@@ -829,6 +830,8 @@ impl Session {
             }
             EngineCommand::RefreshPrinters => {
                 self.system_printers = discover_system_printers();
+                // Pick up custom media and profiles installed meanwhile by ep-media-installer.
+                self.discover_icc_profiles();
                 self.discover_custom_media();
                 if !self
                     .system_printers

@@ -38,3 +38,12 @@ Für Fremdpapiere (z.B. *Hahnemühle Photo Rag 308*, *Canson Infinity Baryta Pho
   - *Trocknungszeit pro Druckkopf-Bewegung* (`0,0 .. 10,0 s`)
   - *Tintenauftrag / Ink Duty* (`-50 % .. +50 %`)
   - *Einzugskorrektur* (`-1,0 % .. +1,0 %`) & *Rollenspannung* (*Normal, Hoch, Sehr hoch*)
+
+### Eigene Papiere aus dem Drucker (ep-media-installer)
+
+Papiere, die mit [ep-media-installer](https://github.com/colorcube/ep-media-installer) in die 30 Speicherplätze des Druckers geschrieben wurden, übernimmt LumaPrint automatisch – sobald sie mit **„Für das System installieren“** auf diesem Rechner installiert sind (wie unter Windows/macOS muss das auf jedem Rechner einmal geschehen):
+
+- Papierliste: `/etc/epson-p900-escpr-cups/custom_media.json`
+- ICC-Profile: `/usr/local/share/color/icc/epson-p900-custom/`
+
+Neu installierte Papiere erscheinen nach **Drucker aktualisieren** ohne Neustart. Beim Drucken sendet LumaPrint Basispapier, Speicherplatz-ID, Tintenauftrag und Trocknungszeit an den Treiber.

@@ -89,12 +89,25 @@ impl DriverColorControl {
     }
 }
 
-/// Entry from `custom_media.json` shared between `epson-p900-escpr-cups`, Linux Epson Media Installer, and LumaPrint.
+/// System media database written by `epson-p900-media-install` (ep-media-installer "Für das System
+/// installieren"); also read by the CUPS filter.
+pub const SYSTEM_CUSTOM_MEDIA_JSON: &str = "/etc/epson-p900-escpr-cups/custom_media.json";
+/// ICC profiles of the custom media installed by `epson-p900-media-install`.
+pub const SYSTEM_CUSTOM_ICC_DIR: &str = "/usr/local/share/color/icc/epson-p900-custom";
+
+/// Entry from `custom_media.json` shared between `epson-p900-escpr-cups`, ep-media-installer and LumaPrint.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CustomMediaJsonEntry {
+    #[serde(default)]
+    pub slot: u8,
+    #[serde(default)]
     pub key: String,
+    #[serde(default)]
     pub name: String,
+    #[serde(default)]
     pub base_media: String,
+    #[serde(default)]
+    pub base_sn_id: Option<u32>,
     #[serde(default)]
     pub user_media_id: u32,
     #[serde(default)]
@@ -110,44 +123,74 @@ pub struct CustomMediaJsonEntry {
 }
 
 /// Maps numeric Epson `.emx` base media `sn_id` values to the canonical `MediaType` key.
+/// Same table as the driver (`builtin_media_specs` in epson-p900-escpr-cups, documented in its
+/// `docs/supported-features.md`); the `sn_id` is the firmware media ID sent in `ESC q setq`.
 pub const fn sn_id_to_base_media_key(sn_id: u32) -> Option<&'static str> {
     match sn_id {
         0 => Some("PlainPaper"),
         11 => Some("PremiumGlossy"),
         12 => Some("PremiumSemigloss"),
+        13 => Some("PremiumLuster"),
         15 => Some("ArchivalMatte"),
+        16 => Some("WatercolorRadiantWhite"),
         25 => Some("VelvetFineArt"),
-        27 => Some("PremiumLuster"),
-        31 => Some("WatercolorRadiantWhite"),
+        29 => Some("PhotoQualityInkJet"),
+        39 => Some("UltraSmoothFineArt"),
         52 => Some("PhotoPaperGlossy"),
-        58 => Some("UltraSmoothFineArt"),
-        172 => Some("ValueGlossy"),
+        91 => Some("DiscLabel"),
+        92 => Some("DiscLabelPremium"),
+        142 => Some("ProofingWhiteSemimatte"),
+        169 => Some("CanvasMatte"),
+        171 => Some("CanvasSatin"),
         174 => Some("Baryta"),
-        175 => Some("FineArtMatte"),
-        176 => Some("PhotoThick"),
-        177 => Some("Washi"),
-        178 => Some("CanvasSatin"),
-        179 => Some("CanvasMatte"),
+        205 => Some("Washi"),
+        206 => Some("FineArtMatte"),
         _ => None,
     }
 }
 
 /// Parses a `custom_media.json` string into `CustomMediaJsonEntry` items.
+///
+/// Entries are parsed one by one: an invalid entry is skipped instead of discarding the whole file.
+/// Missing values are filled in like the driver does: key `CustomSlotN` from `slot`, name from key,
+/// base medium from `base_sn_id`, `user_media_id` `1900 + slot`. Entries without a usable key or base
+/// medium are skipped. Fails only if the text is not a JSON array.
 pub fn parse_custom_media_json(json_text: &str) -> Result<Vec<CustomMediaJsonEntry>, CupsError> {
-    serde_json::from_str::<Vec<CustomMediaJsonEntry>>(json_text).map_err(|e| {
+    let items = serde_json::from_str::<Vec<serde_json::Value>>(json_text).map_err(|e| {
         CupsError::CommandFailed {
             cmd: String::from("parse_custom_media_json"),
             reason: e.to_string(),
         }
-    })
+    })?;
+    let entries = items
+        .into_iter()
+        .filter_map(|item| serde_json::from_value::<CustomMediaJsonEntry>(item).ok())
+        .filter_map(|mut e| {
+            if e.key.trim().is_empty() {
+                if !(1..=30).contains(&e.slot) {
+                    return None;
+                }
+                e.key = format!("CustomSlot{}", e.slot);
+            }
+            if e.name.trim().is_empty() {
+                e.name = e.key.clone();
+            }
+            if e.base_media.trim().is_empty() {
+                e.base_media = sn_id_to_base_media_key(e.base_sn_id?)?.to_string();
+            }
+            if e.user_media_id == 0 && (1..=30).contains(&e.slot) {
+                e.user_media_id = 1900 + u32::from(e.slot);
+            }
+            Some(e)
+        })
+        .collect();
+    Ok(entries)
 }
 
-/// Discovers `custom_media.json` entries from standard system and workspace paths:
-/// 1. `$EPSON_P900_CUSTOM_MEDIA_JSON`
-/// 2. `/etc/epson-p900-escpr-cups/custom_media.json`
-/// 3. `/usr/share/epson-p900-escpr-cups/custom_media.json`
-/// 4. `~/.local/share/lumaprint/media/custom_media.json`
-/// 5. `../epson-p900-escpr-cups/custom_media.json`
+/// Discovers `custom_media.json` entries (earlier files win on duplicate keys):
+/// 1. `$EPSON_P900_CUSTOM_MEDIA_JSON` (development override)
+/// 2. `/etc/epson-p900-escpr-cups/custom_media.json` (system database, see [`SYSTEM_CUSTOM_MEDIA_JSON`])
+/// 3. `/usr/share/epson-p900-escpr-cups/custom_media.json` (packaged list)
 pub fn discover_custom_media_json() -> Vec<CustomMediaJsonEntry> {
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Ok(env_path) = std::env::var("EPSON_P900_CUSTOM_MEDIA_JSON") {
@@ -155,16 +198,10 @@ pub fn discover_custom_media_json() -> Vec<CustomMediaJsonEntry> {
             candidates.push(PathBuf::from(env_path));
         }
     }
-    candidates.push(PathBuf::from("/etc/epson-p900-escpr-cups/custom_media.json"));
+    candidates.push(PathBuf::from(SYSTEM_CUSTOM_MEDIA_JSON));
     candidates.push(PathBuf::from(
         "/usr/share/epson-p900-escpr-cups/custom_media.json",
     ));
-    if let Ok(home) = std::env::var("HOME") {
-        candidates.push(
-            PathBuf::from(home).join(".local/share/lumaprint/media/custom_media.json"),
-        );
-    }
-    candidates.push(PathBuf::from("../epson-p900-escpr-cups/custom_media.json"));
 
     let mut merged: Vec<CustomMediaJsonEntry> = Vec::new();
     for path in candidates {
@@ -439,7 +476,6 @@ impl SystemPrinter {
         // If our companion driver PPD exists in the workspace, enrich the virtual export printer with its *cupsICCProfile map
         for candidate in [
             "/usr/share/cups/model/epson-p900-escpr/Epson-SC-P900-ESCPR.ppd",
-            "../epson-p900-escpr-cups/ppd/Epson-SC-P900-ESCPR.ppd",
         ] {
             if let Ok(ppd_text) = std::fs::read_to_string(candidate) {
                 caps = parse_lpoptions_and_ppd("", Some(&ppd_text));
@@ -510,12 +546,10 @@ pub fn discover_system_printers() -> Vec<SystemPrinter> {
             let fallback_candidates = if is_p700 {
                 [
                     "/usr/share/cups/model/epson-p900-escpr/Epson-SC-P700-ESCPR.ppd",
-                    "../epson-p900-escpr-cups/ppd/Epson-SC-P700-ESCPR.ppd",
                 ]
             } else {
                 [
                     "/usr/share/cups/model/epson-p900-escpr/Epson-SC-P900-ESCPR.ppd",
-                    "../epson-p900-escpr-cups/ppd/Epson-SC-P900-ESCPR.ppd",
                 ]
             };
             for candidate in fallback_candidates {
@@ -1425,6 +1459,46 @@ ColorModel/Color Model: *RGB Gray
     }
 
     #[test]
+    fn sn_id_table_matches_driver_feature_table() {
+        // Compare with the driver's generated media table when the driver checkout is next to us.
+        let Ok(table) =
+            std::fs::read_to_string("../../../epson-p900-escpr-cups/docs/supported-features.md")
+        else {
+            return;
+        };
+        let mut checked = 0;
+        for line in table.lines() {
+            let cols: Vec<&str> = line.split('|').map(str::trim).collect();
+            // | status | `Key` | Name | Media ID | Black | ICC | Carbon |
+            if cols.len() >= 6 && cols[2].starts_with('`') {
+                if let Ok(sn) = cols[4].parse::<u32>() {
+                    let key = cols[2].trim_matches('`');
+                    assert_eq!(sn_id_to_base_media_key(sn), Some(key), "sn_id {sn}");
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked >= 18, "driver media table not found ({checked} rows)");
+    }
+
+    #[test]
+    fn tolerant_custom_media_parsing_fills_driver_defaults() {
+        let json = r#"[
+          {"slot": 2, "key": "Slot02_Rag", "name": "Rag", "base_media": "VelvetFineArt"},
+          {"slot": 3, "base_sn_id": 13},
+          {"slot": 4, "key": "Broken", "base_media": "VelvetFineArt", "print_duty": "not a number"},
+          {"key": "NoBase"}
+        ]"#;
+        let parsed = parse_custom_media_json(json).unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].user_media_id, 1902);
+        assert_eq!(parsed[1].key, "CustomSlot3");
+        assert_eq!(parsed[1].name, "CustomSlot3");
+        assert_eq!(parsed[1].base_media, "PremiumLuster");
+        assert!(parse_custom_media_json("{}").is_err());
+    }
+
+    #[test]
     fn parses_custom_media_json_and_maps_sn_ids() {
         assert_eq!(sn_id_to_base_media_key(25), Some("VelvetFineArt"));
         assert_eq!(sn_id_to_base_media_key(174), Some("Baryta"));
@@ -1446,6 +1520,7 @@ ColorModel/Color Model: *RGB Gray
         ]"#;
         let parsed = parse_custom_media_json(sample_json).unwrap();
         assert_eq!(parsed.len(), 1);
+        assert_eq!(sn_id_to_base_media_key(13), Some("PremiumLuster"));
         assert_eq!(parsed[0].key, "CustomSlot01_PhotoluxBaryta");
         assert_eq!(parsed[0].base_media, "Baryta");
         assert_eq!(parsed[0].user_media_id, 1901);
