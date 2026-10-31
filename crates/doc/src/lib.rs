@@ -1307,6 +1307,92 @@ impl UserSettingsBackup {
     }
 }
 
+/// Settings LumaPrint keeps across restarts (`~/.config/lumaprint/settings.json`): printer, color,
+/// export and view preferences, the UI theme and the user backup (presets, custom media, templates,
+/// ABW tonings). Images, pages and layouts are document content and are not stored.
+///
+/// Missing fields fall back to the defaults, so older or partial files still load.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PersistentSettings {
+    pub printer: PrinterSettings,
+    pub color: ColorSettings,
+    pub export: ExportSettings,
+    pub display_unit: DisplayUnit,
+    pub filmstrip_position: FilmstripPosition,
+    pub page_list_position: PageListPosition,
+    pub left_dock_collapsed: bool,
+    pub right_dock_collapsed: bool,
+    pub bottom_dock_collapsed: bool,
+    pub show_slot_guides: bool,
+    pub show_rulers: bool,
+    pub canvas_backdrop: CanvasBackdropTone,
+    pub show_settings_panel: bool,
+    pub user_backup: UserSettingsBackup,
+    /// UI theme name (`ThemeKind` variant, owned by the GUI crate).
+    pub ui_theme: Option<String>,
+    /// UI scale factor chosen in the GUI.
+    pub ui_scale: Option<f32>,
+}
+
+impl Default for PersistentSettings {
+    fn default() -> Self {
+        Self::from_doc(&PrintJobDocument::default())
+    }
+}
+
+impl PersistentSettings {
+    /// Captures the persistent part of `doc` (UI fields stay `None`; the GUI fills them in).
+    pub fn from_doc(doc: &PrintJobDocument) -> Self {
+        Self {
+            printer: doc.printer.clone(),
+            color: doc.color.clone(),
+            export: doc.export,
+            display_unit: doc.display_unit,
+            filmstrip_position: doc.filmstrip_position,
+            page_list_position: doc.page_list_position,
+            left_dock_collapsed: doc.left_dock_collapsed,
+            right_dock_collapsed: doc.right_dock_collapsed,
+            bottom_dock_collapsed: doc.bottom_dock_collapsed,
+            show_slot_guides: doc.show_slot_guides,
+            show_rulers: doc.show_rulers,
+            canvas_backdrop: doc.canvas_backdrop,
+            show_settings_panel: doc.show_settings_panel,
+            user_backup: doc.user_backup.clone(),
+            ui_theme: None,
+            ui_scale: None,
+        }
+    }
+
+    /// Writes the stored settings into `doc`, keeping the runtime-detected display color space.
+    pub fn apply_to(&self, doc: &mut PrintJobDocument) {
+        let resolved_display_space = doc.color.resolved_display_space;
+        doc.printer = self.printer.clone();
+        doc.color = self.color.clone();
+        doc.color.resolved_display_space = resolved_display_space;
+        doc.export = self.export;
+        doc.display_unit = self.display_unit;
+        doc.filmstrip_position = self.filmstrip_position;
+        doc.page_list_position = self.page_list_position;
+        doc.left_dock_collapsed = self.left_dock_collapsed;
+        doc.right_dock_collapsed = self.right_dock_collapsed;
+        doc.bottom_dock_collapsed = self.bottom_dock_collapsed;
+        doc.show_slot_guides = self.show_slot_guides;
+        doc.show_rulers = self.show_rulers;
+        doc.canvas_backdrop = self.canvas_backdrop;
+        doc.show_settings_panel = self.show_settings_panel;
+        doc.user_backup = self.user_backup.clone();
+    }
+
+    pub fn to_json_pretty(&self) -> Result<String, DocError> {
+        serde_json::to_string_pretty(self).map_err(|e| DocError::Json(e.to_string()))
+    }
+
+    pub fn from_json_str(json: &str) -> Result<Self, DocError> {
+        serde_json::from_str(json).map_err(|e| DocError::Json(e.to_string()))
+    }
+}
+
 fn default_true() -> bool {
     true
 }

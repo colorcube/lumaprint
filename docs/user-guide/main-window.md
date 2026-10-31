@@ -27,3 +27,14 @@ Der Hauptbildschirm von **LumaPrint** orientiert sich direkt am klaren Workflow 
    - **Nachrichtenbereich:** Zeigt Warnungen in Echtzeit (z.B. wenn bei *Gallerie Wrap* das Papierformat kleiner als das erforderliche Format ist oder wenn die effektive Bildauflösung unter `180 ppi` fällt).
    - **Papierformat & Effektive Auflösung (`ppi`):** Zeigt live die resultierende Druckauflösung des skalierten Bildes auf dem Papier.
    - **Seitennavigation (`< 1 / N >`), Kopien & Drucken-Button.**
+
+## Einstellungen bleiben erhalten
+
+LumaPrint merkt sich beim Beenden – und laufend etwa einmal pro Sekunde nach jeder Änderung – alle Einstellungen in `~/.config/lumaprint/settings.json` (bzw. `$XDG_CONFIG_HOME/lumaprint/settings.json`):
+
+- Drucker, Medium, Papierformat, Papierzufuhr, Qualität und *Detaillierte Einstellungen* (Overcoat, Dithering …)
+- Farbeinstellungen (Farbmodus, ICC-Profil, Rendering Intent, BPC, ABW-Regler, Druck-Schärfung) und Export-Einstellungen
+- Ansicht (Einheiten, Lineale, Dock-Positionen, Hintergrund) sowie Theme und Skalierung
+- Voreinstellungen, eigene Papiere, Papier- und Leinwandformate, Vorlagen, ABW-Tonungen und Rahmenfarben
+
+Bilder, Bögen und Layouts gehören zum jeweiligen Druckauftrag und werden nicht gespeichert. Ist der gespeicherte Drucker nicht mehr vorhanden, wird der Standarddrucker verwendet. Eine beschädigte Einstellungsdatei wird beim Start als `settings.json.bak` zur Seite gelegt und LumaPrint startet mit Standardwerten.

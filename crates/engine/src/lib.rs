@@ -19,15 +19,16 @@ use lumaprint_color::{
     AbwHighlightShift, AbwMidtone, AbwSettings, AbwTonePreset, ImageBuffer16, Rgb8, Rgb16,
 };
 use lumaprint_cups::{
-    CupsError, CupsSpoolRequest, DriverColorControl, SystemPrinter, discover_custom_media_json,
+    CupsError, CupsSpoolRequest, DriverColorControl, SystemPrinter, VIRTUAL_EXPORT_QUEUE,
+    discover_custom_media_json,
     discover_system_printers, sn_id_to_base_media_key, submit_cups_job, verify_printer_reachable,
 };
 use lumaprint_doc::{
     CanvasViewMode, CenteringMode, ColorManagementMode, CropSpec, CustomMediaSpec,
     DetailedPrinterSettings, DisplayColorSpaceMode, DocError, ExportSettings, FrameLineSpec,
-    GalleryWrapSpec, LayoutMode, LayoutTemplate, OutputSharpening, PaperSource, PlatenGap,
-    PrintJobDocument, PrintPreset, PrintQuality, PrintScope, PrintSheetPage, SizingCriterion,
-    SourceImageEntry, TemplateLayoutSpec, find_media_type,
+    GalleryWrapSpec, LayoutMode, LayoutTemplate, OutputSharpening, PaperSource, PersistentSettings,
+    PlatenGap, PrintJobDocument, PrintPreset, PrintQuality, PrintScope, PrintSheetPage,
+    SizingCriterion, SourceImageEntry, TemplateLayoutSpec, find_media_type,
 };
 use lumaprint_geom::{MarginsMm, Orientation, RectMm, SizeMm};
 use lumaprint_ipp::{IppError, PrinterStatus, query_printer_status_ipp};
@@ -61,6 +62,75 @@ pub enum EngineError {
     UnknownCommand(String),
     #[error("invalid command parameter: {0}")]
     InvalidParam(String),
+    #[error("settings file '{path}': {reason}")]
+    Settings { path: String, reason: String },
+}
+
+/// Location of the persistent settings file: `$LUMAPRINT_CONFIG_DIR/settings.json`, otherwise
+/// `$XDG_CONFIG_HOME/lumaprint/settings.json` or `~/.config/lumaprint/settings.json`.
+pub fn settings_file_path() -> Option<PathBuf> {
+    let non_empty = |key: &str| {
+        std::env::var_os(key)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    };
+    let dir = non_empty("LUMAPRINT_CONFIG_DIR")
+        .or_else(|| non_empty("XDG_CONFIG_HOME").map(|d| d.join("lumaprint")))
+        .or_else(|| non_empty("HOME").map(|h| h.join(".config/lumaprint")))?;
+    Some(dir.join("settings.json"))
+}
+
+/// Result of reading the settings file at startup.
+#[derive(Debug)]
+pub enum SettingsLoad {
+    /// No settings file yet (first start).
+    Missing,
+    Loaded(Box<PersistentSettings>),
+    /// Unreadable or invalid; a parsable-looking file was moved to `backup` so the next save
+    /// does not silently overwrite the user's presets.
+    Invalid {
+        backup: Option<PathBuf>,
+        reason: String,
+    },
+}
+
+pub fn load_settings_file(path: &Path) -> SettingsLoad {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return SettingsLoad::Missing,
+        Err(e) => {
+            return SettingsLoad::Invalid {
+                backup: None,
+                reason: e.to_string(),
+            };
+        }
+    };
+    match PersistentSettings::from_json_str(&text) {
+        Ok(settings) => SettingsLoad::Loaded(Box::new(settings)),
+        Err(e) => {
+            let backup = path.with_extension("json.bak");
+            let backup = std::fs::rename(path, &backup).ok().map(|()| backup);
+            SettingsLoad::Invalid {
+                backup,
+                reason: e.to_string(),
+            }
+        }
+    }
+}
+
+/// Writes the settings atomically (temporary file + rename), creating the directory if needed.
+pub fn save_settings_file(path: &Path, settings: &PersistentSettings) -> Result<(), EngineError> {
+    let err = |reason: String| EngineError::Settings {
+        path: path.display().to_string(),
+        reason,
+    };
+    let json = settings.to_json_pretty()?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| err(e.to_string()))?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, json).map_err(|e| err(e.to_string()))?;
+    std::fs::rename(&tmp, path).map_err(|e| err(e.to_string()))
 }
 
 /// Scans a directory (non-recursively) for supported image files and returns sorted paths.
@@ -417,6 +487,25 @@ impl Session {
         session.seed_starter_presets();
         session.apply_media_constraints();
         session
+    }
+
+    /// The part of the document that is kept across restarts (see `PersistentSettings`).
+    pub fn persistent_settings(&self) -> PersistentSettings {
+        PersistentSettings::from_doc(&self.doc)
+    }
+
+    /// Restores saved settings. A saved printer queue that no longer exists is replaced by the
+    /// detected default printer; media constraints are re-applied for the restored paper.
+    pub fn apply_persistent_settings(&mut self, settings: &PersistentSettings) {
+        let detected_queue = self.doc.printer.printer_queue.clone();
+        settings.apply_to(&mut self.doc);
+        let queue = &self.doc.printer.printer_queue;
+        let queue_known = queue == VIRTUAL_EXPORT_QUEUE
+            || self.system_printers.iter().any(|p| &p.queue_name == queue);
+        if !queue_known {
+            self.doc.printer.printer_queue = detected_queue;
+        }
+        self.apply_media_constraints();
     }
 
     /// Returns the currently selected `SystemPrinter` (or the first available entry).
@@ -2944,6 +3033,54 @@ mod tests {
             .execute(EngineCommand::SetResolutionKey("Fine".into()))
             .unwrap();
         assert_eq!(session.build_cups_spool_request().resolution, "Fine");
+    }
+
+    #[test]
+    fn persistent_settings_roundtrip_and_restore() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lumaprint").join("settings.json");
+        assert!(matches!(load_settings_file(&path), SettingsLoad::Missing));
+
+        let mut session = Session::new();
+        session.doc.printer.media_key = String::from("PhotoPaperGlossy");
+        session.doc.printer.resolution_key = String::from("Fine");
+        session.doc.printer.detailed.spool_dithering = false;
+        session.doc.color.mode = ColorManagementMode::AdvancedBwPhoto;
+        let mut saved = session.persistent_settings();
+        saved.ui_theme = Some(String::from("ProMedium"));
+        save_settings_file(&path, &saved).unwrap();
+
+        let SettingsLoad::Loaded(loaded) = load_settings_file(&path) else {
+            panic!("settings file must load");
+        };
+        assert_eq!(*loaded, saved);
+
+        // A fresh session restores everything; an unknown queue falls back to the detected one.
+        let mut fresh = Session::new();
+        let detected_queue = fresh.doc.printer.printer_queue.clone();
+        let mut gone_printer = (*loaded).clone();
+        gone_printer.printer.printer_queue = String::from("Printer_That_Was_Removed");
+        fresh.apply_persistent_settings(&gone_printer);
+        assert_eq!(fresh.doc.printer.printer_queue, detected_queue);
+        assert_eq!(fresh.doc.printer.media_key, "PhotoPaperGlossy");
+        assert_eq!(fresh.doc.printer.resolution_key, "Fine");
+        assert!(!fresh.doc.printer.detailed.spool_dithering);
+        assert_eq!(fresh.doc.color.mode, ColorManagementMode::AdvancedBwPhoto);
+
+        // Partial files fill in defaults; broken files are moved aside instead of being overwritten.
+        std::fs::write(&path, r#"{"show_rulers": false}"#).unwrap();
+        let SettingsLoad::Loaded(partial) = load_settings_file(&path) else {
+            panic!("partial settings must load");
+        };
+        assert!(!partial.show_rulers);
+        assert_eq!(partial.printer, PersistentSettings::default().printer);
+
+        std::fs::write(&path, "{ not json").unwrap();
+        let SettingsLoad::Invalid { backup, .. } = load_settings_file(&path) else {
+            panic!("broken settings must be reported");
+        };
+        let backup = backup.unwrap();
+        assert!(backup.exists() && !path.exists());
     }
 
     #[test]

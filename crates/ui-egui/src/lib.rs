@@ -29,10 +29,13 @@ use lumaprint_doc::{
     CanvasBackdropTone, CanvasViewMode, CenteringMode, ColorManagementMode, CropSpec,
     DisplayColorSpaceMode, ExportColorSpace, ExportFileFormat, ExportSettings, FilmstripPosition,
     FrameLineSpec, GalleryWrapEffect, GalleryWrapSpec, LayoutMode, LayoutTemplate, MEDIA_TYPES,
-    OutputSharpening, PageListPosition, PaperSource, PrintQuality, PrintScope, SizingCriterion,
-    SlotCaptionMode, StandardLayoutSpec, TemplateLayoutSpec, find_media_type,
+    OutputSharpening, PageListPosition, PaperSource, PersistentSettings, PrintQuality, PrintScope,
+    SizingCriterion, SlotCaptionMode, StandardLayoutSpec, TemplateLayoutSpec, find_media_type,
 };
-use lumaprint_engine::{EngineCommand, Session, scan_folder_for_images};
+use lumaprint_engine::{
+    EngineCommand, Session, SettingsLoad, load_settings_file, save_settings_file,
+    scan_folder_for_images, settings_file_path,
+};
 use lumaprint_geom::{
     BorderlessExpandLevel, DisplayUnit, MarginsMm, Orientation, PAPER_SIZES, RectMm, SizeMm,
 };
@@ -41,7 +44,7 @@ use lumaprint_layout::{
     resolve_paper_and_printable_area,
 };
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 pub use theme::{
     KdeTypography, ThemeKind, Tokens, apply_theme_and_typography, install_kde_system_fonts,
     parse_kde_globals_tokens,
@@ -773,6 +776,11 @@ pub struct LumaPrintApp {
     pub bottom_dock_tab: SharedDockTab,
     pub print_footer_tab: PrintFooterTab,
     pub print_job_ui_state: PrintJobUiState,
+    /// Settings file, set by `enable_settings_persistence` (unset in snapshot/test mode).
+    settings_path: Option<PathBuf>,
+    /// Last state written to (or read from) the settings file.
+    saved_settings: Option<PersistentSettings>,
+    next_settings_check: f64,
 }
 
 impl Default for LumaPrintApp {
@@ -828,6 +836,9 @@ impl LumaPrintApp {
             bottom_dock_tab: SharedDockTab::PageList,
             print_footer_tab: PrintFooterTab::Print,
             print_job_ui_state: PrintJobUiState::Idle,
+            settings_path: None,
+            saved_settings: None,
+            next_settings_check: 0.0,
         }
     }
 
@@ -1127,6 +1138,73 @@ impl LumaPrintApp {
                 );
             }
         }
+    }
+
+    /// Restores the settings saved at the last run (`~/.config/lumaprint/settings.json`) and enables
+    /// auto-saving of later changes. Not called in snapshot mode, so snapshots stay deterministic.
+    pub fn enable_settings_persistence(&mut self) {
+        let Some(path) = settings_file_path() else {
+            return;
+        };
+        match load_settings_file(&path) {
+            SettingsLoad::Loaded(settings) => {
+                self.session.apply_persistent_settings(&settings);
+                if let Some(tk) = settings.ui_theme.as_deref().and_then(|name| {
+                    ThemeKind::ALL
+                        .into_iter()
+                        .find(|tk| format!("{tk:?}") == name)
+                }) {
+                    self.theme_kind = tk;
+                    self.tokens = Tokens::for_kind(tk);
+                }
+                if let Some(scale) = settings.ui_scale {
+                    self.ui_scale = scale.clamp(0.5, 3.0);
+                }
+                self.dirty_preview = true;
+            }
+            SettingsLoad::Missing => {}
+            SettingsLoad::Invalid { backup, reason } => {
+                self.session.status_message = match backup {
+                    Some(b) => format!(
+                        "Gespeicherte Einstellungen nicht lesbar ({reason}); gesichert als {}. Standardwerte aktiv.",
+                        b.display()
+                    ),
+                    None => format!(
+                        "Gespeicherte Einstellungen nicht lesbar ({reason}). Standardwerte aktiv."
+                    ),
+                };
+            }
+        }
+        self.saved_settings = Some(self.current_settings());
+        self.settings_path = Some(path);
+    }
+
+    fn current_settings(&self) -> PersistentSettings {
+        let mut settings = self.session.persistent_settings();
+        settings.ui_theme = Some(format!("{:?}", self.theme_kind));
+        settings.ui_scale = Some(self.ui_scale);
+        settings
+    }
+
+    /// Writes the settings file when something changed; checked at most once per second unless `force`.
+    fn autosave_settings(&mut self, now: f64, force: bool) {
+        let Some(path) = self.settings_path.clone() else {
+            return;
+        };
+        if !force && now < self.next_settings_check {
+            return;
+        }
+        self.next_settings_check = now + 1.0;
+        let current = self.current_settings();
+        if self.saved_settings.as_ref() == Some(&current) {
+            return;
+        }
+        if let Err(e) = save_settings_file(&path, &current) {
+            self.session.status_message =
+                format!("Einstellungen konnten nicht gespeichert werden: {e}");
+        }
+        // Also on error, so a failing save is reported once per change instead of every second.
+        self.saved_settings = Some(current);
     }
 
     pub fn apply_fine_art_theme(ctx: &Context) {
@@ -9453,6 +9531,12 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 impl eframe::App for LumaPrintApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         self.render_ui(ctx);
+        let now = ctx.input(|i| i.time);
+        self.autosave_settings(now, false);
+    }
+
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.autosave_settings(f64::MAX, true);
     }
 }
 

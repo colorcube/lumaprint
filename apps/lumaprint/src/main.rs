@@ -75,6 +75,7 @@ fn main() -> ExitCode {
         Box::new(move |cc| {
             LumaPrintApp::apply_fine_art_theme(&cc.egui_ctx);
             let mut app = LumaPrintApp::new();
+            app.enable_settings_persistence();
             for path in &image_paths {
                 let _ = app
                     .session
