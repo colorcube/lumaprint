@@ -4,6 +4,7 @@ description = "Physical units (mm, inch, pt, 360/720/1440 dpi grids), rectangles
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 
 [lints]

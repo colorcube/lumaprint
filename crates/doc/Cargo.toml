@@ -4,6 +4,7 @@ description = "Document model for LumaPrint: PrintJob, MediaSpecs, LayoutModes, 
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 
 [lints]

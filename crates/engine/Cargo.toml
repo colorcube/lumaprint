@@ -4,6 +4,7 @@ description = "LumaPrint L5 Engine: Session, Command Registry, Undo/Redo, System
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 
 [lints]

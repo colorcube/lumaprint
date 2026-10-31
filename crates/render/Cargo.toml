@@ -4,6 +4,7 @@ description = "16-bit page & band renderer for LumaPrint: scaling, Gallery Wrap 
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 
 [lints]

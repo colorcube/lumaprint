@@ -4,6 +4,7 @@ description = "8/16-bit TIFF, PNG, and JPEG decoders/encoders, EXIF & embedded I
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 
 [lints]

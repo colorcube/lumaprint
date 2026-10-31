@@ -4,6 +4,7 @@ description = "Pure-Rust IPP status client (10-channel SC-P900 ink levels) and T
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 
 [lints]

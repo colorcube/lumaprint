@@ -4,6 +4,7 @@ description = "Safe Rust facade over LittleCMS 2 (liblcms2) for LumaPrint: 16-bi
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 
 [lints.rust]

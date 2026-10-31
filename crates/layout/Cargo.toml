@@ -4,6 +4,7 @@ description = "Layout solver for LumaPrint: Standard, Panorama, Gallery Wrap, EP
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 
 [lints]
