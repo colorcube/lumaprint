@@ -792,7 +792,7 @@ impl Default for LumaPrintApp {
 impl LumaPrintApp {
     pub fn new() -> Self {
         let session = Session::new();
-        let theme_kind = ThemeKind::KdeSystem;
+        let theme_kind = ThemeKind::default();
         Self {
             session,
             theme_kind,
@@ -1210,7 +1210,7 @@ impl LumaPrintApp {
     pub fn apply_fine_art_theme(ctx: &Context) {
         ctx.options_mut(|opt| opt.zoom_with_keyboard = false);
         let kde = install_kde_system_fonts(ctx);
-        let _ = apply_theme_and_typography(ctx, ThemeKind::KdeSystem, &kde, 1.0);
+        let _ = apply_theme_and_typography(ctx, ThemeKind::default(), &kde, 1.0);
     }
 
     fn ensure_theme_and_fonts(&mut self, ctx: &Context) {

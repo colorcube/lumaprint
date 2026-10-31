@@ -1,6 +1,6 @@
 # TODO
 
-- [ ] **Theme-Standard:** „Pro (Mittelgrau — wie EPL)“ (`ThemeKind::ProMedium`) als Default statt `KdeSystem`.
+- [x] **Theme-Standard:** „Pro (Mittelgrau — wie EPL)“ (`ThemeKind::ProMedium`) als Default statt `KdeSystem`.
 - [x] **Einstellungen speichern:** Theme, Drucker, Papier, Qualität, Farbmodus usw. über Neustarts hinweg behalten.
   Beobachtet am 2026-10-31: Nach dem Neustart ging ein Druck mit `MediaType=PlainPaper` und
   `PrintQuality=High` raus, obwohl vorher Photo Paper Glossy / Fine eingestellt war.

@@ -19,7 +19,6 @@ use std::sync::Arc;
 pub enum ThemeKind {
     /// Automatically reads the active KDE Plasma color scheme (`[Colors:Window]`, `[Colors:View]`,
     /// `[Colors:Button]`, `[Colors:Selection]`) from `~/.config/kdeglobals`, falling back to `BreezeDark`.
-    #[default]
     KdeSystem,
     /// KDE Plasma Breeze Dark look (blue-grey surfaces, Breeze blue `#3DAEE9` accent, 5 px corners).
     BreezeDark,
@@ -28,6 +27,8 @@ pub enum ThemeKind {
     /// Calibrated dark studio interface (`#262626` panels, `#191919` canvas) — ideal for Softproof.
     Pro,
     /// Calibrated medium-dark gray (`#535353` panels, `#282828` canvas) — Photoshop / EPL default.
+    /// LumaPrint's default theme.
+    #[default]
     ProMedium,
     /// Calibrated light-medium gray (`#B8B8B8` panels).
     ProLightGray,
