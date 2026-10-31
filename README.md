@@ -1,6 +1,9 @@
 # LumaPrint — Professional Fine-Art Print Layout & 16-Bit Color Studio
 
-**LumaPrint** is a professional fine-art print layout, live softproofing, and 16-bit color management studio for Linux, written in safe Rust (`unsafe_code = "forbid"` in all application crates). Inspired by **Epson Print Layout** and **TurboPrint Composer**, LumaPrint combines a studio-grade layout workflow with bit-accurate ICC color management and seamless **CUPS / IPP** integration.
+**LumaPrint** is a fine-art print layout, live softproofing, and 16-bit color management application for Linux, written in Rust. Inspired by **Epson Print Layout** and **TurboPrint Composer**, it combines a studio-style layout workflow with ICC color management (LittleCMS 2) and **CUPS / IPP** integration. `unsafe` code is forbidden in every crate except `lumaprint-cms`, which wraps the `liblcms2` C library in one private FFI module.
+
+> [!WARNING]
+> **Beta.** Developed and tested on Fedora (KDE Plasma, Wayland) with an Epson SureColor SC-P900 and the companion driver [`epson-p900-escpr-cups`](https://github.com/OWNER/epson-p900-escpr-cups). Verified so far with real prints: ICC color management (relative colorimetric + BPC) and Advanced B&W Photo on Epson Photo Paper Glossy, A4. The data sent to the printer was compared with Epson Print Layout captures (see below). Other printers, drivers and layout modes are implemented but less tested.
 
 LumaPrint is **printer-independent** and works out of the box with any printer installed in CUPS (such as the custom Epson SureColor SC-P900 `epson-p900-escpr-cups` driver, Gutenprint, vendor PPDs, or IPP Everywhere queues), while automatically preventing double color management between the application and the printer driver.
 
@@ -97,16 +100,21 @@ cargo run -p lumaprint-cli -- status --host 192.168.178.50
 - **Panorama:** Roll-paper and banner printing with automatic length calculation.
 
 ### 16-Bit Color Management (`liblcms2`), Wayland Wide-Gamut & Advanced B&W (`ABW`)
-- **End-to-End 16-Bit Pipeline:** Powered by **LittleCMS 2 (`liblcms2`)** with full support for ICC v2 and v4 profiles (including `mAB ` / `mBA ` multi-stage LUT tags for third-party fine-art papers from Hahnemühle, Canson, Ilford, etc.) and `4×4` Bayer ordered dithering at the final spool boundary.
-- **Validated Against Epson Print Layout (`MAE = 0.00`):** Verified against real Windows Epson Print Layout `.prn` captures across both ICC color management and driver color modes (`EpsonAdobeRGB` / `EpsonStandard`).
+- **16-Bit Pipeline:** Images are decoded, scaled, toned and color-converted in 16 bit with **LittleCMS 2 (`liblcms2`)**, supporting ICC v2 and v4 profiles (including `mAB ` / `mBA ` LUT-based profiles of third-party fine-art papers). Embedded source profiles are converted via their real colorants and tone curves. Only the final spool image is rounded to 8 bit, because CUPS raster and the printer protocol carry 8 bits per channel.
+- **Compared With Epson Print Layout:** Print jobs captured from LumaPrint and from Epson Print Layout (Windows) on the same chart: identical printer command headers; ICC mode deviates by 0.16 of 255 levels on average (max. 3), Advanced B&W by about 0.5 (EPL uses the Windows color engine for its sRGB conversion). Side-by-side prints show no visible difference.
 - **Native Wayland Color Management (`wp_color_manager_v1`):** Automatically detects wide-gamut displays (`Adobe RGB`, `Display P3`, `sRGB`) under KDE Plasma / KWin Wayland and tags the window surface so your monitor displays its full native color gamut without sRGB clipping.
 - **Live Softproof & Gamut Check:** Real-time proofing transform (`cmsCreateProofingTransformTHR`) with optional **Paper White simulation** (tinting both the image and the surrounding sheet canvas to match warm cotton/baryta papers), viewing light temperature (`D50 5000K`, `D65 6500K`, `Gallery Warm 3200K`), and out-of-gamut overlay.
 - **Advanced B&W Photo (`ABW`):** Interactive 2D tone wheel, presets (*Neutral, Cool, Warm, Sepia*), tonal curve controls, shadow/highlight toning, max optical density, and *Highlight Point Shift* (places trace ink on pure white to eliminate gloss differential). With `epson-p900-escpr-cups` the toning runs in the printer firmware like in Epson Print Layout (`EpsonColorMode=AdvancedBW` + `EpsonAbw*` options); other drivers get LumaPrint's software toning.
 
+### Everyday Comfort
+- **Settings are kept across restarts** (`~/.config/lumaprint/settings.json`): printer, paper, quality, color settings, theme, presets, custom media and templates.
+- **Original size:** The resolution stored in TIFF, JPEG and PNG files is read, so an image can be placed at its original print size with one click.
+- **Delete key** removes the selected image from its slot or from the pool; undo restores it.
+
 ### Generic System Printer (`CUPS`) & `IPP` Integration
 - **Automatic Queue & PPD Discovery (`lumaprint-cups`):** Reads installed queues (`lpstat`), supported paper sizes, media types, input slots, resolutions, and `*cupsICCProfile` rules directly from `/etc/cups/ppd/<queue>.ppd` and `lpoptions`.
-- **Automatic Double-Color-Management Protection:** Detects the driver family (`EpsonEscprPro`, `Gutenprint`, `TurboPrint`, `GenericCups`) and passes the exact flags (`EpsonColorMode=NoColorAdjustment`, `StpColorCorrection=None`, `zedoColorCorrection=0`, `cm-calibration=true`) when LumaPrint manages color.
-- **Custom Media Integration:** Reads `~/.local/share/epson-media-installer/custom_media.json` (`SN00..SN09` slots) and passes `UserMediaID`, `PrintDuty`, `DryingTime`, `BottomEdgePriority`, and `RubbingReduction` to CUPS.
+- **Automatic Double-Color-Management Protection:** Detects the driver family (`epson-p900-escpr-cups` / Epson, `Gutenprint`, `TurboPrint`, generic CUPS) and passes the exact flags (`EpsonColorMode=NoColorAdjustment`, `StpColorCorrection=None`, `zedoColorCorrection=0`, `cm-calibration=true`) when LumaPrint manages color.
+- **Custom Media Integration:** Reads the `custom_media.json` of `epson-p900-escpr-cups` (`/etc/epson-p900-escpr-cups/`, `/usr/share/epson-p900-escpr-cups/`, `~/.local/share/lumaprint/media/`, or `$EPSON_P900_CUSTOM_MEDIA_JSON`) and passes `UserMediaID`, `PrintDuty`, `DryingTime`, `BottomEdgePriority`, and `RubbingReduction` to CUPS.
 - **Pre-Flight Reachability & Post-Spool Verification:** Verifies that the target CUPS queue is enabled and network printers (`ipp://`, `ipps://`, `socket://`, `http://`, `lpd://`) are reachable via TCP before rendering, and cancels stuck jobs immediately if the CUPS backend reports the printer offline.
 - **Generic IPP Status (`lumaprint-ipp`):** Queries live printer state and ink/toner marker levels (`marker-names`, `marker-levels`, `marker-colors`) over IPP (`RFC 8011`).
 
@@ -119,7 +127,7 @@ LumaPrint enforces a strict, dependency-acyclic layered architecture where the c
 | Layer | Crate | Responsibility |
 | :--- | :--- | :--- |
 | **L0** | [`crates/geom`](crates/geom) | Physical units (`mm`, `inch`, `pt`, `px` at DPI), paper size catalog, aspect-ratio fitting, and layout geometry |
-| **L1** | [`crates/color`](crates/color) | 16-bit planar/interleaved buffers (`ImageBuffer16`), `4×4` Bayer ordered dithering, and Advanced B&W (`ABW`) synthesis |
+| **L1** | [`crates/color`](crates/color) | 16-bit buffers (`ImageBuffer16`), 16→8-bit conversion, and Advanced B&W (`ABW`) synthesis |
 | **L1.5** | [`crates/cms`](crates/cms) | ICC v2/v4 profile parsing, LittleCMS 2 (`liblcms2`) 16-bit transforms, softproofing, paper-white adaptation, and gamut checking |
 | **L2** | [`crates/codecs`](crates/codecs) | Lossless 8/16-bit TIFF, PNG, JPEG, and PPM decoding/encoding with embedded ICC profile extraction and DPI metadata |
 | **L3** | [`crates/doc`](crates/doc) | Serializable print job document model (`PrintJobDocument`), media database, color settings, export settings, and user backup |
@@ -149,12 +157,23 @@ cargo clippy --workspace --all-targets -- -D warnings
 User guides, color management deep-dives, and architecture notes (prepared for **Zensical**) are located in [`docs/`](docs/index.md):
 
 - [Documentation Overview](docs/index.md)
-- [Getting Started](docs/getting-started/installation.md)
+- [Main Window](docs/user-guide/main-window.md)
+- [Printer & Media](docs/user-guide/printer-and-media.md)
 - [How Color Spaces & ICC Profiles Work in Fine-Art Printing](docs/user-guide/color-spaces-explained.md)
 - [Color Management & Advanced B&W (`ABW`)](docs/user-guide/color-and-abw.md)
 - [Layout Modes & 2-Stage Template Studio](docs/user-guide/layout-modes.md)
-- [CUPS & IPP Printer Integration](docs/user-guide/cups-and-ipp.md)
-- [Layered Architecture (`L0–L6`)](docs/architecture/layers.md)
+- [Pro Features](docs/user-guide/pro-features.md)
+- [Layered Architecture (`L0–L6`)](docs/architecture.md)
+
+The user guide is currently written in German.
+
+## Third-Party Code
+
+`vendor/winit` is a patched copy of [winit](https://github.com/rust-windowing/winit) 0.30.13 (Apache-2.0, see `vendor/winit/LICENSE`), used via `[patch.crates-io]`. The changes add native Wayland file drag-and-drop and reject unsupported drag-and-drop types; see the git history of `vendor/winit`.
+
+## Trademarks
+
+Epson, SureColor and Epson Print Layout are trademarks of Seiko Epson Corporation; TurboPrint is a trademark of ZEDOnet. LumaPrint is an independent project and is not affiliated with or endorsed by these companies. Their names are used only to describe compatibility and the workflow LumaPrint is modeled after.
 
 ## License
 

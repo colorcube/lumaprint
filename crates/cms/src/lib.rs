@@ -1480,7 +1480,7 @@ mod tests {
     #[test]
     fn parses_real_epson_sc_p900_icc_profiles_and_transforms_16bit_via_lcms2() {
         let icc_path = Path::new(
-            "/home/rene/Projekte/Spielwiese/Drucker-Epson-SC-P900/Code/Epson-SC-P900-Treiber/extracted/icc/mac_Epson_SC-P900_700_EpsonPremiumGlossy.icc",
+            "/usr/share/color/icc/epson-scp900/Epson_SC-P900_700_EpsonPremiumGlossy.icc",
         );
         if !icc_path.exists() {
             return;
@@ -1585,7 +1585,7 @@ mod tests {
     #[test]
     fn lcms2_gray_ramp_monotonicity_bpc_shadow_separation_and_rayon_bit_identity() {
         let icc_path = Path::new(
-            "/home/rene/Projekte/Spielwiese/Drucker-Epson-SC-P900/Code/Epson-SC-P900-Treiber/extracted/icc/mac_Epson_SC-P900_700_EpsonPremiumGlossy.icc",
+            "/usr/share/color/icc/epson-scp900/Epson_SC-P900_700_EpsonPremiumGlossy.icc",
         );
         if !icc_path.exists() {
             return;
@@ -1683,7 +1683,7 @@ mod tests {
 
         // 4. Verify all 4 Rendering Intents across multiple Epson SC-P900/P700 paper ICC profiles
         let icc_dir = Path::new(
-            "/home/rene/Projekte/Spielwiese/Drucker-Epson-SC-P900/Code/Epson-SC-P900-Treiber/extracted/icc",
+            "/usr/share/color/icc/epson-scp900",
         );
         if let Ok(entries) = std::fs::read_dir(icc_dir) {
             let mut tested_profiles = 0usize;

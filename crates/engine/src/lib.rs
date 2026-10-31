@@ -441,13 +441,8 @@ impl Session {
             PathBuf::from("/usr/share/color/icc"),
             PathBuf::from("/usr/share/color/icc/epson-scp900"),
             PathBuf::from("/usr/local/share/color/icc"),
-            PathBuf::from("/home/rene/Projekte/Spielwiese/Drucker-Epson-SC-P900/Code/epson-p900-escpr-cups/icc"),
+            // Sibling checkout of the epson-p900-escpr-cups driver (development).
             PathBuf::from("../epson-p900-escpr-cups/icc"),
-            PathBuf::from("/home/rene/Projekte/Spielwiese/Drucker-Epson-SC-P900/Code/epson-p900-escpr-cups/profiles"),
-            PathBuf::from("../epson-p900-escpr-cups/profiles"),
-            PathBuf::from("/home/rene/Projekte/Spielwiese/Drucker-Epson-SC-P900/Code/Epson-SC-P900-Treiber/extracted/icc"),
-            PathBuf::from("./Code/Epson-SC-P900-Treiber/extracted/icc"),
-            PathBuf::from("../Epson-SC-P900-Treiber/extracted/icc"),
         ];
         if let Some(home) = std::env::var_os("HOME") {
             let h = PathBuf::from(home);

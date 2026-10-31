@@ -165,9 +165,6 @@ pub fn discover_custom_media_json() -> Vec<CustomMediaJsonEntry> {
         );
     }
     candidates.push(PathBuf::from("../epson-p900-escpr-cups/custom_media.json"));
-    candidates.push(PathBuf::from(
-        "/home/rene/Projekte/Spielwiese/Drucker-Epson-SC-P900/Code/epson-p900-escpr-cups/custom_media.json",
-    ));
 
     let mut merged: Vec<CustomMediaJsonEntry> = Vec::new();
     for path in candidates {
@@ -441,8 +438,8 @@ impl SystemPrinter {
         let mut caps = PrinterCapabilities::standard_fine_art_defaults();
         // If our companion driver PPD exists in the workspace, enrich the virtual export printer with its *cupsICCProfile map
         for candidate in [
+            "/usr/share/cups/model/epson-p900-escpr/Epson-SC-P900-ESCPR.ppd",
             "../epson-p900-escpr-cups/ppd/Epson-SC-P900-ESCPR.ppd",
-            "/home/rene/Projekte/Spielwiese/Drucker-Epson-SC-P900/Code/epson-p900-escpr-cups/ppd/Epson-SC-P900-ESCPR.ppd",
         ] {
             if let Ok(ppd_text) = std::fs::read_to_string(candidate) {
                 caps = parse_lpoptions_and_ppd("", Some(&ppd_text));
@@ -512,13 +509,13 @@ pub fn discover_system_printers() -> Vec<SystemPrinter> {
             let is_p700 = p.queue_name.to_ascii_lowercase().contains("700");
             let fallback_candidates = if is_p700 {
                 [
+                    "/usr/share/cups/model/epson-p900-escpr/Epson-SC-P700-ESCPR.ppd",
                     "../epson-p900-escpr-cups/ppd/Epson-SC-P700-ESCPR.ppd",
-                    "/home/rene/Projekte/Spielwiese/Drucker-Epson-SC-P900/Code/epson-p900-escpr-cups/ppd/Epson-SC-P700-ESCPR.ppd",
                 ]
             } else {
                 [
+                    "/usr/share/cups/model/epson-p900-escpr/Epson-SC-P900-ESCPR.ppd",
                     "../epson-p900-escpr-cups/ppd/Epson-SC-P900-ESCPR.ppd",
-                    "/home/rene/Projekte/Spielwiese/Drucker-Epson-SC-P900/Code/epson-p900-escpr-cups/ppd/Epson-SC-P900-ESCPR.ppd",
                 ]
             };
             for candidate in fallback_candidates {
@@ -1317,8 +1314,8 @@ mod tests {
     #[test]
     fn extracts_network_host_and_port_and_detects_unreachable_printer() {
         assert_eq!(
-            extract_network_host_port("ipp://10.10.10.124:631/ipp/print"),
-            Some((String::from("10.10.10.124"), 631))
+            extract_network_host_port("ipp://192.0.2.10:631/ipp/print"),
+            Some((String::from("192.0.2.10"), 631))
         );
         assert_eq!(
             extract_network_host_port("socket://192.168.178.45"),
@@ -1340,14 +1337,14 @@ printer Office_Laser is idle.  enabled since Mon Oct 26 09:00:00 2026
 system default destination: Epson_SC_P900
 ";
         let lpstat_v = "\
-device for Epson_SC_P900: ipp://10.10.10.124:631/ipp/print
+device for Epson_SC_P900: ipp://192.0.2.10:631/ipp/print
 device for Office_Laser: socket://10.10.10.50:9100
 ";
         let printers = parse_lpstat_output(lpstat_p_d, lpstat_v);
         assert_eq!(printers.len(), 2);
         assert_eq!(printers[0].queue_name, "Epson_SC_P900");
         assert!(printers[0].is_default);
-        assert_eq!(printers[0].device_uri, "ipp://10.10.10.124:631/ipp/print");
+        assert_eq!(printers[0].device_uri, "ipp://192.0.2.10:631/ipp/print");
         assert!(!printers[1].is_default);
 
         let lpoptions_l = "\
