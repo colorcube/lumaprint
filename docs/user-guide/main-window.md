@@ -28,6 +28,12 @@ Der Hauptbildschirm von **LumaPrint** orientiert sich direkt am klaren Workflow 
    - **Papierformat & Effektive Auflösung (`ppi`):** Zeigt live die resultierende Druckauflösung des skalierten Bildes auf dem Papier.
    - **Seitennavigation (`< 1 / N >`), Kopien & Drucken-Button.**
 
+## Bild entfernen mit `Entf`
+
+- Ist auf dem Bogen eine Bildstelle ausgewählt, entfernt `Entf` das Bild von dieser Bildstelle; es bleibt im Bilder-Pool.
+- Wurde zuletzt ein Bild im Bilder-Pool angeklickt, entfernt `Entf` es aus dem Pool (und von allen Bögen).
+- Beides lässt sich mit `Strg+Z` rückgängig machen. Während ein Eingabefeld aktiv ist, hat `Entf` keine Wirkung auf Bilder.
+
 ## Einstellungen bleiben erhalten
 
 LumaPrint merkt sich beim Beenden – und laufend etwa einmal pro Sekunde nach jeder Änderung – alle Einstellungen in `~/.config/lumaprint/settings.json` (bzw. `$XDG_CONFIG_HOME/lumaprint/settings.json`):

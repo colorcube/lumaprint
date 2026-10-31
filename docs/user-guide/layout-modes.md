@@ -13,6 +13,7 @@ Unter **Layout-Einstellungen** (vgl. EPL-Handbuch S. 25–28, 32–35, 43–44) 
 - **Kriterium:**
   - **Margin (Ränder):** Direkte Eingabe von *Oben / Links / Unten / Rechts* in `mm` oder `inch`.
   - **Bildgröße:** Direkte Eingabe von Position (*Links / Oben*) und *Breite / Höhe* (optional mit *Bildseitenverhältnis behalten*).
+  - **Original:** Setzt die Bildgröße auf die Originalgröße aus der Bilddatei (Pixel ÷ gespeicherte Auflösung, z. B. 1600 px bei 360 dpi = 112,9 mm). Gelesen werden die Auflösungsangaben von TIFF, JPEG (JFIF/EXIF) und PNG. Hat die Datei keine Auflösung, erscheint der Button nicht. Dieselbe Funktion gibt es im Kontextmenü einer Bildstelle unter *Bildmaße → Originalgröße*.
 - **Randfarbe & Rahmenlinie:**
   - *Randfarbe:* Färbt den Bereich außerhalb des Bildes innerhalb des bedruckbaren Bereichs ein.
   - *Rahmenlinie:* Zeichnet eine feine Linie (einstellbare Farbe und Linienstärke in `mm`, z.B. `0,3 mm`) direkt um das Bild.

@@ -114,6 +114,7 @@ pub fn load_image_from_bytes(bytes: &[u8], source_label: &str) -> Result<LoadedI
 
     let (color_space, icc_profile_name) =
         detect_and_apply_embedded_color_space(&mut buffer, decoder_icc.as_deref(), bytes);
+    let dpi = detect_resolution_dpi(bytes);
 
     Ok(LoadedImage {
         buffer,
@@ -123,12 +124,125 @@ pub fn load_image_from_bytes(bytes: &[u8], source_label: &str) -> Result<LoadedI
             bit_depth_per_channel,
             color_space,
             icc_profile_name,
-            dpi_x: Some(300.0),
-            dpi_y: Some(300.0),
+            dpi_x: dpi.map(|(x, _)| x),
+            dpi_y: dpi.map(|(_, y)| y),
             camera_model: None,
             exposure_info: None,
         },
     })
+}
+
+/// Physical resolution stored in the file, in dots per inch: TIFF `XResolution`/`YResolution`/
+/// `ResolutionUnit`, JPEG JFIF density (or the same TIFF tags in EXIF) and PNG `pHYs`.
+/// `None` if the file carries no (or only an aspect-ratio) resolution.
+fn detect_resolution_dpi(bytes: &[u8]) -> Option<(f64, f64)> {
+    let dpi = if bytes.starts_with(b"II*\0") || bytes.starts_with(b"MM\0*") {
+        tiff_resolution_dpi(bytes)
+    } else if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        png_resolution_dpi(bytes)
+    } else if bytes.starts_with(&[0xFF, 0xD8]) {
+        jpeg_resolution_dpi(bytes)
+    } else {
+        None
+    }?;
+    let plausible = |v: f64| v.is_finite() && (1.0..=100_000.0).contains(&v);
+    (plausible(dpi.0) && plausible(dpi.1)).then_some(dpi)
+}
+
+fn tiff_resolution_dpi(t: &[u8]) -> Option<(f64, f64)> {
+    let little = t.get(..2)? == b"II";
+    let u16_at = |o: usize| {
+        let b: [u8; 2] = t.get(o..o + 2)?.try_into().ok()?;
+        Some(if little {
+            u16::from_le_bytes(b)
+        } else {
+            u16::from_be_bytes(b)
+        })
+    };
+    let u32_at = |o: usize| {
+        let b: [u8; 4] = t.get(o..o + 4)?.try_into().ok()?;
+        Some(if little {
+            u32::from_le_bytes(b)
+        } else {
+            u32::from_be_bytes(b)
+        })
+    };
+    let rational_at = |o: usize| {
+        let (num, den) = (u32_at(o)?, u32_at(o + 4)?);
+        (den != 0).then(|| f64::from(num) / f64::from(den))
+    };
+    let ifd = usize::try_from(u32_at(4)?).ok()?;
+    let (mut x, mut y, mut unit) = (None, None, 2u16); // TIFF default unit: inch
+    for i in 0..usize::from(u16_at(ifd)?) {
+        let entry = ifd + 2 + i * 12;
+        let value_offset = usize::try_from(u32_at(entry + 8)?).ok()?;
+        match u16_at(entry)? {
+            282 => x = rational_at(value_offset),
+            283 => y = rational_at(value_offset),
+            296 => unit = u16_at(entry + 8)?,
+            _ => {}
+        }
+    }
+    let per_inch = match unit {
+        2 => 1.0,
+        3 => 2.54,
+        _ => return None,
+    };
+    let x = x?;
+    Some((x * per_inch, y.unwrap_or(x) * per_inch))
+}
+
+fn png_resolution_dpi(png: &[u8]) -> Option<(f64, f64)> {
+    let mut pos = 8usize;
+    while let Some(len_bytes) = png.get(pos..pos + 4) {
+        let len = usize::try_from(u32::from_be_bytes(len_bytes.try_into().ok()?)).ok()?;
+        let kind = png.get(pos + 4..pos + 8)?;
+        if kind == b"pHYs" {
+            let d = png.get(pos + 8..pos + 17)?;
+            // Unit 1 = pixels per metre; 0 = aspect ratio only.
+            if d.get(8) != Some(&1) {
+                return None;
+            }
+            let ppm = |b: &[u8]| -> Option<f64> {
+                Some(f64::from(u32::from_be_bytes(b.try_into().ok()?)))
+            };
+            return Some((ppm(d.get(0..4)?)? * 0.0254, ppm(d.get(4..8)?)? * 0.0254));
+        }
+        if kind == b"IDAT" || kind == b"IEND" {
+            return None;
+        }
+        pos = pos.checked_add(12)?.checked_add(len)?;
+    }
+    None
+}
+
+fn jpeg_resolution_dpi(jpg: &[u8]) -> Option<(f64, f64)> {
+    let mut pos = 2usize;
+    let mut exif_dpi = None;
+    while let (Some(&0xFF), Some(&marker)) = (jpg.get(pos), jpg.get(pos + 1)) {
+        if marker == 0xDA || marker == 0xD9 {
+            break; // start of scan / end of image
+        }
+        let len = usize::from(u16::from_be_bytes(
+            jpg.get(pos + 2..pos + 4)?.try_into().ok()?,
+        ));
+        let data = jpg.get(pos + 4..pos + 2 + len)?;
+        if marker == 0xE0 && data.starts_with(b"JFIF\0") && data.len() >= 12 {
+            let density = |i: usize| f64::from(u16::from_be_bytes([data[i], data[i + 1]]));
+            let per_inch = match data[7] {
+                1 => Some(1.0),
+                2 => Some(2.54),
+                _ => None,
+            };
+            if let Some(f) = per_inch {
+                return Some((density(8) * f, density(10) * f));
+            }
+        } else if marker == 0xE1 && data.starts_with(b"Exif\0\0") {
+            exif_dpi = data.get(6..).and_then(tiff_resolution_dpi);
+        }
+        pos += 2 + len;
+    }
+    exif_dpi
 }
 
 /// Converts `buf` from its embedded profile into a builtin working space via `liblcms2`, based on the
@@ -332,6 +446,45 @@ pub fn generate_test_chart_16bit(width: u32, height: u32) -> Result<LoadedImage,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_physical_resolution_from_tiff_png_and_jpeg() {
+        // Minimal little-endian TIFF: IFD with XResolution/YResolution = 360/1 and unit inch.
+        let mut tiff = b"II*\0\x08\0\0\0".to_vec();
+        tiff.extend_from_slice(&3u16.to_le_bytes());
+        for (tag, typ, value) in [(282u16, 5u16, 50u32), (283, 5, 58), (296, 3, 2)] {
+            tiff.extend_from_slice(&tag.to_le_bytes());
+            tiff.extend_from_slice(&typ.to_le_bytes());
+            tiff.extend_from_slice(&1u32.to_le_bytes());
+            tiff.extend_from_slice(&value.to_le_bytes());
+        }
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        for _ in 0..2 {
+            tiff.extend_from_slice(&360u32.to_le_bytes());
+            tiff.extend_from_slice(&1u32.to_le_bytes());
+        }
+        assert_eq!(detect_resolution_dpi(&tiff), Some((360.0, 360.0)));
+
+        // JPEG with JFIF density 240 dpi.
+        let jpeg = [
+            0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, b'J', b'F', b'I', b'F', 0, 1, 1, 1, 0, 240, 0, 240,
+            0, 0, 0xFF, 0xD9,
+        ];
+        assert_eq!(detect_resolution_dpi(&jpeg), Some((240.0, 240.0)));
+
+        // PNG written by our own encoder with a pHYs chunk (720 dpi -> 28346 px/m).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dpi.png");
+        save_png8_with_dpi(2, 2, &[0u8; 12], 720, &path).unwrap();
+        let (x, y) = detect_resolution_dpi(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(
+            (x - 720.0).abs() < 0.1 && (y - 720.0).abs() < 0.1,
+            "{x} {y}"
+        );
+
+        // No resolution information.
+        assert_eq!(detect_resolution_dpi(&[0xFF, 0xD8, 0xFF, 0xD9]), None);
+    }
 
     #[test]
     fn roundtrip_16bit_png_and_tiff_preserves_exact_samples() {

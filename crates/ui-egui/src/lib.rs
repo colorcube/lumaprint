@@ -30,7 +30,8 @@ use lumaprint_doc::{
     DisplayColorSpaceMode, ExportColorSpace, ExportFileFormat, ExportSettings, FilmstripPosition,
     FrameLineSpec, GalleryWrapEffect, GalleryWrapSpec, LayoutMode, LayoutTemplate, MEDIA_TYPES,
     OutputSharpening, PageListPosition, PaperSource, PersistentSettings, PrintQuality, PrintScope,
-    SizingCriterion, SlotCaptionMode, StandardLayoutSpec, TemplateLayoutSpec, find_media_type,
+    SizingCriterion, SlotCaptionMode, SourceImageEntry, StandardLayoutSpec, TemplateLayoutSpec,
+    find_media_type,
 };
 use lumaprint_engine::{
     EngineCommand, Session, SettingsLoad, load_settings_file, save_settings_file,
@@ -181,6 +182,11 @@ const PHOTO_SIZE_PRESETS_MM: &[(&str, SizeMm)] = &[
         },
     ),
 ];
+
+/// Millimetres with one decimal and a decimal comma (`112,9`).
+fn fmt_mm_de(mm: f64) -> String {
+    format!("{mm:.1}").replace('.', ",")
+}
 
 fn matches_photo_size_preset(a: SizeMm, b: SizeMm) -> bool {
     let a_min = a.width_mm.min(a.height_mm);
@@ -770,6 +776,8 @@ pub struct LumaPrintApp {
     dialog_rx: Option<std::sync::mpsc::Receiver<NativeDialogResult>>,
     last_rendered_preview_dpi: u32,
     pub slot_selected: bool,
+    /// The last click selected an image in the pool (target of the Delete key when no slot is selected).
+    pool_selected: bool,
     last_visible_pool_position: FilmstripPosition,
     pub right_dock_tab: RightDockTab,
     pub left_dock_tab: SharedDockTab,
@@ -838,6 +846,7 @@ impl LumaPrintApp {
             print_job_ui_state: PrintJobUiState::Idle,
             settings_path: None,
             saved_settings: None,
+            pool_selected: false,
             next_settings_check: 0.0,
         }
     }
@@ -1241,6 +1250,7 @@ impl LumaPrintApp {
         let mut toggle_softproof = false;
         let mut toggle_paper_white = false;
         let mut toggle_gamut_warning = false;
+        let mut delete_pressed = false;
         let mut pasted_paths: Vec<std::path::PathBuf> = Vec::new();
 
         ctx.input(|i| {
@@ -1258,6 +1268,9 @@ impl LumaPrintApp {
 
             // Function-key dock toggles (F8 = Bottom Dock, F9 = Left Dock / Pool, F10 = Right Setup Dock)
             if !i.modifiers.any() {
+                if i.key_pressed(egui::Key::Delete) {
+                    delete_pressed = true;
+                }
                 if i.key_pressed(egui::Key::F8) {
                     toggle_bottom = true;
                 }
@@ -1338,6 +1351,9 @@ impl LumaPrintApp {
             self.process_os_dropped_paths(pasted_paths, pos);
         }
 
+        if delete_pressed {
+            self.delete_selected_image();
+        }
         if let Some(vm) = set_view_mode {
             self.exec(EngineCommand::SetCanvasViewMode(vm));
         }
@@ -1385,6 +1401,26 @@ impl LumaPrintApp {
             self.exec(EngineCommand::Undo);
         } else if do_redo && self.session.can_redo() {
             self.exec(EngineCommand::Redo);
+        }
+    }
+
+    /// Delete key: removes the image from the selected slot (it stays in the pool), or, if the
+    /// last click selected a pool image, removes that image from the pool. Both can be undone.
+    fn delete_selected_image(&mut self) {
+        let doc = &self.session.doc;
+        let slot = doc.active_slot_index;
+        if self.slot_selected && doc.slot_assignments.get(slot).copied().flatten().is_some() {
+            let page_index = doc.active_page_index;
+            self.exec(EngineCommand::AssignImageToPageSlot {
+                page_index,
+                slot_index: slot,
+                image_id: None,
+            });
+        } else if self.pool_selected
+            && let Some(image_id) = doc.images.get(doc.active_image_index).map(|i| i.id)
+        {
+            self.exec(EngineCommand::RemoveImage { image_id });
+            self.pool_selected = false;
         }
     }
 
@@ -3257,6 +3293,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
         if let Some(idx) = clicked_idx {
             self.exec(EngineCommand::SelectActiveImage { index: idx });
+            self.pool_selected = true;
+            self.slot_selected = false;
         }
         if let Some(idx) = open_crop_for_idx {
             self.exec(EngineCommand::SelectActiveImage { index: idx });
@@ -4538,6 +4576,34 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                             ));
                                         }
                                         _ => {}
+                                    }
+                                }
+
+                                if let Some((orig, dpi)) = img_entry_opt
+                                    .as_ref()
+                                    .and_then(SourceImageEntry::original_size_mm)
+                                {
+                                    ui.separator();
+                                    let label = format!(
+                                        "Originalgröße ({} × {} mm, {:.0} dpi)",
+                                        fmt_mm_de(orig.width_mm),
+                                        fmt_mm_de(orig.height_mm),
+                                        dpi
+                                    );
+                                    if ui
+                                        .selectable_label(
+                                            matches_photo_size_preset(cur_size, orig),
+                                            label,
+                                        )
+                                        .clicked()
+                                    {
+                                        pending_cmd = Some(EngineCommand::SetComposerSlotSize {
+                                            page_index,
+                                            slot_index: Some(slot.slot_index),
+                                            size_mm: orig,
+                                            orient_to_image: false,
+                                        });
+                                        ui.close_menu();
                                     }
                                 }
 
@@ -6209,6 +6275,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     .flatten()
                     .and_then(|id| self.session.doc.images.iter().find(|img| img.id == id));
                 let active_aspect = active_img.map(effective_cropped_aspect);
+                let active_original = active_img.and_then(SourceImageEntry::original_size_mm);
                 let fill_active = active_img.map(|img| img.crop.fill_slot).unwrap_or(false)
                     || (self.session.doc.printer.borderless && std_spec.fit_to_scale);
                 let proportional_margins =
@@ -6406,6 +6473,22 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                                 / 10.0;
                                     }
                                 }
+                                changed = true;
+                            }
+                            if let Some((orig, dpi)) = active_original
+                                && ui
+                                    .button("Original")
+                                    .on_hover_text(format!(
+                                        "Originalgröße aus der Bilddatei: {} × {} mm bei {:.0} dpi",
+                                        fmt_mm_de(orig.width_mm),
+                                        fmt_mm_de(orig.height_mm),
+                                        dpi
+                                    ))
+                                    .clicked()
+                            {
+                                std_spec.criterion = SizingCriterion::ImageSize;
+                                std_spec.manual_rect_mm.width_mm = orig.width_mm;
+                                std_spec.manual_rect_mm.height_mm = orig.height_mm;
                                 changed = true;
                             }
                         });

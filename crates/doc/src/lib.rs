@@ -896,6 +896,20 @@ pub struct SourceImageEntry {
     pub composer_pos_mm: (f64, f64),
 }
 
+impl SourceImageEntry {
+    /// Print size at the resolution stored in the file (`pixels / dpi`, e.g. 1600 px at 360 dpi =
+    /// 112.9 mm) and the horizontal dpi. `None` if the file carries no resolution.
+    pub fn original_size_mm(&self) -> Option<(SizeMm, f64)> {
+        let dpi_x = self.meta.dpi_x.filter(|d| *d > 0.0)?;
+        let dpi_y = self.meta.dpi_y.filter(|d| *d > 0.0).unwrap_or(dpi_x);
+        let size = SizeMm {
+            width_mm: f64::from(self.meta.width) / dpi_x * 25.4,
+            height_mm: f64::from(self.meta.height) / dpi_y * 25.4,
+        };
+        Some((size, dpi_x))
+    }
+}
+
 /// Color management mode (`Farbeinstellungen -> Typ`, EPL manual p. 29–31).
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ColorManagementMode {

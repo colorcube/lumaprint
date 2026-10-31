@@ -649,6 +649,18 @@ impl Session {
         }
         self.undo_stack.push(self.doc.clone());
         self.redo_stack.clear();
+        self.prune_image_buffers();
+    }
+
+    /// Frees decoded image buffers that neither the document nor any undo/redo snapshot references.
+    /// `RemoveImage` keeps the buffer so that undo can restore the image.
+    fn prune_image_buffers(&mut self) {
+        let referenced: std::collections::HashSet<u64> = std::iter::once(&self.doc)
+            .chain(&self.undo_stack)
+            .chain(&self.redo_stack)
+            .flat_map(|d| d.images.iter().map(|i| i.id))
+            .collect();
+        self.image_buffers.retain(|id, _| referenced.contains(id));
     }
 
     pub fn can_undo(&self) -> bool {
@@ -942,8 +954,8 @@ impl Session {
                 self.add_synthetic_demo_images()?;
             }
             EngineCommand::RemoveImage { image_id } => {
+                // The decoded buffer stays until no undo snapshot references the image any more.
                 self.doc.images.retain(|i| i.id != image_id);
-                self.image_buffers.remove(&image_id);
                 for slot in &mut self.doc.slot_assignments {
                     if *slot == Some(image_id) {
                         *slot = None;
@@ -3033,6 +3045,73 @@ mod tests {
             .execute(EngineCommand::SetResolutionKey("Fine".into()))
             .unwrap();
         assert_eq!(session.build_cups_spool_request().resolution, "Fine");
+    }
+
+    #[test]
+    fn removed_pool_image_can_be_restored_by_undo() {
+        let mut session = Session::new();
+        session.execute(EngineCommand::AddDemoImages).unwrap();
+        let id = session.doc.images[0].id;
+        session
+            .execute(EngineCommand::RemoveImage { image_id: id })
+            .unwrap();
+        assert!(session.doc.images.iter().all(|i| i.id != id));
+
+        session.execute(EngineCommand::Undo).unwrap();
+        assert!(session.doc.images.iter().any(|i| i.id == id));
+        assert!(
+            session.image_buffers.contains_key(&id),
+            "undo must restore the decoded image, not only the pool entry"
+        );
+
+        // Once no snapshot references the image any more, its buffer is freed.
+        session.execute(EngineCommand::Redo).unwrap();
+        for _ in 0..51 {
+            session
+                .execute(EngineCommand::SelectActiveImage { index: 0 })
+                .unwrap();
+        }
+        assert!(!session.image_buffers.contains_key(&id));
+    }
+
+    #[test]
+    fn imported_image_can_be_printed_at_its_original_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("chart_360dpi.png");
+        // 1600 px at 360 dpi = 112.9 mm, like the EPL reference chart.
+        lumaprint_codecs::save_png8_with_dpi(1600, 1600, &vec![128u8; 1600 * 1600 * 3], 360, &path)
+            .unwrap();
+
+        let mut session = Session::new();
+        session
+            .execute(EngineCommand::AddImageFile {
+                path: path.display().to_string(),
+            })
+            .unwrap();
+        let img = session.doc.images.last().unwrap().clone();
+        let (orig, dpi) = img.original_size_mm().unwrap();
+        assert!((dpi - 360.0).abs() < 0.1, "{dpi}");
+        assert!((orig.width_mm - 112.89).abs() < 0.05, "{orig:?}");
+
+        session
+            .execute(EngineCommand::PlacePoolImageOnSheet {
+                image_id: img.id,
+                page_index: 0,
+                slot_index: Some(0),
+            })
+            .unwrap();
+        session
+            .execute(EngineCommand::SetComposerSlotSize {
+                page_index: 0,
+                slot_index: Some(0),
+                size_mm: orig,
+                orient_to_image: false,
+            })
+            .unwrap();
+        let solved = lumaprint_layout::solve_page_layout_at(&session.doc, 0);
+        let draw = solved.slots[0].image_draw_rect_mm;
+        assert!((draw.width_mm - 112.89).abs() < 0.05, "{draw:?}");
+        assert!((draw.height_mm - 112.89).abs() < 0.05, "{draw:?}");
     }
 
     #[test]
