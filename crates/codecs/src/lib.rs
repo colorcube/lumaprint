@@ -105,12 +105,11 @@ pub fn load_image_from_bytes(bytes: &[u8], source_label: &str) -> Result<LoadedI
 
     let rgb16_img = dyn_img.to_rgb16();
     let raw_samples = rgb16_img.into_raw();
-    let mut buffer = ImageBuffer16::from_raw(width, height, raw_samples).map_err(|e| {
-        CodecError::Decode {
+    let mut buffer =
+        ImageBuffer16::from_raw(width, height, raw_samples).map_err(|e| CodecError::Decode {
             path: source_label.to_string(),
             reason: e.to_string(),
-        }
-    })?;
+        })?;
 
     let (color_space, icc_profile_name) =
         detect_and_apply_embedded_color_space(&mut buffer, decoder_icc.as_deref(), bytes);
@@ -311,13 +310,23 @@ pub fn encode_png16_bytes(buf: &ImageBuffer16) -> Result<Vec<u8>, CodecError> {
     let mut out = Cursor::new(Vec::new());
     let encoder = image::codecs::png::PngEncoder::new(&mut out);
     encoder
-        .write_image(&raw_be, buf.width, buf.height, image::ExtendedColorType::Rgb16)
+        .write_image(
+            &raw_be,
+            buf.width,
+            buf.height,
+            image::ExtendedColorType::Rgb16,
+        )
         .map_err(|e| CodecError::Encode(e.to_string()))?;
     Ok(out.into_inner())
 }
 
 /// Saves an 8-bit RGB snapshot PNG (used for UI snapshot verification and quick previews).
-pub fn save_png8(width: u32, height: u32, rgb8: &[u8], path: impl AsRef<Path>) -> Result<(), CodecError> {
+pub fn save_png8(
+    width: u32,
+    height: u32,
+    rgb8: &[u8],
+    path: impl AsRef<Path>,
+) -> Result<(), CodecError> {
     save_png8_with_dpi(width, height, rgb8, 300, path)
 }
 
@@ -414,14 +423,14 @@ pub fn generate_test_chart_16bit(width: u32, height: u32) -> Result<LoadedImage,
             };
             let inv = 65535u16.saturating_sub(t);
             let px = match strip {
-                0 => Rgb16::new(inv, inv, inv),                // Neutral Gray ramp (white -> black)
-                1 => Rgb16::new(inv, 65535, 65535),            // Cyan ramp
-                2 => Rgb16::new(65535, inv, 65535),            // Vivid Magenta ramp
-                3 => Rgb16::new(65535, 65535, inv),            // Yellow ramp
-                4 => Rgb16::new(65535, inv, inv),              // Red ramp
-                5 => Rgb16::new(inv, 65535, inv),              // Green ramp
-                6 => Rgb16::new(inv, inv, 65535),              // Blue ramp
-                _ => Rgb16::new(16384 + (t / 4), 0, 65535),    // SC-P900 Violet sector ramp
+                0 => Rgb16::new(inv, inv, inv), // Neutral Gray ramp (white -> black)
+                1 => Rgb16::new(inv, 65535, 65535), // Cyan ramp
+                2 => Rgb16::new(65535, inv, 65535), // Vivid Magenta ramp
+                3 => Rgb16::new(65535, 65535, inv), // Yellow ramp
+                4 => Rgb16::new(65535, inv, inv), // Red ramp
+                5 => Rgb16::new(inv, 65535, inv), // Green ramp
+                6 => Rgb16::new(inv, inv, 65535), // Blue ramp
+                _ => Rgb16::new(16384 + (t / 4), 0, 65535), // SC-P900 Violet sector ramp
             };
             buffer.set_pixel(x, y, px);
         }
@@ -497,12 +506,18 @@ mod tests {
         assert_eq!(loaded_png.meta.width, 64);
         assert_eq!(loaded_png.meta.height, 32);
         assert_eq!(loaded_png.meta.bit_depth_per_channel, 16);
-        assert_eq!(loaded_png.buffer.get_pixel(17, 5), chart.buffer.get_pixel(17, 5));
+        assert_eq!(
+            loaded_png.buffer.get_pixel(17, 5),
+            chart.buffer.get_pixel(17, 5)
+        );
 
         let tif_path = dir.path().join("chart16.tif");
         save_tiff16(&chart.buffer, &tif_path).unwrap();
         let loaded_tif = load_image_file(&tif_path).unwrap();
         assert_eq!(loaded_tif.meta.bit_depth_per_channel, 16);
-        assert_eq!(loaded_tif.buffer.get_pixel(42, 29), chart.buffer.get_pixel(42, 29));
+        assert_eq!(
+            loaded_tif.buffer.get_pixel(42, 29),
+            chart.buffer.get_pixel(42, 29)
+        );
     }
 }

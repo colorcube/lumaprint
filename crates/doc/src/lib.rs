@@ -21,7 +21,9 @@ use thiserror::Error;
 pub enum DocError {
     #[error("JSON serialization error: {0}")]
     Json(String),
-    #[error("preset '{0}'already exists (EPL does not overwrite existing presets; choose a new name)")]
+    #[error(
+        "preset '{0}'already exists (EPL does not overwrite existing presets; choose a new name)"
+    )]
     PresetAlreadyExists(String),
     #[error("preset '{0}' not found")]
     PresetNotFound(String),
@@ -360,9 +362,7 @@ pub const MEDIA_TYPES: &[MediaTypeSpec] = &[
 ];
 
 pub fn find_media_type(key: &str) -> Option<&'static MediaTypeSpec> {
-    MEDIA_TYPES
-        .iter()
-        .find(|m| m.key.eq_ignore_ascii_case(key))
+    MEDIA_TYPES.iter().find(|m| m.key.eq_ignore_ascii_case(key))
 }
 
 /// Platen gap setting for Custom Media.
@@ -616,8 +616,7 @@ impl Default for PanoramaLayoutSpec {
 }
 
 /// Gallery Wrap side-fold effect (`Effekt`, EPL manual p. 27).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum GalleryWrapEffect {
     /// `Kein` — side folds stay unprinted.
     None,
@@ -633,7 +632,6 @@ pub enum GalleryWrapEffect {
     /// `Wrap Bild (Schattierungen)` — extends image across folds with blur (`0..=100`%).
     WrapShaded { blur_percent: u8 },
 }
-
 
 impl GalleryWrapEffect {
     pub fn label_de(self) -> &'static str {

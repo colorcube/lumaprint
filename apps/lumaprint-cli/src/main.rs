@@ -59,12 +59,18 @@ fn cmd_help() -> String {
     s.push_str("LumaPrint CLI — Headless Fine-Art Print Layout & Color Management\n\n");
     s.push_str("VERWENDUNG:\n");
     s.push_str("  lumaprint-cli info                   Architektur-, ICC- und Drucker-Übersicht\n");
-    s.push_str("  lumaprint-cli printers               Installierte Systemdrucker (CUPS) auflisten\n");
-    s.push_str("  lumaprint-cli media                  Integrierte Fine-Art Medientypen auflisten\n");
+    s.push_str(
+        "  lumaprint-cli printers               Installierte Systemdrucker (CUPS) auflisten\n",
+    );
+    s.push_str(
+        "  lumaprint-cli media                  Integrierte Fine-Art Medientypen auflisten\n",
+    );
     s.push_str("  lumaprint-cli papers                 Alle unterstützten Papierformate & Ränder auflisten\n");
     s.push_str("  lumaprint-cli templates              Integrierte Vorlagen (wie EPL) auflisten\n");
     s.push_str("  lumaprint-cli presets                Integrierte Fine-Art Presets auflisten\n");
-    s.push_str("  lumaprint-cli commands               Alle registrierten Engine-Befehle auflisten\n");
+    s.push_str(
+        "  lumaprint-cli commands               Alle registrierten Engine-Befehle auflisten\n",
+    );
     s.push_str("  lumaprint-cli status [--host <ip>]   Generischen IPP-Druckerstatus & Tintenstand abfragen\n");
     s.push_str("  lumaprint-cli render [Optionen]      16-Bit Seiten-Rendering als TIFF oder PNG speichern\n");
     s.push_str("  lumaprint-cli print  [Optionen]      Druckauftrag an CUPS senden oder als 16-Bit TIFF speichern\n\n");
@@ -72,14 +78,18 @@ fn cmd_help() -> String {
     s.push_str("  --input <pfad>        Eingabebild (PNG/TIFF/JPEG/PPM, mehrfach möglich; ohne: Demo-Chart)\n");
     s.push_str("  --output <pfad>       Ausgabedatei (.tif, .png; bei 'print' ohne --output: Spooling via CUPS/lp)\n");
     s.push_str("  --printer <queue>     Ziel-Drucker-Queue in CUPS (z.B. Epson_SC_P900)\n");
-    s.push_str("  --media <key>         Medientyp-Key (z.B. VelvetFineArt, PremiumGlossy, Baryta)\n");
+    s.push_str(
+        "  --media <key>         Medientyp-Key (z.B. VelvetFineArt, PremiumGlossy, Baryta)\n",
+    );
     s.push_str("  --paper <key>         Papierformat-Key (z.B. A4, A3+, A2, 4x6)\n");
     s.push_str("  --source <src>        Papierzufuhr (rear, front_fine_art, front_thick, roll)\n");
     s.push_str("  --borderless          Randloser Druck aktivieren\n");
     s.push_str("  --layout <mode>       Layout-Typ: standard | gallery_wrap | template | composer | test_strip\n");
     s.push_str("  --color <mode>        Farbmodus: icc | abw | driver | none\n");
     s.push_str("  --abw-tone <tone>     ABW-Farbton: neutral | cool | warm | sepia\n");
-    s.push_str("  --intent <intent>     Rendering Intent: perceptual | relative | saturation | absolute\n");
+    s.push_str(
+        "  --intent <intent>     Rendering Intent: perceptual | relative | saturation | absolute\n",
+    );
     s.push_str("  --no-bpc              Tiefenkompensation (BPC) deaktivieren\n");
     s.push_str("  --softproof           Softproof-Simulation beim Rendering aktivieren\n");
     s.push_str("  --gamut-warning       Farbraumwarnung (Out-of-Gamut) im Softproof einblenden\n");

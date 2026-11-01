@@ -23,9 +23,13 @@ pub const BASE_GRID_DPI: u32 = 360;
 /// Geometry validation errors.
 #[derive(Debug, Clone, PartialEq, Error)]
 pub enum GeomError {
-    #[error("invalid dimension: width={width_mm:.2} mm, height={height_mm:.2} mm (must be > 0 and finite)")]
+    #[error(
+        "invalid dimension: width={width_mm:.2} mm, height={height_mm:.2} mm (must be > 0 and finite)"
+    )]
     InvalidDimension { width_mm: f64, height_mm: f64 },
-    #[error("margins ({left_mm:.2} + {right_mm:.2}, {top_mm:.2} + {bottom_mm:.2} mm) exceed page size ({page_w_mm:.2} x {page_h_mm:.2} mm)")]
+    #[error(
+        "margins ({left_mm:.2} + {right_mm:.2}, {top_mm:.2} + {bottom_mm:.2} mm) exceed page size ({page_w_mm:.2} x {page_h_mm:.2} mm)"
+    )]
     MarginsExceedPage {
         left_mm: f64,
         right_mm: f64,
@@ -34,7 +38,9 @@ pub enum GeomError {
         page_w_mm: f64,
         page_h_mm: f64,
     },
-    #[error("paper size '{paper_name}' ({width_mm:.1} x {height_mm:.1} mm) is smaller than required Gallery Wrap size ({req_w_mm:.1} x {req_h_mm:.1} mm)")]
+    #[error(
+        "paper size '{paper_name}' ({width_mm:.1} x {height_mm:.1} mm) is smaller than required Gallery Wrap size ({req_w_mm:.1} x {req_h_mm:.1} mm)"
+    )]
     PaperTooSmallForGalleryWrap {
         paper_name: String,
         width_mm: f64,
@@ -500,7 +506,10 @@ pub const PAPER_SIZES: &[PaperSizeSpec] = &[
 
 /// Looks up a standard paper size by key or common CUPS/PPD alias (`"A4"`, `"A3+"`, `"SuperB"`, `"w288h432"`, etc.).
 pub fn find_paper_size(key: &str) -> Option<&'static PaperSizeSpec> {
-    let trimmed = key.trim().trim_end_matches(".FB").trim_end_matches(".Borderless");
+    let trimmed = key
+        .trim()
+        .trim_end_matches(".FB")
+        .trim_end_matches(".Borderless");
     if let Some(found) = PAPER_SIZES
         .iter()
         .find(|p| p.key.eq_ignore_ascii_case(trimmed))

@@ -12,11 +12,6 @@
 
 pub mod theme;
 
-#[cfg(target_os = "linux")]
-use winit::platform::wayland::{
-    resolve_surface_color_space, set_wayland_surface_color_space, wayland_color_management_status,
-    WaylandDetectedGamut, WaylandSurfaceColorSpace,
-};
 use egui::{
     Color32, ColorImage, Context, CornerRadius, FontId, Pos2, Rect, RichText, Sense, Stroke,
     StrokeKind, TextureHandle, TextureOptions, Ui, Vec2,
@@ -49,6 +44,11 @@ use std::path::{Path, PathBuf};
 pub use theme::{
     KdeTypography, ThemeKind, Tokens, apply_theme_and_typography, install_kde_system_fonts,
     parse_kde_globals_tokens,
+};
+#[cfg(target_os = "linux")]
+use winit::platform::wayland::{
+    WaylandDetectedGamut, WaylandSurfaceColorSpace, resolve_surface_color_space,
+    set_wayland_surface_color_space, wayland_color_management_status,
 };
 
 /// `DragValue` with German decimal comma: shows `12,5` and accepts both `12,5` and `12.5`.
@@ -216,8 +216,7 @@ const FRAME_GRAY_PRESETS: &[(&str, Rgb8)] = &[
 
 fn draw_color_swatch_item(ui: &mut Ui, rgb: Rgb8, label: &str, selected: bool) -> egui::Response {
     ui.horizontal(|ui| {
-        let (swatch_rect, _) =
-            ui.allocate_exact_size(Vec2::new(14.0, 14.0), Sense::hover());
+        let (swatch_rect, _) = ui.allocate_exact_size(Vec2::new(14.0, 14.0), Sense::hover());
         ui.painter().rect_filled(
             swatch_rect,
             CornerRadius::same(2),
@@ -292,7 +291,9 @@ fn draw_frame_line_rows(
             let combo_label = matched_gray
                 .clone()
                 .or_else(|| matched_custom.clone())
-                .unwrap_or_else(|| format!("Frei (#{:02X}{:02X}{:02X})", cur_c.r, cur_c.g, cur_c.b));
+                .unwrap_or_else(|| {
+                    format!("Frei (#{:02X}{:02X}{:02X})", cur_c.r, cur_c.g, cur_c.b)
+                });
 
             egui::ComboBox::from_id_salt((id_prefix, "frame_color_combo"))
                 .selected_text(combo_label)
@@ -506,7 +507,8 @@ impl TemplateStudioState {
         let avail_w =
             (paper_size_mm.width_mm - self.margins_mm.left_mm - self.margins_mm.right_mm).max(20.0);
         let avail_h =
-            (paper_size_mm.height_mm - self.margins_mm.top_mm - self.margins_mm.bottom_mm).max(20.0);
+            (paper_size_mm.height_mm - self.margins_mm.top_mm - self.margins_mm.bottom_mm)
+                .max(20.0);
         let total_gap_w = self.gap_h_mm * ((cols.saturating_sub(1)) as f64);
         let total_gap_h = self.gap_v_mm * ((rows.saturating_sub(1)) as f64);
         let cell_w = ((avail_w - total_gap_w) / (cols as f64)).max(4.0);
@@ -520,11 +522,7 @@ impl TemplateStudioState {
     }
 
     /// Computes the spanned rectangle `[r0, c0, r1, c1]` in `mm` on `paper_size_mm`.
-    pub fn grid_span_rect_mm(
-        &self,
-        paper_size_mm: SizeMm,
-        [r0, c0, r1, c1]: [usize; 4],
-    ) -> RectMm {
+    pub fn grid_span_rect_mm(&self, paper_size_mm: SizeMm, [r0, c0, r1, c1]: [usize; 4]) -> RectMm {
         let tl = self.grid_cell_rect_mm(paper_size_mm, r0, c0);
         let br = self.grid_cell_rect_mm(paper_size_mm, r1, c1);
         RectMm::new(
@@ -583,9 +581,8 @@ impl TemplateStudioState {
             return;
         }
         // Remove any existing merged region that overlaps `[r0, c0, r1, c1]`
-        self.merged_regions.retain(|&[mr0, mc0, mr1, mc1]| {
-            mr1 < r0 || mr0 > r1 || mc1 < c0 || mc0 > c1
-        });
+        self.merged_regions
+            .retain(|&[mr0, mc0, mr1, mc1]| mr1 < r0 || mr0 > r1 || mc1 < c0 || mc0 > c1);
         // Clear disabled flags inside the merged span
         self.disabled_cells
             .retain(|&(dr, dc)| dr < r0 || dr > r1 || dc < c0 || dc > c1);
@@ -597,9 +594,8 @@ impl TemplateStudioState {
         let Some([r0, c0, r1, c1]) = self.selected_cells else {
             return;
         };
-        self.merged_regions.retain(|&[mr0, mc0, mr1, mc1]| {
-            mr1 < r0 || mr0 > r1 || mc1 < c0 || mc0 > c1
-        });
+        self.merged_regions
+            .retain(|&[mr0, mc0, mr1, mc1]| mr1 < r0 || mr0 > r1 || mc1 < c0 || mc0 > c1);
     }
 
     /// Toggles whether the selected cell(s) are empty whitespace or active image slots.
@@ -976,11 +972,7 @@ impl LumaPrintApp {
         };
         p.rect_filled(rect, CornerRadius::ZERO, fill);
 
-        let fg = if is_selected {
-            t.text
-        } else {
-            t.text_dim
-        };
+        let fg = if is_selected { t.text } else { t.text_dim };
 
         p.text(
             rect.center(),
@@ -1781,11 +1773,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         }
     }
 
-    fn process_os_dropped_paths(
-        &mut self,
-        paths: Vec<std::path::PathBuf>,
-        drop_pos: Option<Pos2>,
-    ) {
+    fn process_os_dropped_paths(&mut self, paths: Vec<std::path::PathBuf>, drop_pos: Option<Pos2>) {
         let dropped_in_pool = drop_pos.is_some_and(|p| self.last_pool_rect.contains(p));
         let dropped_in_canvas = drop_pos.is_some_and(|p| self.last_canvas_rect.contains(p));
 
@@ -1893,8 +1881,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             .width_mm
             .max(solved_geom.paper_size_mm.height_mm)
             .max(25.4);
-        let max_tex_side = (ctx.input(|i| i.max_texture_side).saturating_sub(32)).clamp(1024, 4096)
-            as f64;
+        let max_tex_side =
+            (ctx.input(|i| i.max_texture_side).saturating_sub(32)).clamp(1024, 4096) as f64;
         let target_long_px = (1800.0 * f64::from(self.zoom.max(1.0)))
             .clamp(1600.0, 2800.0)
             .min(max_tex_side);
@@ -1911,8 +1899,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         if let Ok((buf16, solved)) = self.session.render_page(preview_dpi, true) {
             let rgb8 = buf16.to_rgb8_dithered_vec();
             let img = ColorImage::from_rgb([buf16.width as usize, buf16.height as usize], &rgb8);
-            self.page_texture =
-                Some(ctx.load_texture("page_preview", img, TextureOptions::LINEAR));
+            self.page_texture = Some(ctx.load_texture("page_preview", img, TextureOptions::LINEAR));
             self.cached_solved = Some(solved);
             self.last_rendered_preview_dpi = preview_dpi;
         }
@@ -1945,8 +1932,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
     fn rotate_image_by(&mut self, image_id: u64, delta_deg: i32) {
         if let Some(img) = self.session.doc.images.iter().find(|i| i.id == image_id) {
             let mut crop = img.crop;
-            crop.rotation_deg =
-                (i32::from(crop.rotation_deg) + delta_deg).rem_euclid(360) as u16;
+            crop.rotation_deg = (i32::from(crop.rotation_deg) + delta_deg).rem_euclid(360) as u16;
             self.exec(EngineCommand::SetImageCrop { image_id, crop });
         }
     }
@@ -2765,7 +2751,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
                         .on_hover_text(tip);
                     if resp.hovered() {
-                        ui.painter().rect_filled(full_r, CornerRadius::ZERO, t.hover);
+                        ui.painter()
+                            .rect_filled(full_r, CornerRadius::ZERO, t.hover);
                     }
                     ui.painter().vline(
                         full_r.max.x,
@@ -2845,23 +2832,12 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     } else if has_left_pool {
                         let lbl = format!("🖼 Bilder-Pool ({})", self.session.doc.images.len());
                         let tab_w = measure_tab_width(ui, &lbl).min(tabs_max_w);
-                        let _ = self.draggable_dock_tab(
-                            ui,
-                            DockDragItem::Pool,
-                            lbl,
-                            true,
-                            tab_w,
-                        );
+                        let _ = self.draggable_dock_tab(ui, DockDragItem::Pool, lbl, true, tab_w);
                     } else {
                         let lbl = format!("📄 Bogenliste ({})", self.session.doc.page_count());
                         let tab_w = measure_tab_width(ui, &lbl).min(tabs_max_w);
-                        let _ = self.draggable_dock_tab(
-                            ui,
-                            DockDragItem::PageList,
-                            lbl,
-                            true,
-                            tab_w,
-                        );
+                        let _ =
+                            self.draggable_dock_tab(ui, DockDragItem::PageList, lbl, true, tab_w);
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -2951,7 +2927,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
                     .on_hover_text(label);
                 if resp.hovered() {
-                    ui.painter().rect_filled(full_r, CornerRadius::ZERO, t.hover);
+                    ui.painter()
+                        .rect_filled(full_r, CornerRadius::ZERO, t.hover);
                 }
                 ui.painter().hline(
                     full_r.x_range(),
@@ -3060,23 +3037,11 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             } else if has_pages {
                 let lbl = format!("📄 Bogenliste ({})", self.session.doc.page_count());
                 let tab_w = measure_tab_width(ui, &lbl).min(tabs_max_w);
-                let _ = self.draggable_dock_tab(
-                    ui,
-                    DockDragItem::PageList,
-                    lbl,
-                    true,
-                    tab_w,
-                );
+                let _ = self.draggable_dock_tab(ui, DockDragItem::PageList, lbl, true, tab_w);
             } else {
                 let lbl = format!("🖼 Bilder-Pool ({})", self.session.doc.images.len());
                 let tab_w = measure_tab_width(ui, &lbl).min(tabs_max_w);
-                let _ = self.draggable_dock_tab(
-                    ui,
-                    DockDragItem::Pool,
-                    lbl,
-                    true,
-                    tab_w,
-                );
+                let _ = self.draggable_dock_tab(ui, DockDragItem::Pool, lbl, true, tab_w);
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -3241,10 +3206,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             continue;
                         }
                         let is_sel = idx == active_idx;
-                        let (full_row_rect, row_resp) = ui.allocate_exact_size(
-                            Vec2::new(row_w, row_h),
-                            Sense::click_and_drag(),
-                        );
+                        let (full_row_rect, row_resp) = ui
+                            .allocate_exact_size(Vec2::new(row_w, row_h), Sense::click_and_drag());
                         self.paint_and_interact_pool_item(
                             ui,
                             idx,
@@ -3487,7 +3450,11 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
     fn draw_central_canvas(&mut self, ctx: &Context) {
         let backdrop_rgb = self.session.doc.canvas_backdrop.rgb8();
         let panel_frame = egui::Frame::new()
-            .fill(Color32::from_rgb(backdrop_rgb.r, backdrop_rgb.g, backdrop_rgb.b))
+            .fill(Color32::from_rgb(
+                backdrop_rgb.r,
+                backdrop_rgb.g,
+                backdrop_rgb.b,
+            ))
             .inner_margin(egui::Margin::ZERO)
             .stroke(Stroke::NONE);
 
@@ -3541,9 +3508,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         let z_delta = i.zoom_delta();
                         if (z_delta - 1.0).abs() > 0.001 {
                             self.zoom = (self.zoom * z_delta).clamp(0.4, 2.5);
-                        } else if (i.modifiers.ctrl || i.modifiers.command)
-                            && !i.modifiers.shift
-                        {
+                        } else if (i.modifiers.ctrl || i.modifiers.command) && !i.modifiers.shift {
                             let sy = if i.raw_scroll_delta.y.abs() > 0.01 {
                                 i.raw_scroll_delta.y
                             } else {
@@ -3585,8 +3550,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 12.0;
 
-            let is_fit = active_crop
-                .is_some_and(|c| !c.fill_slot && (c.slot_zoom - 1.0).abs() < 0.01);
+            let is_fit =
+                active_crop.is_some_and(|c| !c.fill_slot && (c.slot_zoom - 1.0).abs() < 0.01);
             let is_fill = active_crop.is_some_and(|c| c.fill_slot);
             let is_flip_h = active_crop.is_some_and(|c| c.flip_horizontal);
             let is_flip_v = active_crop.is_some_and(|c| c.flip_vertical);
@@ -3616,13 +3581,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 .clicked()
             {
                 if let Some((_, img_id)) = target_slot_and_img {
-                    if let Some(idx) = self
-                        .session
-                        .doc
-                        .images
-                        .iter()
-                        .position(|i| i.id == img_id)
-                    {
+                    if let Some(idx) = self.session.doc.images.iter().position(|i| i.id == img_id) {
                         self.exec(EngineCommand::SelectActiveImage { index: idx });
                     }
                     self.show_crop_modal = true;
@@ -3647,18 +3606,30 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 }
             }
 
-            if draw_frameless_canvas_icon(ui, &t, CanvasActionIcon::FlipHorizontal, enabled, is_flip_h)
-                .on_hover_text("Horizontal spiegeln")
-                .clicked()
+            if draw_frameless_canvas_icon(
+                ui,
+                &t,
+                CanvasActionIcon::FlipHorizontal,
+                enabled,
+                is_flip_h,
+            )
+            .on_hover_text("Horizontal spiegeln")
+            .clicked()
             {
                 if let Some((_, img_id)) = target_slot_and_img {
                     self.toggle_flip_horizontal(img_id);
                 }
             }
 
-            if draw_frameless_canvas_icon(ui, &t, CanvasActionIcon::FlipVertical, enabled, is_flip_v)
-                .on_hover_text("Vertikal spiegeln")
-                .clicked()
+            if draw_frameless_canvas_icon(
+                ui,
+                &t,
+                CanvasActionIcon::FlipVertical,
+                enabled,
+                is_flip_v,
+            )
+            .on_hover_text("Vertikal spiegeln")
+            .clicked()
             {
                 if let Some((_, img_id)) = target_slot_and_img {
                     self.toggle_flip_vertical(img_id);
@@ -3842,10 +3813,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             }
                             if page_idx == total_pages {
                                 // "+ Neuer Bogen" card at the end of the grid
-                                let (card_rect, card_resp) = ui.allocate_exact_size(
-                                    Vec2::new(card_w, card_h),
-                                    Sense::click(),
-                                );
+                                let (card_rect, card_resp) = ui
+                                    .allocate_exact_size(Vec2::new(card_w, card_h), Sense::click());
                                 self.last_nav_add_rect = Some(card_rect);
                                 let p = ui.painter();
                                 p.rect_filled(
@@ -3875,10 +3844,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             } else {
                                 let pi = page_idx;
                                 let is_active_page = pi == active_page;
-                                let (card_rect, card_resp) = ui.allocate_exact_size(
-                                    Vec2::new(card_w, card_h),
-                                    Sense::click(),
-                                );
+                                let (card_rect, card_resp) = ui
+                                    .allocate_exact_size(Vec2::new(card_w, card_h), Sense::click());
                                 {
                                     let p = ui.painter();
                                     p.rect_filled(
@@ -3938,11 +3905,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                         );
                                     }
                                     self.draw_interactive_sheet_slots(
-                                        ui,
-                                        pi,
-                                        &solved,
-                                        sheet_rect,
-                                        scale,
+                                        ui, pi, &solved, sheet_rect, scale,
                                     );
                                 }
 
@@ -4034,7 +3997,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
             if let Some(img_id) = slot.assigned_image_id {
                 // Resize handles are active in Standard layout (all CenteringModes) and on the active slot in Sammel (FreeComposer) layout
-                let (std_can_resize, std_can_move) = match self.session.doc.page_layout(page_index) {
+                let (std_can_resize, std_can_move) = match self.session.doc.page_layout(page_index)
+                {
                     LayoutMode::Standard(std_spec) => {
                         let can_resize = !(self.session.doc.printer.borderless
                             && std_spec.fit_to_scale)
@@ -4043,16 +4007,17 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         (can_resize, can_move)
                     }
                     LayoutMode::FreeComposer(_) => {
-                        let can_resize =
-                            self.session.doc.canvas_view_mode == CanvasViewMode::SinglePage
-                                && is_active_slot
-                                && self.slot_selected;
+                        let can_resize = self.session.doc.canvas_view_mode
+                            == CanvasViewMode::SinglePage
+                            && is_active_slot
+                            && self.slot_selected;
                         (can_resize, false)
                     }
                     _ => (false, false),
                 };
 
-                let can_shift_crop = self.session.doc.canvas_view_mode == CanvasViewMode::SinglePage
+                let can_shift_crop = self.session.doc.canvas_view_mode
+                    == CanvasViewMode::SinglePage
                     && matches!(
                         self.session.doc.page_layout(page_index),
                         LayoutMode::Standard(_)
@@ -4134,8 +4099,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 crop.pan_y = 0.0;
                             }
                             self.slot_selected = true;
-                            pending_cmd =
-                                Some(EngineCommand::SetImageCrop { image_id: img_id, crop });
+                            pending_cmd = Some(EngineCommand::SetImageCrop {
+                                image_id: img_id,
+                                crop,
+                            });
                         }
                     }
                 }
@@ -4311,15 +4278,17 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 if slot.uv_rect[2] < 0.999 && img_r.width() > 4.0 {
                                     crop.pan_x = (crop.pan_x
                                         - f64::from((delta.x / img_r.width()) * sens))
-                                        .clamp(-1.0, 1.0);
+                                    .clamp(-1.0, 1.0);
                                 }
                                 if slot.uv_rect[3] < 0.999 && img_r.height() > 4.0 {
                                     crop.pan_y = (crop.pan_y
                                         - f64::from((delta.y / img_r.height()) * sens))
-                                        .clamp(-1.0, 1.0);
+                                    .clamp(-1.0, 1.0);
                                 }
-                                pending_cmd =
-                                    Some(EngineCommand::SetImageCrop { image_id: img_id, crop });
+                                pending_cmd = Some(EngineCommand::SetImageCrop {
+                                    image_id: img_id,
+                                    crop,
+                                });
                             }
                         }
                     } else if std_can_resize && scale > 0.01 {
@@ -4519,7 +4488,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                         .changed();
                                     if ui
                                         .button("⇄")
-                                        .on_hover_text("Breite und Höhe tauschen (Hoch-/Querformat)")
+                                        .on_hover_text(
+                                            "Breite und Höhe tauschen (Hoch-/Querformat)",
+                                        )
                                         .clicked()
                                     {
                                         std::mem::swap(
@@ -4545,8 +4516,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                         });
                                     } else if h_changed {
                                         if keep_aspect {
-                                            cur_size.width_mm =
-                                                (cur_size.height_mm * img_aspect).clamp(10.0, 800.0);
+                                            cur_size.width_mm = (cur_size.height_mm * img_aspect)
+                                                .clamp(10.0, 800.0);
                                         }
                                         pending_cmd = Some(EngineCommand::SetComposerSlotSize {
                                             page_index,
@@ -4614,8 +4585,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                         .color(self.tokens.text_dim),
                                 );
                                 for &(lbl, preset_sz) in PHOTO_SIZE_PRESETS_MM {
-                                    let is_match =
-                                        matches_photo_size_preset(cur_size, preset_sz);
+                                    let is_match = matches_photo_size_preset(cur_size, preset_sz);
                                     if ui.selectable_label(is_match, lbl).clicked() {
                                         pending_cmd = Some(EngineCommand::SetComposerSlotSize {
                                             page_index,
@@ -4690,10 +4660,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         ui.close_menu();
                     }
                     ui.separator();
-                    if ui
-                        .button("🗑 Bild von dieser Stelle entfernen")
-                        .clicked()
-                    {
+                    if ui.button("🗑 Bild von dieser Stelle entfernen").clicked() {
                         pending_cmd = Some(EngineCommand::AssignImageToPageSlot {
                             page_index,
                             slot_index: slot.slot_index,
@@ -4742,10 +4709,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         .get(self.session.doc.active_image_index)
                     {
                         if ui
-                            .button(format!(
-                                "📥 '{}' hier platzieren",
-                                pool_img.display_name
-                            ))
+                            .button(format!("📥 '{}' hier platzieren", pool_img.display_name))
                             .clicked()
                         {
                             pending_cmd = Some(EngineCommand::AssignImageToPageSlot {
@@ -4866,8 +4830,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
         for pi in 0..total_pages {
             let is_active = pi == active_page;
-            let (card_rect, card_resp) =
-                ui.allocate_exact_size(card_size, Sense::click_and_drag());
+            let (card_rect, card_resp) = ui.allocate_exact_size(card_size, Sense::click_and_drag());
             self.last_nav_card_rects.push((pi, card_rect));
 
             let p = ui.painter();
@@ -5031,7 +4994,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             ui.label(RichText::new(format!("Bogen {}", page_index + 1)).strong());
             ui.separator();
             if ui
-                .add_enabled(page_index > 0, egui::Button::new("◀ Nach links verschieben"))
+                .add_enabled(
+                    page_index > 0,
+                    egui::Button::new("◀ Nach links verschieben"),
+                )
                 .clicked()
             {
                 self.exec(EngineCommand::MovePage {
@@ -5193,8 +5159,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     let tab_row_resp = ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
                         let settings_lbl = "⚙ Einstellungen";
-                        let pool_lbl =
-                            format!("🖼 Bilder-Pool ({})", self.session.doc.images.len());
+                        let pool_lbl = format!("🖼 Bilder-Pool ({})", self.session.doc.images.len());
                         let tab_w = measure_tab_width(ui, settings_lbl)
                             .max(measure_tab_width(ui, &pool_lbl))
                             .min((tabs_max_w * 0.5).floor());
@@ -5383,15 +5348,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             self.session.doc.active_page_index + 1,
                             self.session.doc.page_count()
                         );
-                        self.draw_dock_section(
-                            ui,
-                            &layout_title,
-                            true,
-                            true,
-                            |app, ui| {
-                                app.draw_layout_settings_section(ui);
-                            },
-                        );
+                        self.draw_dock_section(ui, &layout_title, true, true, |app, ui| {
+                            app.draw_layout_settings_section(ui);
+                        });
 
                         self.draw_dock_section(
                             ui,
@@ -5672,8 +5631,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             .show(ui, |ui| {
                 ui.set_max_width(ui.available_width());
                 ui.horizontal(|ui| {
-                    let msg_w = (ui.available_width() - if can_dismiss { 26.0 } else { 0.0 })
-                        .max(80.0);
+                    let msg_w =
+                        (ui.available_width() - if can_dismiss { 26.0 } else { 0.0 }).max(80.0);
                     ui.allocate_ui(Vec2::new(msg_w, 18.0), |ui| {
                         ui.add(
                             egui::Label::new(
@@ -5881,11 +5840,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         .show_ui(ui, |ui| {
                             if !custom_media_list.is_empty() {
                                 for cm in &custom_media_list {
-                                    let cm_key = if cm.key.is_empty() {
-                                        &cm.name
-                                    } else {
-                                        &cm.key
-                                    };
+                                    let cm_key = if cm.key.is_empty() { &cm.name } else { &cm.key };
                                     let is_sel = cm_key.eq_ignore_ascii_case(&cur_media_key)
                                         || cm.name.eq_ignore_ascii_case(&cur_media_key);
                                     let lbl = if cm.user_media_id > 0 {
@@ -5976,10 +5931,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
                         if !has_ppd_sizes {
                             for p in PAPER_SIZES {
-                                if ui
-                                    .selectable_label(p.key == cur_size_key, p.name)
-                                    .clicked()
-                                {
+                                if ui.selectable_label(p.key == cur_size_key, p.name).clicked() {
                                     self.exec(EngineCommand::SetPaperSizeKey(p.key.to_string()));
                                 }
                             }
@@ -6024,10 +5976,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
                         if !has_ppd_slots {
                             for s in PaperSource::ALL {
-                                if ui
-                                    .selectable_value(&mut src, s, s.label_de(bl))
-                                    .changed()
-                                {
+                                if ui.selectable_value(&mut src, s, s.label_de(bl)).changed() {
                                     self.exec(EngineCommand::SetPaperSource {
                                         source: src,
                                         borderless: bl,
@@ -6082,9 +6031,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                         )
                                         .clicked()
                                     {
-                                        self.exec(EngineCommand::SetResolutionKey(
-                                            r.code.clone(),
-                                        ));
+                                        self.exec(EngineCommand::SetResolutionKey(r.code.clone()));
                                     }
                                 }
                             }
@@ -6517,9 +6464,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                     )
                                     .changed();
                                 if top_changed {
-                                    if proportional_margins
-                                        && let Some(aspect) = active_aspect
-                                    {
+                                    if proportional_margins && let Some(aspect) = active_aspect {
                                         std_spec.margins_mm = adjust_margins_for_aspect(
                                             std_spec.margins_mm,
                                             paper_size_mm,
@@ -6529,9 +6474,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                     }
                                     changed = true;
                                 } else if bottom_changed {
-                                    if proportional_margins
-                                        && let Some(aspect) = active_aspect
-                                    {
+                                    if proportional_margins && let Some(aspect) = active_aspect {
                                         std_spec.margins_mm = adjust_margins_for_aspect(
                                             std_spec.margins_mm,
                                             paper_size_mm,
@@ -6566,9 +6509,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                     )
                                     .changed();
                                 if left_changed {
-                                    if proportional_margins
-                                        && let Some(aspect) = active_aspect
-                                    {
+                                    if proportional_margins && let Some(aspect) = active_aspect {
                                         std_spec.margins_mm = adjust_margins_for_aspect(
                                             std_spec.margins_mm,
                                             paper_size_mm,
@@ -6578,9 +6519,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                     }
                                     changed = true;
                                 } else if right_changed {
-                                    if proportional_margins
-                                        && let Some(aspect) = active_aspect
-                                    {
+                                    if proportional_margins && let Some(aspect) = active_aspect {
                                         std_spec.margins_mm = adjust_margins_for_aspect(
                                             std_spec.margins_mm,
                                             paper_size_mm,
@@ -6607,13 +6546,11 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 ui.label("×");
                                 let h_changed = ui
                                     .add(
-                                        de_drag(
-                                            &mut std_spec.manual_rect_mm.height_mm,
-                                        )
-                                        .range(10.0..=800.0)
-                                        .speed(1.0)
-                                        .max_decimals(1)
-                                        .suffix(" mm"),
+                                        de_drag(&mut std_spec.manual_rect_mm.height_mm)
+                                            .range(10.0..=800.0)
+                                            .speed(1.0)
+                                            .max_decimals(1)
+                                            .suffix(" mm"),
                                     )
                                     .changed();
                                 if w_changed {
@@ -6724,12 +6661,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     .show(ui, |ui| {
                         ui.label(RichText::new("Erforderl. Blatt:").color(t.text_dim));
                         ui.label(
-                            RichText::new(format!(
-                                "{:.1} × {:.1} mm",
-                                req.width_mm, req.height_mm
-                            ))
-                            .color(t.accent)
-                            .strong(),
+                            RichText::new(format!("{:.1} × {:.1} mm", req.width_mm, req.height_mm))
+                                .color(t.accent)
+                                .strong(),
                         );
                         ui.end_row();
 
@@ -7044,10 +6978,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
                 let active_page = self.session.doc.active_page_index;
                 let active_slot = self.session.doc.active_slot_index;
-                let selected_slot_idx: Option<usize> = self
-                    .slot_selected
-                    .then_some(active_slot)
-                    .filter(|&si| {
+                let selected_slot_idx: Option<usize> =
+                    self.slot_selected.then_some(active_slot).filter(|&si| {
                         self.session
                             .doc
                             .slot_assignments
@@ -7056,14 +6988,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             .flatten()
                             .is_some()
                     });
-                let assigned_slot_id = selected_slot_idx.and_then(|si| {
-                    self.session
-                        .doc
-                        .slot_assignments
-                        .get(si)
-                        .copied()
-                        .flatten()
-                });
+                let assigned_slot_id = selected_slot_idx
+                    .and_then(|si| self.session.doc.slot_assignments.get(si).copied().flatten());
                 let target_img = assigned_slot_id
                     .and_then(|id| self.session.doc.images.iter().find(|i| i.id == id))
                     .or_else(|| {
@@ -7073,11 +6999,12 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             .get(self.session.doc.active_image_index)
                     })
                     .cloned();
-                let mut cur_size = if let (Some(si), Some(img)) = (selected_slot_idx, target_img.as_ref()) {
-                    comp.effective_slot_size_mm(si, img)
-                } else {
-                    comp.default_size_mm
-                };
+                let mut cur_size =
+                    if let (Some(si), Some(img)) = (selected_slot_idx, target_img.as_ref()) {
+                        comp.effective_slot_size_mm(si, img)
+                    } else {
+                        comp.default_size_mm
+                    };
                 let img_aspect = target_img
                     .as_ref()
                     .map(effective_cropped_aspect)
@@ -7086,7 +7013,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 let preset_lbl = match_photo_size_preset_label(cur_size)
                     .map(str::to_string)
                     .unwrap_or_else(|| {
-                        format!("Frei ({:.0} × {:.0} mm)", cur_size.width_mm, cur_size.height_mm)
+                        format!(
+                            "Frei ({:.0} × {:.0} mm)",
+                            cur_size.width_mm, cur_size.height_mm
+                        )
                     });
 
                 egui::Grid::new("grid_layout_composer")
@@ -7995,8 +7925,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         ui.allocate_exact_size(Vec2::new(26.0, 52.0), Sense::hover());
                     let p = ui.painter();
                     p.rect_filled(bar_rect, CornerRadius::same(3), t.field);
-                    let fill_h =
-                        (f32::from(ch.level_percent) / 100.0) * (bar_rect.height() - 4.0);
+                    let fill_h = (f32::from(ch.level_percent) / 100.0) * (bar_rect.height() - 4.0);
                     let fill_rect = Rect::from_min_max(
                         Pos2::new(bar_rect.min.x + 2.0, bar_rect.max.y - 2.0 - fill_h),
                         Pos2::new(bar_rect.max.x - 2.0, bar_rect.max.y - 2.0),
@@ -8331,8 +8260,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
         if save_and_close {
             let studio_ori = self.template_studio.orientation;
-            let (paper_size_mm, printable_rect_mm) =
-                self.studio_paper_and_printable_mm(studio_ori);
+            let (paper_size_mm, printable_rect_mm) = self.studio_paper_and_printable_mm(studio_ori);
             let tpl = self
                 .template_studio
                 .build_layout_template(paper_size_mm, printable_rect_mm);
@@ -8578,12 +8506,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         ui.label(RichText::new("Rand rundum:").color(t.text_dim));
                         let mut m = self.template_studio.margins_mm.top_mm;
                         if ui
-                            .add(
-                                de_drag(&mut m)
-                                    .range(0.0..=80.0)
-                                    .speed(0.5)
-                                    .suffix(" mm"),
-                            )
+                            .add(de_drag(&mut m).range(0.0..=80.0).speed(0.5).suffix(" mm"))
                             .changed()
                         {
                             self.template_studio.margins_mm = MarginsMm::uniform(m);
@@ -8600,12 +8523,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             );
                             ui.label("×");
                             ui.add(
-                                de_drag(
-                                    &mut self.template_studio.margins_mm.bottom_mm,
-                                )
-                                .range(0.0..=80.0)
-                                .speed(0.5)
-                                .suffix(" mm"),
+                                de_drag(&mut self.template_studio.margins_mm.bottom_mm)
+                                    .range(0.0..=80.0)
+                                    .speed(0.5)
+                                    .suffix(" mm"),
                             );
                         });
                         ui.end_row();
@@ -8620,12 +8541,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             );
                             ui.label("×");
                             ui.add(
-                                de_drag(
-                                    &mut self.template_studio.margins_mm.right_mm,
-                                )
-                                .range(0.0..=80.0)
-                                .speed(0.5)
-                                .suffix(" mm"),
+                                de_drag(&mut self.template_studio.margins_mm.right_mm)
+                                    .range(0.0..=80.0)
+                                    .speed(0.5)
+                                    .suffix(" mm"),
                             );
                         });
                         ui.end_row();
@@ -8799,8 +8718,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 ];
                 for &(lbl, w, h) in stamps {
                     if ui.small_button(lbl).clicked() {
-                        let offset =
-                            (self.template_studio.free_slots_mm.len() as f64 * 6.0) % 40.0;
+                        let offset = (self.template_studio.free_slots_mm.len() as f64 * 6.0) % 40.0;
                         let w_clamped = w.min(paper_size_mm.width_mm - 10.0).max(15.0);
                         let h_clamped = h.min(paper_size_mm.height_mm - 10.0).max(15.0);
                         let x = ((paper_size_mm.width_mm - w_clamped) * 0.5 + offset)
@@ -8966,7 +8884,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             .max(0.2);
 
         let sheet_size = Vec2::new(pw * scale, ph * scale);
-        let sheet_rect = Rect::from_center_size(canvas_rect.center() + Vec2::new(6.0, 6.0), sheet_size);
+        let sheet_rect =
+            Rect::from_center_size(canvas_rect.center() + Vec2::new(6.0, 6.0), sheet_size);
 
         // Drop shadow + White paper sheet
         p.rect_filled(
@@ -8974,7 +8893,11 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             CornerRadius::ZERO,
             Color32::from_black_alpha(110),
         );
-        p.rect_filled(sheet_rect, CornerRadius::ZERO, Color32::from_rgb(248, 248, 246));
+        p.rect_filled(
+            sheet_rect,
+            CornerRadius::ZERO,
+            Color32::from_rgb(248, 248, 246),
+        );
         p.rect_stroke(
             sheet_rect,
             CornerRadius::ZERO,
@@ -9002,9 +8925,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 SlotCaptionMode::NumberAndFilename => {
                     Some(format!("#{:02}  Foto_{:02}.tif", idx + 1, idx + 1))
                 }
-                SlotCaptionMode::DimensionsAndPpi => {
-                    Some(format!("{:.1}×{:.1} mm (360 ppi)", r_mm.width_mm, r_mm.height_mm))
-                }
+                SlotCaptionMode::DimensionsAndPpi => Some(format!(
+                    "{:.1}×{:.1} mm (360 ppi)",
+                    r_mm.width_mm, r_mm.height_mm
+                )),
             }
         };
 
@@ -9052,7 +8976,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 self.template_studio.drag_start_cell = Some(cell);
                 self.template_studio.selected_cells = Some([cell.0, cell.1, cell.0, cell.1]);
             } else if canvas_resp.dragged()
-                && let (Some(start), Some(cur)) = (self.template_studio.drag_start_cell, hovered_cell)
+                && let (Some(start), Some(cur)) =
+                    (self.template_studio.drag_start_cell, hovered_cell)
             {
                 let r0 = start.0.min(cur.0);
                 let c0 = start.1.min(cur.1);
@@ -9062,9 +8987,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             } else if canvas_resp.clicked()
                 && let Some(cell) = hovered_cell
             {
-                if shift_held
-                    && let Some([sr0, sc0, _, _]) = self.template_studio.selected_cells
-                {
+                if shift_held && let Some([sr0, sc0, _, _]) = self.template_studio.selected_cells {
                     let r0 = sr0.min(cell.0);
                     let c0 = sc0.min(cell.1);
                     let r1 = sr0.max(cell.0);
@@ -9072,11 +8995,14 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     self.template_studio.selected_cells = Some([r0, c0, r1, c1]);
                 } else {
                     // If clicking inside a merged region, select the whole merged region
-                    if let Some(&span) = self.template_studio.merged_regions.iter().find(
-                        |&&[r0, c0, r1, c1]| {
-                            cell.0 >= r0 && cell.0 <= r1 && cell.1 >= c0 && cell.1 <= c1
-                        },
-                    ) {
+                    if let Some(&span) =
+                        self.template_studio
+                            .merged_regions
+                            .iter()
+                            .find(|&&[r0, c0, r1, c1]| {
+                                cell.0 >= r0 && cell.0 <= r1 && cell.1 >= c0 && cell.1 <= c1
+                            })
+                    {
                         self.template_studio.selected_cells = Some(span);
                     } else {
                         self.template_studio.selected_cells =
@@ -9129,8 +9055,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     Color32::from_rgb(25, 65, 115),
                 );
 
-                if let Some(cap) =
-                    sample_caption(idx, *slot_mm, self.template_studio.caption_mode)
+                if let Some(cap) = sample_caption(idx, *slot_mm, self.template_studio.caption_mode)
                 {
                     p.text(
                         Pos2::new(slot_scr.center().x, slot_scr.max.y - 12.0),
@@ -9159,10 +9084,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             // --- STAGE 2: Interactive Free Slot Editor (Mouse Move / Resize + Magnet Snapping) ---
             let ptr_pos = canvas_resp.interact_pointer_pos();
             let hover_pos = ui.ctx().input(|i| i.pointer.hover_pos());
-            let press_origin = ui
-                .ctx()
-                .input(|i| i.pointer.press_origin())
-                .or(ptr_pos);
+            let press_origin = ui.ctx().input(|i| i.pointer.press_origin()).or(ptr_pos);
             let pos_to_mm = |pos: Pos2| -> (f64, f64) {
                 (
                     f64::from((pos.x - sheet_rect.min.x) / scale),
@@ -9229,36 +9151,35 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 None
             };
 
-            let resolve_slot_hit =
-                |pos: Pos2,
-                 selected_slot: Option<usize>,
-                 slots_mm: &[RectMm]|
-                 -> Option<(usize, FreeSlotDragKind, RectMm)> {
-                    // 1. Check resize handles/edges of currently selected slot first
-                    if let Some(sel_idx) = selected_slot
-                        && let Some(&r_mm) = slots_mm.get(sel_idx)
-                    {
-                        let r_scr = mm_rect_to_screen(r_mm, sheet_rect.min, scale);
-                        if let Some(kind) = hit_test_resize(r_scr, pos) {
-                            return Some((sel_idx, kind, r_mm));
-                        }
+            let resolve_slot_hit = |pos: Pos2,
+                                    selected_slot: Option<usize>,
+                                    slots_mm: &[RectMm]|
+             -> Option<(usize, FreeSlotDragKind, RectMm)> {
+                // 1. Check resize handles/edges of currently selected slot first
+                if let Some(sel_idx) = selected_slot
+                    && let Some(&r_mm) = slots_mm.get(sel_idx)
+                {
+                    let r_scr = mm_rect_to_screen(r_mm, sheet_rect.min, scale);
+                    if let Some(kind) = hit_test_resize(r_scr, pos) {
+                        return Some((sel_idx, kind, r_mm));
                     }
-                    // 2. Check resize handles/edges of any slot (topmost first)
-                    for (idx, &r_mm) in slots_mm.iter().enumerate().rev() {
-                        let r_scr = mm_rect_to_screen(r_mm, sheet_rect.min, scale);
-                        if let Some(kind) = hit_test_resize(r_scr, pos) {
-                            return Some((idx, kind, r_mm));
-                        }
+                }
+                // 2. Check resize handles/edges of any slot (topmost first)
+                for (idx, &r_mm) in slots_mm.iter().enumerate().rev() {
+                    let r_scr = mm_rect_to_screen(r_mm, sheet_rect.min, scale);
+                    if let Some(kind) = hit_test_resize(r_scr, pos) {
+                        return Some((idx, kind, r_mm));
                     }
-                    // 3. Check slot interior for Move (topmost first)
-                    for (idx, &r_mm) in slots_mm.iter().enumerate().rev() {
-                        let r_scr = mm_rect_to_screen(r_mm, sheet_rect.min, scale);
-                        if r_scr.contains(pos) {
-                            return Some((idx, FreeSlotDragKind::Move, r_mm));
-                        }
+                }
+                // 3. Check slot interior for Move (topmost first)
+                for (idx, &r_mm) in slots_mm.iter().enumerate().rev() {
+                    let r_scr = mm_rect_to_screen(r_mm, sheet_rect.min, scale);
+                    if r_scr.contains(pos) {
+                        return Some((idx, FreeSlotDragKind::Move, r_mm));
                     }
-                    None
-                };
+                }
+                None
+            };
 
             // Start drag or selection using press_origin so dragging away from a handle never misses it!
             if (canvas_resp.drag_started() || canvas_resp.clicked())
@@ -9364,8 +9285,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 printable_rect_mm.bottom_mm(),
                                 paper_size_mm.height_mm * 0.5,
                             ];
-                            for (i, other) in
-                                self.template_studio.free_slots_mm.iter().enumerate()
+                            for (i, other) in self.template_studio.free_slots_mm.iter().enumerate()
                             {
                                 if i != drag.slot_index {
                                     x_targets.push(other.x_mm);
@@ -9386,8 +9306,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                     next.x_mm = tx - next.width_mm;
                                     self.template_studio.snap_guide_x_mm = Some(tx);
                                     break;
-                                } else if ((next.x_mm + next.width_mm * 0.5) - tx).abs()
-                                    <= snap_tol
+                                } else if ((next.x_mm + next.width_mm * 0.5) - tx).abs() <= snap_tol
                                 {
                                     next.x_mm = tx - next.width_mm * 0.5;
                                     self.template_studio.snap_guide_x_mm = Some(tx);
@@ -9422,8 +9341,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
                     }
                     FreeSlotDragKind::ResizeS => {
-                        next.height_mm = (init.height_mm + dy)
-                            .clamp(12.0, paper_size_mm.height_mm - init.y_mm);
+                        next.height_mm =
+                            (init.height_mm + dy).clamp(12.0, paper_size_mm.height_mm - init.y_mm);
                         if self.template_studio.snap_enabled {
                             next.height_mm = next.height_mm.round();
                         }
@@ -9447,8 +9366,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     FreeSlotDragKind::ResizeSE => {
                         next.width_mm =
                             (init.width_mm + dx).clamp(12.0, paper_size_mm.width_mm - init.x_mm);
-                        next.height_mm = (init.height_mm + dy)
-                            .clamp(12.0, paper_size_mm.height_mm - init.y_mm);
+                        next.height_mm =
+                            (init.height_mm + dy).clamp(12.0, paper_size_mm.height_mm - init.y_mm);
                         if self.template_studio.snap_enabled {
                             next.width_mm = next.width_mm.round();
                             next.height_mm = next.height_mm.round();
@@ -9479,8 +9398,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     }
                     FreeSlotDragKind::ResizeSW => {
                         let mut new_x = (init.x_mm + dx).clamp(0.0, init.right_mm() - 12.0);
-                        next.height_mm = (init.height_mm + dy)
-                            .clamp(12.0, paper_size_mm.height_mm - init.y_mm);
+                        next.height_mm =
+                            (init.height_mm + dy).clamp(12.0, paper_size_mm.height_mm - init.y_mm);
                         if self.template_studio.snap_enabled {
                             new_x = new_x.round();
                             next.height_mm = next.height_mm.round();
@@ -9500,14 +9419,20 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             if let Some(gx_mm) = self.template_studio.snap_guide_x_mm {
                 let x = sheet_rect.min.x + (gx_mm as f32) * scale;
                 p.line_segment(
-                    [Pos2::new(x, sheet_rect.min.y), Pos2::new(x, sheet_rect.max.y)],
+                    [
+                        Pos2::new(x, sheet_rect.min.y),
+                        Pos2::new(x, sheet_rect.max.y),
+                    ],
                     Stroke::new(1.2_f32, Color32::from_rgb(0, 195, 255)),
                 );
             }
             if let Some(gy_mm) = self.template_studio.snap_guide_y_mm {
                 let y = sheet_rect.min.y + (gy_mm as f32) * scale;
                 p.line_segment(
-                    [Pos2::new(sheet_rect.min.x, y), Pos2::new(sheet_rect.max.x, y)],
+                    [
+                        Pos2::new(sheet_rect.min.x, y),
+                        Pos2::new(sheet_rect.max.x, y),
+                    ],
                     Stroke::new(1.2_f32, Color32::from_rgb(0, 195, 255)),
                 );
             }
@@ -9562,9 +9487,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     Color32::from_rgb(20, 60, 110),
                 );
 
-                if let Some(cap) =
-                    sample_caption(idx, slot_mm, self.template_studio.caption_mode)
-                {
+                if let Some(cap) = sample_caption(idx, slot_mm, self.template_studio.caption_mode) {
                     p.text(
                         Pos2::new(slot_scr.center().x, slot_scr.max.y - 12.0),
                         egui::Align2::CENTER_TOP,
@@ -9586,8 +9509,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         Pos2::new(slot_scr.max.x, slot_scr.center().y),
                     ];
                     for hp in handle_pts {
-                        let is_hovered =
-                            hover_pos.is_some_and(|h| h.distance(hp) <= 14.0);
+                        let is_hovered = hover_pos.is_some_and(|h| h.distance(hp) <= 14.0);
                         let sz = if is_hovered { 11.0 } else { 9.0 };
                         let hr = Rect::from_center_size(hp, Vec2::splat(sz));
                         p.rect_filled(
@@ -9708,19 +9630,31 @@ fn draw_frameless_canvas_icon(
         CanvasActionIcon::Crop => {
             // Two intersecting L-brackets forming the classic crop mark icon
             p.line_segment(
-                [Pos2::new(c.x - 5.5, c.y + 8.5), Pos2::new(c.x - 5.5, c.y - 5.5)],
+                [
+                    Pos2::new(c.x - 5.5, c.y + 8.5),
+                    Pos2::new(c.x - 5.5, c.y - 5.5),
+                ],
                 stroke,
             );
             p.line_segment(
-                [Pos2::new(c.x - 5.5, c.y - 5.5), Pos2::new(c.x + 8.5, c.y - 5.5)],
+                [
+                    Pos2::new(c.x - 5.5, c.y - 5.5),
+                    Pos2::new(c.x + 8.5, c.y - 5.5),
+                ],
                 stroke,
             );
             p.line_segment(
-                [Pos2::new(c.x - 8.5, c.y + 5.5), Pos2::new(c.x + 5.5, c.y + 5.5)],
+                [
+                    Pos2::new(c.x - 8.5, c.y + 5.5),
+                    Pos2::new(c.x + 5.5, c.y + 5.5),
+                ],
                 stroke,
             );
             p.line_segment(
-                [Pos2::new(c.x + 5.5, c.y + 5.5), Pos2::new(c.x + 5.5, c.y - 8.5)],
+                [
+                    Pos2::new(c.x + 5.5, c.y + 5.5),
+                    Pos2::new(c.x + 5.5, c.y - 8.5),
+                ],
                 stroke,
             );
         }
@@ -9810,11 +9744,17 @@ fn draw_frameless_canvas_icon(
             let box_r = Rect::from_center_size(c, Vec2::new(16.0, 16.0));
             p.rect_stroke(box_r, CornerRadius::same(2), stroke, StrokeKind::Middle);
             p.line_segment(
-                [Pos2::new(c.x - 4.2, c.y - 4.2), Pos2::new(c.x + 4.2, c.y + 4.2)],
+                [
+                    Pos2::new(c.x - 4.2, c.y - 4.2),
+                    Pos2::new(c.x + 4.2, c.y + 4.2),
+                ],
                 stroke,
             );
             p.line_segment(
-                [Pos2::new(c.x + 4.2, c.y - 4.2), Pos2::new(c.x - 4.2, c.y + 4.2)],
+                [
+                    Pos2::new(c.x + 4.2, c.y - 4.2),
+                    Pos2::new(c.x - 4.2, c.y + 4.2),
+                ],
                 stroke,
             );
         }
@@ -9917,11 +9857,7 @@ fn draw_undo_redo_button(
 }
 
 /// Paints a toolbar toggle icon button for dashed slot frames (`Zeige Rahmen um Slots (gestrichelte Linie)`).
-fn draw_slot_guides_toolbar_button(
-    ui: &mut Ui,
-    tokens: &Tokens,
-    active: bool,
-) -> egui::Response {
+fn draw_slot_guides_toolbar_button(ui: &mut Ui, tokens: &Tokens, active: bool) -> egui::Response {
     let size = Vec2::new(28.0, 24.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -9964,11 +9900,7 @@ fn draw_slot_guides_toolbar_button(
 }
 
 /// Paints a toolbar toggle icon button for sheet rulers (`Zeige Lineal`).
-fn draw_rulers_toolbar_button(
-    ui: &mut Ui,
-    tokens: &Tokens,
-    active: bool,
-) -> egui::Response {
+fn draw_rulers_toolbar_button(ui: &mut Ui, tokens: &Tokens, active: bool) -> egui::Response {
     let size = Vec2::new(28.0, 24.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -10091,16 +10023,30 @@ fn draw_layout_type_tile(
         LayoutTypeIcon::Standard => {
             let sheet = Rect::from_center_size(icon_c, Vec2::new(22.0, 26.0));
             let photo = Rect::from_center_size(icon_c, Vec2::new(14.0, 18.0));
-            p.rect_stroke(sheet, CornerRadius::same(2), sheet_stroke, StrokeKind::Middle);
+            p.rect_stroke(
+                sheet,
+                CornerRadius::same(2),
+                sheet_stroke,
+                StrokeKind::Middle,
+            );
             p.rect_filled(photo, CornerRadius::same(1), slot_fill);
-            p.rect_stroke(photo, CornerRadius::same(1), slot_stroke, StrokeKind::Middle);
+            p.rect_stroke(
+                photo,
+                CornerRadius::same(1),
+                slot_stroke,
+                StrokeKind::Middle,
+            );
         }
         LayoutTypeIcon::Template => {
             let sheet = Rect::from_center_size(icon_c, Vec2::new(24.0, 26.0));
-            p.rect_stroke(sheet, CornerRadius::same(2), sheet_stroke, StrokeKind::Middle);
+            p.rect_stroke(
+                sheet,
+                CornerRadius::same(2),
+                sheet_stroke,
+                StrokeKind::Middle,
+            );
             for (dx, dy) in [(-4.2_f32, -4.8_f32), (4.2, -4.8), (-4.2, 4.8), (4.2, 4.8)] {
-                let cell =
-                    Rect::from_center_size(icon_c + Vec2::new(dx, dy), Vec2::new(6.4, 7.2));
+                let cell = Rect::from_center_size(icon_c + Vec2::new(dx, dy), Vec2::new(6.4, 7.2));
                 p.rect_filled(cell, CornerRadius::same(1), slot_fill);
                 p.rect_stroke(cell, CornerRadius::same(1), slot_stroke, StrokeKind::Middle);
             }
@@ -10134,7 +10080,12 @@ fn draw_layout_type_tile(
         LayoutTypeIcon::Panorama => {
             let sheet = Rect::from_center_size(icon_c, Vec2::new(36.0, 15.0));
             let pano = Rect::from_center_size(icon_c, Vec2::new(30.0, 9.5));
-            p.rect_stroke(sheet, CornerRadius::same(2), sheet_stroke, StrokeKind::Middle);
+            p.rect_stroke(
+                sheet,
+                CornerRadius::same(2),
+                sheet_stroke,
+                StrokeKind::Middle,
+            );
             p.rect_filled(pano, CornerRadius::same(1), slot_fill);
             p.rect_stroke(pano, CornerRadius::same(1), slot_stroke, StrokeKind::Middle);
             // Subtle panoramic horizon peaks inside the wide frame
@@ -10169,7 +10120,12 @@ fn draw_layout_type_tile(
         }
         LayoutTypeIcon::FreeComposer => {
             let sheet = Rect::from_center_size(icon_c, Vec2::new(24.0, 26.0));
-            p.rect_stroke(sheet, CornerRadius::same(2), sheet_stroke, StrokeKind::Middle);
+            p.rect_stroke(
+                sheet,
+                CornerRadius::same(2),
+                sheet_stroke,
+                StrokeKind::Middle,
+            );
             let slot_a = Rect::from_min_size(
                 Pos2::new(sheet.min.x + 3.0, sheet.min.y + 3.0),
                 Vec2::new(8.0, 12.5),
@@ -10253,17 +10209,37 @@ fn draw_orientation_tile(
         Orientation::Portrait => {
             let sheet = Rect::from_center_size(icon_c, Vec2::new(13.0, 19.0));
             let photo = Rect::from_center_size(icon_c, Vec2::new(8.0, 13.0));
-            p.rect_stroke(sheet, CornerRadius::same(2), sheet_stroke, StrokeKind::Middle);
+            p.rect_stroke(
+                sheet,
+                CornerRadius::same(2),
+                sheet_stroke,
+                StrokeKind::Middle,
+            );
             p.rect_filled(photo, CornerRadius::same(1), inner_fill);
-            p.rect_stroke(photo, CornerRadius::same(1), inner_stroke, StrokeKind::Middle);
+            p.rect_stroke(
+                photo,
+                CornerRadius::same(1),
+                inner_stroke,
+                StrokeKind::Middle,
+            );
             "Hochformat"
         }
         Orientation::Landscape => {
             let sheet = Rect::from_center_size(icon_c, Vec2::new(19.0, 13.0));
             let photo = Rect::from_center_size(icon_c, Vec2::new(13.0, 8.0));
-            p.rect_stroke(sheet, CornerRadius::same(2), sheet_stroke, StrokeKind::Middle);
+            p.rect_stroke(
+                sheet,
+                CornerRadius::same(2),
+                sheet_stroke,
+                StrokeKind::Middle,
+            );
             p.rect_filled(photo, CornerRadius::same(1), inner_fill);
-            p.rect_stroke(photo, CornerRadius::same(1), inner_stroke, StrokeKind::Middle);
+            p.rect_stroke(
+                photo,
+                CornerRadius::same(1),
+                inner_stroke,
+                StrokeKind::Middle,
+            );
             "Querformat"
         }
     };
@@ -10329,7 +10305,12 @@ fn draw_centering_tile(
     let sheet_stroke = Stroke::new(1.15_f32, fg.gamma_multiply(0.8));
     let axis_stroke = Stroke::new(1.0_f32, fg.gamma_multiply(0.65));
     let slot_stroke = Stroke::new(1.25_f32, fg);
-    p.rect_stroke(sheet, CornerRadius::same(2), sheet_stroke, StrokeKind::Middle);
+    p.rect_stroke(
+        sheet,
+        CornerRadius::same(2),
+        sheet_stroke,
+        StrokeKind::Middle,
+    );
 
     let short_lbl = match mode {
         CenteringMode::Center => {
@@ -10349,7 +10330,12 @@ fn draw_centering_tile(
             );
             let photo = Rect::from_center_size(icon_c, Vec2::new(10.0, 11.0));
             p.rect_filled(photo, CornerRadius::same(1), slot_fill);
-            p.rect_stroke(photo, CornerRadius::same(1), slot_stroke, StrokeKind::Middle);
+            p.rect_stroke(
+                photo,
+                CornerRadius::same(1),
+                slot_stroke,
+                StrokeKind::Middle,
+            );
             "Mitte"
         }
         CenteringMode::Horizontal => {
@@ -10363,13 +10349,30 @@ fn draw_centering_tile(
             );
             let photo = Rect::from_center_size(icon_c, Vec2::new(11.0, 8.5));
             p.rect_filled(photo, CornerRadius::same(1), slot_fill);
-            p.rect_stroke(photo, CornerRadius::same(1), slot_stroke, StrokeKind::Middle);
+            p.rect_stroke(
+                photo,
+                CornerRadius::same(1),
+                slot_stroke,
+                StrokeKind::Middle,
+            );
             let top_tip = Pos2::new(icon_c.x, sheet.min.y + 2.2);
-            p.line_segment([top_tip, Pos2::new(top_tip.x - 2.2, top_tip.y + 2.2)], slot_stroke);
-            p.line_segment([top_tip, Pos2::new(top_tip.x + 2.2, top_tip.y + 2.2)], slot_stroke);
+            p.line_segment(
+                [top_tip, Pos2::new(top_tip.x - 2.2, top_tip.y + 2.2)],
+                slot_stroke,
+            );
+            p.line_segment(
+                [top_tip, Pos2::new(top_tip.x + 2.2, top_tip.y + 2.2)],
+                slot_stroke,
+            );
             let bot_tip = Pos2::new(icon_c.x, sheet.max.y - 2.2);
-            p.line_segment([bot_tip, Pos2::new(bot_tip.x - 2.2, bot_tip.y - 2.2)], slot_stroke);
-            p.line_segment([bot_tip, Pos2::new(bot_tip.x + 2.2, bot_tip.y - 2.2)], slot_stroke);
+            p.line_segment(
+                [bot_tip, Pos2::new(bot_tip.x - 2.2, bot_tip.y - 2.2)],
+                slot_stroke,
+            );
+            p.line_segment(
+                [bot_tip, Pos2::new(bot_tip.x + 2.2, bot_tip.y - 2.2)],
+                slot_stroke,
+            );
             "Horiz."
         }
         CenteringMode::Vertical => {
@@ -10383,13 +10386,30 @@ fn draw_centering_tile(
             );
             let photo = Rect::from_center_size(icon_c, Vec2::new(8.5, 11.0));
             p.rect_filled(photo, CornerRadius::same(1), slot_fill);
-            p.rect_stroke(photo, CornerRadius::same(1), slot_stroke, StrokeKind::Middle);
+            p.rect_stroke(
+                photo,
+                CornerRadius::same(1),
+                slot_stroke,
+                StrokeKind::Middle,
+            );
             let l_tip = Pos2::new(sheet.min.x + 2.2, icon_c.y);
-            p.line_segment([l_tip, Pos2::new(l_tip.x + 2.2, l_tip.y - 2.2)], slot_stroke);
-            p.line_segment([l_tip, Pos2::new(l_tip.x + 2.2, l_tip.y + 2.2)], slot_stroke);
+            p.line_segment(
+                [l_tip, Pos2::new(l_tip.x + 2.2, l_tip.y - 2.2)],
+                slot_stroke,
+            );
+            p.line_segment(
+                [l_tip, Pos2::new(l_tip.x + 2.2, l_tip.y + 2.2)],
+                slot_stroke,
+            );
             let r_tip = Pos2::new(sheet.max.x - 2.2, icon_c.y);
-            p.line_segment([r_tip, Pos2::new(r_tip.x - 2.2, r_tip.y - 2.2)], slot_stroke);
-            p.line_segment([r_tip, Pos2::new(r_tip.x - 2.2, r_tip.y + 2.2)], slot_stroke);
+            p.line_segment(
+                [r_tip, Pos2::new(r_tip.x - 2.2, r_tip.y - 2.2)],
+                slot_stroke,
+            );
+            p.line_segment(
+                [r_tip, Pos2::new(r_tip.x - 2.2, r_tip.y + 2.2)],
+                slot_stroke,
+            );
             "Vert."
         }
         CenteringMode::None => {
@@ -10397,14 +10417,23 @@ fn draw_centering_tile(
             let photo_c = icon_c + Vec2::new(-1.2, -1.0);
             let photo = Rect::from_center_size(photo_c, Vec2::new(11.0, 12.0));
             p.rect_filled(photo, CornerRadius::same(1), slot_fill);
-            p.rect_stroke(photo, CornerRadius::same(1), slot_stroke, StrokeKind::Middle);
+            p.rect_stroke(
+                photo,
+                CornerRadius::same(1),
+                slot_stroke,
+                StrokeKind::Middle,
+            );
             for hp in [
                 photo.left_top(),
                 photo.right_top(),
                 photo.left_bottom(),
                 photo.right_bottom(),
             ] {
-                p.rect_filled(Rect::from_center_size(hp, Vec2::splat(2.6)), CornerRadius::ZERO, fg);
+                p.rect_filled(
+                    Rect::from_center_size(hp, Vec2::splat(2.6)),
+                    CornerRadius::ZERO,
+                    fg,
+                );
             }
             p.line_segment(
                 [
@@ -10495,12 +10524,7 @@ fn hit_test_resize_handles(r_scr: Rect, pos: Pos2) -> Option<FreeSlotDragKind> {
 }
 
 /// Paints the 8 resize handle squares around `r_scr` (`9×9 px`, expanding to `11×11 px` within the `14 px` catch radius).
-fn draw_resize_handles(
-    p: &egui::Painter,
-    r_scr: Rect,
-    hover_pos: Option<Pos2>,
-    accent: Color32,
-) {
+fn draw_resize_handles(p: &egui::Painter, r_scr: Rect, hover_pos: Option<Pos2>, accent: Color32) {
     let handle_pts = [
         r_scr.left_top(),
         r_scr.right_top(),
@@ -10523,10 +10547,7 @@ fn draw_resize_handles(
         p.rect_stroke(
             hr,
             CornerRadius::same(2),
-            Stroke::new(
-                1.8_f32,
-                if is_hovered { Color32::WHITE } else { accent },
-            ),
+            Stroke::new(1.8_f32, if is_hovered { Color32::WHITE } else { accent }),
             StrokeKind::Middle,
         );
     }
@@ -10918,11 +10939,7 @@ fn draw_footer_tab(
     };
     p.rect_filled(rect, CornerRadius::ZERO, fill);
 
-    let fg = if active {
-        tokens.text
-    } else {
-        tokens.text_dim
-    };
+    let fg = if active { tokens.text } else { tokens.text_dim };
 
     p.text(
         rect.center(),
@@ -10937,12 +10954,7 @@ fn draw_footer_tab(
 
 /// Paints the primary `"Drucken"` action button with a crisp vector printer icon and
 /// vertically centered label so there is no emoji font baseline shift.
-fn draw_print_button(
-    ui: &mut Ui,
-    tokens: &Tokens,
-    width: f32,
-    is_sending: bool,
-) -> egui::Response {
+fn draw_print_button(ui: &mut Ui, tokens: &Tokens, width: f32, is_sending: bool) -> egui::Response {
     let size = Vec2::new(width.max(148.0), 34.0);
     let sense = if is_sending {
         Sense::hover()
@@ -10989,7 +11001,12 @@ fn draw_print_button(
     let body = Rect::from_center_size(Pos2::new(icon_cx, cy), Vec2::new(14.0, 7.0));
     let bot_sheet = Rect::from_center_size(Pos2::new(icon_cx, cy + 5.0), Vec2::new(8.0, 4.5));
 
-    p.rect_stroke(top_sheet, CornerRadius::ZERO, icon_stroke, StrokeKind::Middle);
+    p.rect_stroke(
+        top_sheet,
+        CornerRadius::ZERO,
+        icon_stroke,
+        StrokeKind::Middle,
+    );
     p.rect_filled(body, CornerRadius::same(1), bg);
     p.rect_stroke(body, CornerRadius::same(1), icon_stroke, StrokeKind::Middle);
     p.rect_filled(bot_sheet, CornerRadius::ZERO, tokens.accent_text);
@@ -11289,9 +11306,10 @@ mod tests {
             )));
             let _ = ctx.run(input, |ctx| {
                 app.render_ui(ctx);
-                if let Some(state) =
-                    egui::containers::panel::PanelState::load(ctx, egui::Id::new("left_filmstrip_panel"))
-                {
+                if let Some(state) = egui::containers::panel::PanelState::load(
+                    ctx,
+                    egui::Id::new("left_filmstrip_panel"),
+                ) {
                     widths.push(state.rect.width());
                 }
             });
@@ -11411,7 +11429,11 @@ mod tests {
         let _ = ctx.run(input_ctrl_wheel, |ctx| {
             app.render_ui(ctx);
         });
-        assert!(app.zoom > 1.01, "expected Ctrl+Wheel to increase app.zoom, got {}", app.zoom);
+        assert!(
+            app.zoom > 1.01,
+            "expected Ctrl+Wheel to increase app.zoom, got {}",
+            app.zoom
+        );
 
         // 2. Shift + Mouse Wheel over occupied slot -> zooms image in slot (crop.slot_zoom)
         let mut input_shift_wheel = egui::RawInput::default();
@@ -11777,10 +11799,7 @@ mod tests {
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             app.render_ui(ctx);
         });
-        assert_eq!(
-            app.session.doc.page_list_position,
-            PageListPosition::Left
-        );
+        assert_eq!(app.session.doc.page_list_position, PageListPosition::Left);
 
         // 7. When Bogenliste is Left, dragging Pool to BottomFullWidth docks Pool across full width
         let full_bottom_pool_center = app
@@ -11901,5 +11920,3 @@ BackgroundNormal=61,174,233
         assert!((rect_uncropped.width_mm - 120.0).abs() < 1e-6);
     }
 }
-
-

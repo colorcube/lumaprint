@@ -910,8 +910,7 @@ pub fn detect_driver_color_control_from_ppd(ppd_text: &str) -> Option<DriverColo
 
     for line in ppd_text.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with("*OpenUI *EpsonColorMode")
-            || trimmed.starts_with("*EpsonColorMode ")
+        if trimmed.starts_with("*OpenUI *EpsonColorMode") || trimmed.starts_with("*EpsonColorMode ")
         {
             has_epson_color_mode = true;
             if trimmed.contains("AdvancedBW") {
@@ -1062,8 +1061,10 @@ pub fn build_lp_command_args(req: &CupsSpoolRequest, file_path: &Path) -> Vec<St
         // Always include standard CUPS / colord calibration bypass flag
         args.push(String::from("-o"));
         args.push(String::from("cm-calibration=true"));
-    } else if matches!(req.driver_color_control, DriverColorControl::EpsonEscpr { .. })
-        && !req.extra_options.contains_key("EpsonColorMode")
+    } else if matches!(
+        req.driver_color_control,
+        DriverColorControl::EpsonEscpr { .. }
+    ) && !req.extra_options.contains_key("EpsonColorMode")
     {
         args.push(String::from("-o"));
         args.push(String::from("EpsonColorMode=EpsonICC"));
@@ -1198,9 +1199,7 @@ pub fn verify_printer_reachable(
         if combined_low.contains("disabled") || combined_low.contains("rejecting jobs") {
             return Err(CupsError::PrinterUnreachable {
                 queue: q.to_string(),
-                reason: String::from(
-                    "Druckerwarteschlange ist in CUPS angehalten / deaktiviert.",
-                ),
+                reason: String::from("Druckerwarteschlange ist in CUPS angehalten / deaktiviert."),
             });
         }
     }
@@ -1233,9 +1232,7 @@ pub fn verify_printer_reachable(
         if addrs.is_empty() {
             return Err(CupsError::PrinterUnreachable {
                 queue: q.to_string(),
-                reason: format!(
-                    "Netzwerkadresse '{host}:{port}' konnte nicht aufgelöst werden."
-                ),
+                reason: format!("Netzwerkadresse '{host}:{port}' konnte nicht aufgelöst werden."),
             });
         }
         let connected = addrs
@@ -1357,8 +1354,7 @@ mod tests {
         assert_eq!(extract_network_host_port("usb://EPSON/SC-P900"), None);
 
         // Unreachable local port must return PrinterUnreachable
-        let err =
-            verify_printer_reachable("Test_Queue", Some("socket://127.0.0.1:9")).unwrap_err();
+        let err = verify_printer_reachable("Test_Queue", Some("socket://127.0.0.1:9")).unwrap_err();
         assert!(matches!(err, CupsError::PrinterUnreachable { .. }));
     }
 
@@ -1477,7 +1473,10 @@ ColorModel/Color Model: *RGB Gray
                 }
             }
         }
-        assert!(checked >= 18, "driver media table not found ({checked} rows)");
+        assert!(
+            checked >= 18,
+            "driver media table not found ({checked} rows)"
+        );
     }
 
     #[test]

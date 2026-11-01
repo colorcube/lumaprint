@@ -199,11 +199,8 @@ mod lcms2 {
             curve_params: &[f64],
         ) -> Option<Self> {
             unsafe {
-                let curve = cmsBuildParametricToneCurve(
-                    ptr::null_mut(),
-                    curve_type,
-                    curve_params.as_ptr(),
-                );
+                let curve =
+                    cmsBuildParametricToneCurve(ptr::null_mut(), curve_type, curve_params.as_ptr());
                 if curve.is_null() {
                     return None;
                 }
@@ -461,7 +458,12 @@ mod lcms2 {
         pub fn transform_pixel(&self, px: [u16; 3]) -> [u16; 3] {
             let mut out = [0u16; 3];
             unsafe {
-                cmsDoTransform(self.transform, px.as_ptr().cast(), out.as_mut_ptr().cast(), 1);
+                cmsDoTransform(
+                    self.transform,
+                    px.as_ptr().cast(),
+                    out.as_mut_ptr().cast(),
+                    1,
+                );
             }
             out
         }
@@ -647,12 +649,7 @@ impl WorkingColorSpace {
                             big_y: 1.0,
                         },
                     };
-                    lcms2::ProfileHandle::create_parametric_rgb(
-                        wp,
-                        primaries,
-                        1,
-                        &[563.0 / 256.0],
-                    )
+                    lcms2::ProfileHandle::create_parametric_rgb(wp, primaries, 1, &[563.0 / 256.0])
                 })
                 .as_ref(),
             Self::ProPhotoRgb => PROPHOTO_RGB
@@ -1108,26 +1105,33 @@ impl IccProfile {
         intent: RenderingIntent,
         black_point_compensation: bool,
     ) -> Option<&lcms2::TransformHandle> {
-        let slot = (src_space.index() * 8)
-            + (intent.index() * 2)
-            + usize::from(black_point_compensation);
-        self.inner.device_transforms.get(slot)?.get_or_init(|| {
-            let src_prof = src_space.lcms_profile()?;
-            lcms2::TransformHandle::new_rgb16(
-                src_prof,
-                &self.inner.handle,
-                intent.lcms_intent(),
-                black_point_compensation,
-            )
-        }).as_ref()
+        let slot =
+            (src_space.index() * 8) + (intent.index() * 2) + usize::from(black_point_compensation);
+        self.inner
+            .device_transforms
+            .get(slot)?
+            .get_or_init(|| {
+                let src_prof = src_space.lcms_profile()?;
+                lcms2::TransformHandle::new_rgb16(
+                    src_prof,
+                    &self.inner.handle,
+                    intent.lcms_intent(),
+                    black_point_compensation,
+                )
+            })
+            .as_ref()
     }
 
     fn gamut_transform(&self, src_space: WorkingColorSpace) -> Option<&lcms2::TransformHandle> {
         let slot = src_space.index();
-        self.inner.gamut_transforms.get(slot)?.get_or_init(|| {
-            let src_prof = src_space.lcms_profile()?;
-            lcms2::TransformHandle::new_gamut_check_rgb16(src_prof, &self.inner.handle)
-        }).as_ref()
+        self.inner
+            .gamut_transforms
+            .get(slot)?
+            .get_or_init(|| {
+                let src_prof = src_space.lcms_profile()?;
+                lcms2::TransformHandle::new_gamut_check_rgb16(src_prof, &self.inner.handle)
+            })
+            .as_ref()
     }
 
     fn proof_transform(&self, key: ProofKey) -> Option<Arc<lcms2::TransformHandle>> {
@@ -1479,9 +1483,8 @@ mod tests {
 
     #[test]
     fn parses_real_epson_sc_p900_icc_profiles_and_transforms_16bit_via_lcms2() {
-        let icc_path = Path::new(
-            "/usr/share/color/icc/epson-scp900/Epson_SC-P900_700_EpsonPremiumGlossy.icc",
-        );
+        let icc_path =
+            Path::new("/usr/share/color/icc/epson-scp900/Epson_SC-P900_700_EpsonPremiumGlossy.icc");
         if !icc_path.exists() {
             return;
         }
@@ -1511,14 +1514,8 @@ mod tests {
 
         // Gamut check via liblcms2 (CMS_FLAGS_GAMUTCHECK):
         // Neutral mid-gray is inside printer gamut; hyper-saturated ProPhoto RGB (65535, 0, 65535) is out of gamut.
-        assert!(!prof.is_out_of_gamut(
-            WorkingColorSpace::Srgb,
-            Rgb16::new(32768, 32768, 32768)
-        ));
-        assert!(prof.is_out_of_gamut(
-            WorkingColorSpace::ProPhotoRgb,
-            Rgb16::new(65535, 0, 65535)
-        ));
+        assert!(!prof.is_out_of_gamut(WorkingColorSpace::Srgb, Rgb16::new(32768, 32768, 32768)));
+        assert!(prof.is_out_of_gamut(WorkingColorSpace::ProPhotoRgb, Rgb16::new(65535, 0, 65535)));
 
         // Batch buffer transform via liblcms2
         let mut print_buf = ImageBuffer16::new_solid(4, 4, Rgb16::WHITE).unwrap();
@@ -1565,8 +1562,8 @@ mod tests {
             for dst in WorkingColorSpace::ALL {
                 let src_h = src.lcms_profile().expect("src profile");
                 let dst_h = dst.lcms_profile().expect("dst profile");
-                let xform =
-                    lcms2::TransformHandle::new_matrix_shaper_rgb16(src_h, dst_h).expect("transform");
+                let xform = lcms2::TransformHandle::new_matrix_shaper_rgb16(src_h, dst_h)
+                    .expect("transform");
 
                 for &px in &test_colors {
                     let [lr, lg, lb] = xform.transform_pixel([px.r, px.g, px.b]);
@@ -1584,9 +1581,8 @@ mod tests {
 
     #[test]
     fn lcms2_gray_ramp_monotonicity_bpc_shadow_separation_and_rayon_bit_identity() {
-        let icc_path = Path::new(
-            "/usr/share/color/icc/epson-scp900/Epson_SC-P900_700_EpsonPremiumGlossy.icc",
-        );
+        let icc_path =
+            Path::new("/usr/share/color/icc/epson-scp900/Epson_SC-P900_700_EpsonPremiumGlossy.icc");
         if !icc_path.exists() {
             return;
         }
@@ -1659,7 +1655,8 @@ mod tests {
         );
 
         // 3. Verify softproof gamut warning overlay replaces out-of-gamut pixels with warning color
-        let mut proof_buf = ImageBuffer16::new_solid(2, 1, Rgb16::new(32768, 32768, 32768)).unwrap();
+        let mut proof_buf =
+            ImageBuffer16::new_solid(2, 1, Rgb16::new(32768, 32768, 32768)).unwrap();
         proof_buf.set_pixel(1, 0, Rgb16::new(65535, 0, 65535)); // out-of-gamut in ProPhotoRGB
         let warn_color = Rgb8::new(255, 0, 200);
         prof.apply_softproof_to_display(
@@ -1682,9 +1679,7 @@ mod tests {
         assert_ne!(in_gamut_px, warn_color.to_rgb16());
 
         // 4. Verify all 4 Rendering Intents across multiple Epson SC-P900/P700 paper ICC profiles
-        let icc_dir = Path::new(
-            "/usr/share/color/icc/epson-scp900",
-        );
+        let icc_dir = Path::new("/usr/share/color/icc/epson-scp900");
         if let Ok(entries) = std::fs::read_dir(icc_dir) {
             let mut tested_profiles = 0usize;
             for entry in entries.flatten() {
@@ -1725,7 +1720,10 @@ mod tests {
                 }
                 tested_profiles += 1;
             }
-            assert!(tested_profiles >= 5, "Expected at least 5 Epson ICC profiles, found {tested_profiles}");
+            assert!(
+                tested_profiles >= 5,
+                "Expected at least 5 Epson ICC profiles, found {tested_profiles}"
+            );
         }
     }
 

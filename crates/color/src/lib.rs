@@ -183,12 +183,8 @@ impl ImageBuffer16 {
     /// Converts the 16-bit buffer to 8-bit `R, G, B` bytes (`width * height * 3`) using
     /// 4x4 ordered Bayer dithering on the fractional 16-bit remainder to eliminate gradient banding.
     pub fn to_rgb8_dithered_vec(&self) -> Vec<u8> {
-        const BAYER_4X4: [[u32; 4]; 4] = [
-            [0, 8, 2, 10],
-            [12, 4, 14, 6],
-            [3, 11, 1, 9],
-            [15, 7, 13, 5],
-        ];
+        const BAYER_4X4: [[u32; 4]; 4] =
+            [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
         let w = self.width.max(1) as usize;
         let mut out = Vec::with_capacity(self.data.len());
         for (px_idx, rgb) in self.data.chunks_exact(3).enumerate() {
@@ -359,7 +355,8 @@ impl AbwSettings {
             y = (y + br).clamp(0.0, 1.0);
             if ct.abs() > 1e-5 {
                 let centered = y - 0.5;
-                y = (0.5 + centered * (1.0 + ct * (1.0 - 2.0 * centered.abs() * 0.4))).clamp(0.0, 1.0);
+                y = (0.5 + centered * (1.0 + ct * (1.0 - 2.0 * centered.abs() * 0.4)))
+                    .clamp(0.0, 1.0);
             }
             // 3. Shadow & highlight localized curve shaping
             let shadow_weight = (1.0 - y).powi(2);
@@ -388,11 +385,10 @@ impl AbwSettings {
         let lut = self.build_lut16();
         buf.data.par_chunks_exact_mut(3).for_each(|px| {
             // Rec.709 luminance in 16-bit integer math
-            let lum = ((u32::from(px[0]) * 13933
-                + u32::from(px[1]) * 46871
-                + u32::from(px[2]) * 4732)
-                >> 16)
-                .min(65535) as usize;
+            let lum =
+                ((u32::from(px[0]) * 13933 + u32::from(px[1]) * 46871 + u32::from(px[2]) * 4732)
+                    >> 16)
+                    .min(65535) as usize;
             if let Some(&toned) = lut.get(lum) {
                 px[0] = toned.r;
                 px[1] = toned.g;
@@ -434,7 +430,8 @@ impl ColorAdjustments {
             return;
         }
         let br = (self.brightness.clamp(-50, 50) as f32) / 100.0;
-        let ct = (self.contrast.clamp(-50, 50) as f32 + if vibrant_boost { 10.0 } else { 0.0 }) / 100.0;
+        let ct =
+            (self.contrast.clamp(-50, 50) as f32 + if vibrant_boost { 10.0 } else { 0.0 }) / 100.0;
         let sat = 1.0
             + (self.saturation.clamp(-50, 50) as f32 + if vibrant_boost { 18.0 } else { 0.0 })
                 / 100.0;

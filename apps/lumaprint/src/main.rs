@@ -19,9 +19,10 @@ fn main() -> ExitCode {
 
     // Check for headless preview/snapshot flag: `lumaprint --snapshot <output.png>`
     if let Some(idx) = args.iter().position(|a| a == "--snapshot") {
-        let out_path = args
-            .get(idx + 1)
-            .map_or_else(|| PathBuf::from("/tmp/lumaprint_snapshot.png"), PathBuf::from);
+        let out_path = args.get(idx + 1).map_or_else(
+            || PathBuf::from("/tmp/lumaprint_snapshot.png"),
+            PathBuf::from,
+        );
         let mut app = LumaPrintApp::new();
         let _ = app.session.execute(EngineCommand::AddDemoImages);
         let _ = app.session.execute(EngineCommand::PlacePoolImageOnSheet {
@@ -48,7 +49,10 @@ fn main() -> ExitCode {
             eprintln!("Fehler beim Speichern des Snapshots: {e}");
             return ExitCode::FAILURE;
         }
-        println!("Snapshot erfolgreich gespeichert unter: {}", out_path.display());
+        println!(
+            "Snapshot erfolgreich gespeichert unter: {}",
+            out_path.display()
+        );
         return ExitCode::SUCCESS;
     }
 
@@ -62,7 +66,9 @@ fn main() -> ExitCode {
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("LumaPrint — Fine-Art Print Layout & Color Management (Epson SC-P900 / SC-P700)")
+            .with_title(
+                "LumaPrint — Fine-Art Print Layout & Color Management (Epson SC-P900 / SC-P700)",
+            )
             .with_inner_size([1520.0, 960.0])
             .with_min_inner_size([1100.0, 720.0])
             .with_drag_and_drop(true),

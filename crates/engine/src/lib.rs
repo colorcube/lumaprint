@@ -20,9 +20,8 @@ use lumaprint_color::{
 };
 use lumaprint_cups::{
     CupsError, CupsSpoolRequest, DriverColorControl, SYSTEM_CUSTOM_ICC_DIR, SystemPrinter,
-    VIRTUAL_EXPORT_QUEUE,
-    discover_custom_media_json,
-    discover_system_printers, sn_id_to_base_media_key, submit_cups_job, verify_printer_reachable,
+    VIRTUAL_EXPORT_QUEUE, discover_custom_media_json, discover_system_printers,
+    sn_id_to_base_media_key, submit_cups_job, verify_printer_reachable,
 };
 use lumaprint_doc::{
     CanvasViewMode, CenteringMode, ColorManagementMode, CropSpec, CustomMediaSpec,
@@ -291,8 +290,12 @@ pub const COMMAND_CATALOG: &[CommandSpec] = &[
 /// High-level typed Engine Commands.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EngineCommand {
-    AddImageFile { path: String },
-    ImportImageFiles { paths: Vec<String> },
+    AddImageFile {
+        path: String,
+    },
+    ImportImageFiles {
+        paths: Vec<String>,
+    },
     ImportAndPlaceOnSheet {
         paths: Vec<String>,
         target_slot: Option<(usize, usize)>,
@@ -303,8 +306,12 @@ pub enum EngineCommand {
         slot_index: Option<usize>,
     },
     AddDemoImages,
-    RemoveImage { image_id: u64 },
-    SelectActiveImage { index: usize },
+    RemoveImage {
+        image_id: u64,
+    },
+    SelectActiveImage {
+        index: usize,
+    },
     ResetToDefaults,
     Undo,
     Redo,
@@ -312,7 +319,10 @@ pub enum EngineCommand {
     SelectPrinterQueue(String),
     SetMediaKey(String),
     SetPaperSizeKey(String),
-    SetPaperSource { source: PaperSource, borderless: bool },
+    SetPaperSource {
+        source: PaperSource,
+        borderless: bool,
+    },
     SetInputSlotKey(String),
     SetResolutionKey(String),
     SetPrintQuality(PrintQuality),
@@ -405,15 +415,24 @@ pub enum EngineCommand {
     SetRenderingIntent(RenderingIntent),
     SetBlackPointCompensation(bool),
     SetAbwPreset(AbwTonePreset),
-    SetAbwWheel { x: i32, y: i32 },
+    SetAbwWheel {
+        x: i32,
+        y: i32,
+    },
     SetAbwSettings(AbwSettings),
     SetSoftproof(SoftproofConfig),
     SetOutputSharpening(OutputSharpening),
     SetDisplayColorSpace(DisplayColorSpaceMode),
     SetExportSettings(ExportSettings),
-    SavePreset { name: String },
-    LoadPreset { name: String },
-    DeletePreset { name: String },
+    SavePreset {
+        name: String,
+    },
+    LoadPreset {
+        name: String,
+    },
+    DeletePreset {
+        name: String,
+    },
 }
 
 /// Central Headless LumaPrint Session (`L5`).
@@ -720,7 +739,10 @@ impl Session {
             if let Some(p) = self.icc_profiles.get(&prefixed) {
                 return Some(p);
             }
-            if let Some(stripped) = fname.strip_prefix("mac_").or_else(|| fname.strip_prefix("win_")) {
+            if let Some(stripped) = fname
+                .strip_prefix("mac_")
+                .or_else(|| fname.strip_prefix("win_"))
+            {
                 if let Some(p) = self.icc_profiles.get(stripped) {
                     return Some(p);
                 }
@@ -800,10 +822,8 @@ impl Session {
                 })
                 .or_insert_with(|| key.clone());
         }
-        let mut list: Vec<(String, String)> = by_desc
-            .into_iter()
-            .map(|(desc, key)| (key, desc))
-            .collect();
+        let mut list: Vec<(String, String)> =
+            by_desc.into_iter().map(|(desc, key)| (key, desc)).collect();
         list.sort_by_key(|a| a.1.to_lowercase());
         list
     }
@@ -1356,8 +1376,7 @@ impl Session {
                             comp.default_size_mm = clamped;
                             let slot_len = page.slot_assignments.len().max(25);
                             comp.slot_sizes_mm.resize(slot_len, None);
-                            for (si, maybe_id) in
-                                page.slot_assignments.iter().copied().enumerate()
+                            for (si, maybe_id) in page.slot_assignments.iter().copied().enumerate()
                             {
                                 if let Some(id) = maybe_id {
                                     let eff = if orient_to_image
@@ -1391,14 +1410,15 @@ impl Session {
                     match &mut page.layout {
                         LayoutMode::FreeComposer(comp) => {
                             if let Some(si) = slot_index {
-                                let assigned_id = page
-                                    .slot_assignments
-                                    .get(si)
-                                    .copied()
-                                    .flatten()
-                                    .or_else(|| {
-                                        self.doc.images.get(self.doc.active_image_index).map(|i| i.id)
-                                    });
+                                let assigned_id =
+                                    page.slot_assignments.get(si).copied().flatten().or_else(
+                                        || {
+                                            self.doc
+                                                .images
+                                                .get(self.doc.active_image_index)
+                                                .map(|i| i.id)
+                                        },
+                                    );
                                 let eff = if orient_to_image
                                     && let Some(id) = assigned_id
                                     && let Some(img) = self.doc.images.iter().find(|i| i.id == id)
@@ -1434,7 +1454,10 @@ impl Session {
                                 .copied()
                                 .flatten()
                                 .or_else(|| {
-                                    self.doc.images.get(self.doc.active_image_index).map(|i| i.id)
+                                    self.doc
+                                        .images
+                                        .get(self.doc.active_image_index)
+                                        .map(|i| i.id)
                                 });
                             let eff = if orient_to_image
                                 && let Some(id) = assigned_id
@@ -1498,14 +1521,10 @@ impl Session {
                     {
                         let mut new_slots = Vec::with_capacity(25);
                         let mut new_sizes = Vec::with_capacity(25);
-                        for (idx, maybe_id) in
-                            page.slot_assignments.iter().copied().enumerate()
-                        {
+                        for (idx, maybe_id) in page.slot_assignments.iter().copied().enumerate() {
                             if let Some(id) = maybe_id {
                                 new_slots.push(Some(id));
-                                new_sizes.push(
-                                    comp.slot_sizes_mm.get(idx).copied().flatten(),
-                                );
+                                new_sizes.push(comp.slot_sizes_mm.get(idx).copied().flatten());
                             }
                         }
                         new_slots.resize(25, None);
@@ -1525,12 +1544,8 @@ impl Session {
                 };
                 self.doc.load_active_page_from_list();
                 if let Some(id) = image_id {
-                    if let Some((idx, img)) = self
-                        .doc
-                        .images
-                        .iter()
-                        .enumerate()
-                        .find(|(_, i)| i.id == id)
+                    if let Some((idx, img)) =
+                        self.doc.images.iter().enumerate().find(|(_, i)| i.id == id)
                     {
                         self.doc.active_image_index = idx;
                         self.status_message = format!(
@@ -1634,14 +1649,7 @@ impl Session {
             }
             EngineCommand::AddPage { initial_image_id } => {
                 self.doc.sync_active_page_to_list();
-                let next_id = self
-                    .doc
-                    .pages
-                    .iter()
-                    .map(|p| p.id)
-                    .max()
-                    .unwrap_or(0)
-                    + 1;
+                let next_id = self.doc.pages.iter().map(|p| p.id).max().unwrap_or(0) + 1;
                 let mut slots = vec![None; 25];
                 slots[0] = initial_image_id;
                 let new_page = PrintSheetPage {
@@ -1663,14 +1671,7 @@ impl Session {
             EngineCommand::DuplicatePage { page_index } => {
                 self.doc.sync_active_page_to_list();
                 if let Some(src_page) = self.doc.pages.get(page_index).cloned() {
-                    let next_id = self
-                        .doc
-                        .pages
-                        .iter()
-                        .map(|p| p.id)
-                        .max()
-                        .unwrap_or(0)
-                        + 1;
+                    let next_id = self.doc.pages.iter().map(|p| p.id).max().unwrap_or(0) + 1;
                     let dup = PrintSheetPage {
                         id: next_id,
                         layout: src_page.layout,
@@ -1713,10 +1714,8 @@ impl Session {
                     p.slot_assignments = vec![None; 25];
                 }
                 self.doc.load_active_page_from_list();
-                self.status_message = format!(
-                    "Alle Bildstellen auf Bogen {} geleert.",
-                    page_index + 1
-                );
+                self.status_message =
+                    format!("Alle Bildstellen auf Bogen {} geleert.", page_index + 1);
                 return Ok(());
             }
             EngineCommand::MovePage {
@@ -1868,7 +1867,9 @@ impl Session {
                     self.doc.color.auto_select_icc_for_media = true;
                     self.doc.color.rendering_intent = RenderingIntent::RelativeColorimetric;
                     self.doc.color.black_point_compensation = true;
-                    let is_custom_media = self.find_custom_media(&self.doc.printer.media_key).is_some();
+                    let is_custom_media = self
+                        .find_custom_media(&self.doc.printer.media_key)
+                        .is_some();
                     match self.doc.color.mode {
                         ColorManagementMode::PrinterManagesColor { .. } => {
                             if is_custom_media || self.doc.color.softproof.enabled {
@@ -2089,18 +2090,12 @@ impl Session {
                             self.doc.pages[p_idx + 1].layout.clone()
                         {
                             let mut next_items = overflow;
-                            next_items.extend(self.extract_sammel_page_items(p_idx + 1, &next_comp));
+                            next_items
+                                .extend(self.extract_sammel_page_items(p_idx + 1, &next_comp));
                             self.write_sammel_page_items(p_idx + 1, &next_items);
                         }
                     } else {
-                        let next_id = self
-                            .doc
-                            .pages
-                            .iter()
-                            .map(|p| p.id)
-                            .max()
-                            .unwrap_or(0)
-                            + 1;
+                        let next_id = self.doc.pages.iter().map(|p| p.id).max().unwrap_or(0) + 1;
                         let mut new_comp = comp_spec.clone();
                         new_comp.slot_sizes_mm.clear();
                         self.doc.pages.insert(
@@ -2291,8 +2286,7 @@ impl Session {
                         .find(|i| i.id == img_id)
                         .map(|img| orient_size_for_image(comp.default_size_mm, img))
                         .unwrap_or(comp.default_size_mm);
-                    let mut cand_sizes: Vec<SizeMm> =
-                        existing.iter().map(|&(_, sz)| sz).collect();
+                    let mut cand_sizes: Vec<SizeMm> = existing.iter().map(|&(_, sz)| sz).collect();
                     cand_sizes.push(new_sz);
                     if count_fitting_sammel_items(&self.doc, &comp, &cand_sizes) < cand_sizes.len()
                     {
@@ -2320,14 +2314,7 @@ impl Session {
             }
         }
 
-        let next_id = self
-            .doc
-            .pages
-            .iter()
-            .map(|p| p.id)
-            .max()
-            .unwrap_or(0)
-            + 1;
+        let next_id = self.doc.pages.iter().map(|p| p.id).max().unwrap_or(0) + 1;
         let mut inherited_layout = self
             .doc
             .pages
@@ -2411,9 +2398,7 @@ impl Session {
                     + 0.12 * (xf * 5.2).sin()
                     + 0.05 * (xf * 13.0).cos()
                     + 0.015 * (xf * 31.0).sin();
-                let ridge2 = 0.66
-                    + 0.08 * (xf * 3.8 + 1.2).sin()
-                    + 0.02 * (xf * 19.0 + 0.7).cos();
+                let ridge2 = 0.66 + 0.08 * (xf * 3.8 + 1.2).sin() + 0.02 * (xf * 19.0 + 0.7).cos();
 
                 let t_sky = (yf / ridge1.max(0.05)).clamp(0.0, 1.0);
                 let sky_r = 12000.0 + t_sky * 46000.0;
@@ -2578,13 +2563,8 @@ impl Session {
         };
 
         for (idx, &pi) in page_indices.iter().enumerate() {
-            let (buf, _) = render_export_page_at_16bit(
-                &self.doc,
-                pi,
-                &self.image_buffers,
-                icc,
-                dpi,
-            )?;
+            let (buf, _) =
+                render_export_page_at_16bit(&self.doc, pi, &self.image_buffers, icc, dpi)?;
             let target_path = if idx == 0 {
                 p.to_path_buf()
             } else {
@@ -3460,10 +3440,12 @@ mod tests {
             ))
             .unwrap();
         session
-            .execute(EngineCommand::SetSoftproof(lumaprint_cms::SoftproofConfig {
-                enabled: true,
-                ..Default::default()
-            }))
+            .execute(EngineCommand::SetSoftproof(
+                lumaprint_cms::SoftproofConfig {
+                    enabled: true,
+                    ..Default::default()
+                },
+            ))
             .unwrap();
         assert_eq!(session.doc.color.mode, ColorManagementMode::UseIccProfile);
 
@@ -3561,5 +3543,3 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp_dir);
     }
 }
-
-

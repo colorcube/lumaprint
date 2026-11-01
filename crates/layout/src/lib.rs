@@ -291,14 +291,13 @@ pub fn solve_page_layout_at(doc: &PrintJobDocument, page_index: usize) -> Solved
                 printable_rect_mm
             } else {
                 match std_spec.criterion {
-                    SizingCriterion::Margin => RectMm::from_page_and_margins(
-                        paper_size_mm,
-                        std_spec.margins_mm,
-                    )
-                    .unwrap_or_else(|e| {
-                        warnings.push(e.to_string());
-                        printable_rect_mm
-                    }),
+                    SizingCriterion::Margin => {
+                        RectMm::from_page_and_margins(paper_size_mm, std_spec.margins_mm)
+                            .unwrap_or_else(|e| {
+                                warnings.push(e.to_string());
+                                printable_rect_mm
+                            })
+                    }
                     SizingCriterion::ImageSize => {
                         let mut r = std_spec.manual_rect_mm;
                         if std_spec.keep_aspect_ratio
@@ -312,38 +311,39 @@ pub fn solve_page_layout_at(doc: &PrintJobDocument, page_index: usize) -> Solved
                 }
             };
 
-            let (slot_rect_mm, image_draw_rect_mm, uv_rect, effective_ppi) =
-                if let Some(img) = active_img {
-                    let force_fill = doc.printer.borderless && std_spec.fit_to_scale;
-                    let (draw_r, uv, ppi) = solve_slot_draw_and_uv(
-                        base_slot_rect_mm,
-                        img,
-                        force_fill,
-                        std_spec.keep_aspect_ratio,
-                        std_spec.centering,
-                        Some(paper_size_mm),
-                    );
-                    if ppi < 180.0 {
-                        warnings.push(format!(
+            let (slot_rect_mm, image_draw_rect_mm, uv_rect, effective_ppi) = if let Some(img) =
+                active_img
+            {
+                let force_fill = doc.printer.borderless && std_spec.fit_to_scale;
+                let (draw_r, uv, ppi) = solve_slot_draw_and_uv(
+                    base_slot_rect_mm,
+                    img,
+                    force_fill,
+                    std_spec.keep_aspect_ratio,
+                    std_spec.centering,
+                    Some(paper_size_mm),
+                );
+                if ppi < 180.0 {
+                    warnings.push(format!(
                             "Niedrige Bildauflösung: {:.0} ppi (empfohlen >= 240 ppi für Fine-Art-Druck).",
                             ppi
                         ));
-                    }
-                    let eff_slot_r =
-                        if !force_fill && !img.crop.fill_slot && std_spec.keep_aspect_ratio {
-                            draw_r
-                        } else {
-                            base_slot_rect_mm
-                        };
-                    (eff_slot_r, draw_r, uv, Some(ppi))
+                }
+                let eff_slot_r = if !force_fill && !img.crop.fill_slot && std_spec.keep_aspect_ratio
+                {
+                    draw_r
                 } else {
-                    (
-                        base_slot_rect_mm,
-                        base_slot_rect_mm,
-                        [0.0, 0.0, 1.0, 1.0],
-                        None,
-                    )
+                    base_slot_rect_mm
                 };
+                (eff_slot_r, draw_r, uv, Some(ppi))
+            } else {
+                (
+                    base_slot_rect_mm,
+                    base_slot_rect_mm,
+                    [0.0, 0.0, 1.0, 1.0],
+                    None,
+                )
+            };
 
             SolvedPageLayout {
                 paper_size_mm,
@@ -366,9 +366,7 @@ pub fn solve_page_layout_at(doc: &PrintJobDocument, page_index: usize) -> Solved
         }
 
         LayoutMode::Panorama(pano_spec) => {
-            let img_aspect = active_img
-                .map(effective_cropped_aspect)
-                .unwrap_or(3.0);
+            let img_aspect = active_img.map(effective_cropped_aspect).unwrap_or(3.0);
             let width_mm = if doc.printer.paper_source == PaperSource::RollPaper {
                 doc.printer.roll_width_mm
             } else {
@@ -542,9 +540,7 @@ pub fn solve_page_layout_at(doc: &PrintJobDocument, page_index: usize) -> Solved
                 .chain(all_templates.iter())
                 .find(|t| t.id == tpl_spec.template_id)
                 .cloned()
-                .unwrap_or_else(|| {
-                    build_grid_template("Fallback_2x2", "2x2 Raster", 2, 2)
-                });
+                .unwrap_or_else(|| build_grid_template("Fallback_2x2", "2x2 Raster", 2, 2));
 
             let cut_marks = tpl_spec.cut_marks || tpl.cut_marks;
             let caption_mode = if tpl_spec.caption_mode != SlotCaptionMode::None {
@@ -614,16 +610,18 @@ pub fn solve_page_layout_at(doc: &PrintJobDocument, page_index: usize) -> Solved
                         Some(img) => format!("#{:02}  {}", idx + 1, img.display_name),
                         None => format!("#{:02}  (leer)", idx + 1),
                     }),
-                    SlotCaptionMode::DimensionsAndPpi => Some(match (assigned_img, effective_ppi) {
-                        (Some(_), Some(ppi)) => format!(
-                            "{:.1}x{:.1} mm ({:.0} ppi)",
-                            image_draw_rect_mm.width_mm, image_draw_rect_mm.height_mm, ppi
-                        ),
-                        _ => format!(
-                            "{:.1}x{:.1} mm",
-                            image_area_rect_mm.width_mm, image_area_rect_mm.height_mm
-                        ),
-                    }),
+                    SlotCaptionMode::DimensionsAndPpi => {
+                        Some(match (assigned_img, effective_ppi) {
+                            (Some(_), Some(ppi)) => format!(
+                                "{:.1}x{:.1} mm ({:.0} ppi)",
+                                image_draw_rect_mm.width_mm, image_draw_rect_mm.height_mm, ppi
+                            ),
+                            _ => format!(
+                                "{:.1}x{:.1} mm",
+                                image_area_rect_mm.width_mm, image_area_rect_mm.height_mm
+                            ),
+                        })
+                    }
                 };
 
                 slots.push(SolvedImageSlot {
@@ -762,11 +760,7 @@ pub fn pack_sammel_rects(
     let bottom = printable.bottom_mm();
     let eps = 1e-4;
 
-    let k_bits = if allow_rotate {
-        sizes.len().min(12)
-    } else {
-        0
-    };
+    let k_bits = if allow_rotate { sizes.len().min(12) } else { 0 };
     let num_masks = 1usize << k_bits;
 
     let mut best_placements: Vec<(RectMm, bool)> = Vec::new();
@@ -909,8 +903,7 @@ pub fn solve_auto_nested_slots(
     frame_line: FrameLineSpec,
     warnings: &mut Vec<String>,
 ) -> Vec<SolvedImageSlot> {
-    let indexed: Vec<(usize, SourceImageEntry)> =
-        images.iter().cloned().enumerate().collect();
+    let indexed: Vec<(usize, SourceImageEntry)> = images.iter().cloned().enumerate().collect();
     solve_auto_nested_slots_indexed(
         &indexed,
         printable,
@@ -939,9 +932,7 @@ pub fn solve_auto_nested_slots_indexed(
     let placements = pack_sammel_rects(&sizes, printable, gap_mm, allow_rotate);
     let mut slots = Vec::with_capacity(placements.len());
 
-    for ((orig_slot_idx, img), (rect, rotated_90)) in
-        indexed_images.iter().zip(placements)
-    {
+    for ((orig_slot_idx, img), (rect, rotated_90)) in indexed_images.iter().zip(placements) {
         let mut img_for_solve = img.clone();
         if rotated_90 {
             img_for_solve.crop.rotation_deg = (img_for_solve.crop.rotation_deg + 90) % 360;
@@ -1103,12 +1094,14 @@ pub fn adjust_margins_for_aspect(
         0 | 1 => {
             if edited_edge == 0 {
                 margins.top_mm = margins.top_mm.clamp(0.0, ph - 10.0);
-                margins.bottom_mm =
-                    margins.bottom_mm.clamp(0.0, (ph - margins.top_mm - 10.0).max(0.0));
+                margins.bottom_mm = margins
+                    .bottom_mm
+                    .clamp(0.0, (ph - margins.top_mm - 10.0).max(0.0));
             } else {
                 margins.bottom_mm = margins.bottom_mm.clamp(0.0, ph - 10.0);
-                margins.top_mm =
-                    margins.top_mm.clamp(0.0, (ph - margins.bottom_mm - 10.0).max(0.0));
+                margins.top_mm = margins
+                    .top_mm
+                    .clamp(0.0, (ph - margins.bottom_mm - 10.0).max(0.0));
             }
 
             let mut h = (ph - margins.top_mm - margins.bottom_mm).max(10.0);
@@ -1144,12 +1137,14 @@ pub fn adjust_margins_for_aspect(
         _ => {
             if edited_edge == 2 {
                 margins.left_mm = margins.left_mm.clamp(0.0, pw - 10.0);
-                margins.right_mm =
-                    margins.right_mm.clamp(0.0, (pw - margins.left_mm - 10.0).max(0.0));
+                margins.right_mm = margins
+                    .right_mm
+                    .clamp(0.0, (pw - margins.left_mm - 10.0).max(0.0));
             } else {
                 margins.right_mm = margins.right_mm.clamp(0.0, pw - 10.0);
-                margins.left_mm =
-                    margins.left_mm.clamp(0.0, (pw - margins.right_mm - 10.0).max(0.0));
+                margins.left_mm = margins
+                    .left_mm
+                    .clamp(0.0, (pw - margins.right_mm - 10.0).max(0.0));
             }
 
             let mut w = (pw - margins.left_mm - margins.right_mm).max(10.0);
@@ -1357,4 +1352,3 @@ mod tests {
         assert_eq!(slot.slot_rect_mm, slot.image_draw_rect_mm);
     }
 }
-
