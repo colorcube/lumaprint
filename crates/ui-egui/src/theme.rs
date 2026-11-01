@@ -10,6 +10,7 @@ use egui::{
     TextStyle, Vec2, Visuals,
     style::{Selection, WidgetVisuals, Widgets},
 };
+use lumaprint_i18n::tr;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -67,13 +68,13 @@ impl ThemeKind {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::KdeSystem => "KDE System (Automatisch aus kdeglobals)",
+            Self::KdeSystem => tr!("KDE system (automatic from kdeglobals)"),
             Self::BreezeDark => "Breeze Dark (KDE Plasma)",
             Self::BreezeLight => "Breeze Light (KDE Plasma)",
-            Self::Pro => "Pro (Dunkelgrau — Softproof)",
-            Self::ProMedium => "Pro (Mittelgrau — wie EPL)",
-            Self::ProLightGray => "Pro (Hellgrau)",
-            Self::ProLight => "Pro (Hell)",
+            Self::Pro => tr!("Pro (dark gray — soft proof)"),
+            Self::ProMedium => tr!("Pro (medium gray — like EPL)"),
+            Self::ProLightGray => tr!("Pro (light gray)"),
+            Self::ProLight => tr!("Pro (light)"),
             Self::Studio => "Studio (Dark)",
             Self::StudioLight => "Studio (Light)",
             Self::AdwaitaDark => "Adwaita (Dark)",

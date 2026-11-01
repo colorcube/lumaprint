@@ -61,6 +61,9 @@ fn main() -> ExitCode {
         .cloned()
         .collect();
 
+    // Language before the first frame (and before the session builds its startup texts).
+    LumaPrintApp::init_language();
+
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(

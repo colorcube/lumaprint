@@ -1356,6 +1356,8 @@ pub struct PersistentSettings {
     pub ui_theme: Option<String>,
     /// UI scale factor chosen in the GUI.
     pub ui_scale: Option<f32>,
+    /// UI language code (`"en"`, `"de"`); `None` follows the system locale.
+    pub language: Option<String>,
 }
 
 impl Default for PersistentSettings {
@@ -1384,6 +1386,7 @@ impl PersistentSettings {
             user_backup: doc.user_backup.clone(),
             ui_theme: None,
             ui_scale: None,
+            language: None,
         }
     }
 

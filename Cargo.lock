@@ -1425,6 +1425,7 @@ dependencies = [
  "lumaprint-doc",
  "lumaprint-engine",
  "lumaprint-geom",
+ "lumaprint-i18n",
  "lumaprint-layout",
  "lumaprint-render",
  "serde",
