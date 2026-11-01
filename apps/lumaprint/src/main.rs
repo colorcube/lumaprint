@@ -46,13 +46,10 @@ fn main() -> ExitCode {
             });
         }
         if let Err(e) = app.session.export_print_file(&out_path, 96) {
-            eprintln!("Fehler beim Speichern des Snapshots: {e}");
+            eprintln!("Failed to save the snapshot: {e}");
             return ExitCode::FAILURE;
         }
-        println!(
-            "Snapshot erfolgreich gespeichert unter: {}",
-            out_path.display()
-        );
+        println!("Snapshot saved to: {}", out_path.display());
         return ExitCode::SUCCESS;
     }
 
@@ -63,6 +60,9 @@ fn main() -> ExitCode {
         .filter(|arg| !arg.starts_with('-'))
         .cloned()
         .collect();
+
+    // Language before the first frame (and before the session builds its startup texts).
+    LumaPrintApp::init_language();
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -94,7 +94,7 @@ fn main() -> ExitCode {
     match res {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("LumaPrint GUI-Fehler: {err}");
+            eprintln!("LumaPrint GUI error: {err}");
             ExitCode::FAILURE
         }
     }

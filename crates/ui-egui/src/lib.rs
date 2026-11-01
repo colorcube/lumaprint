@@ -35,6 +35,7 @@ use lumaprint_engine::{
 use lumaprint_geom::{
     BorderlessExpandLevel, DisplayUnit, MarginsMm, Orientation, PAPER_SIZES, RectMm, SizeMm,
 };
+use lumaprint_i18n::tr;
 use lumaprint_layout::{
     SolvedPageLayout, adjust_margins_for_aspect, builtin_templates, effective_cropped_aspect,
     resolve_paper_and_printable_area,
@@ -77,7 +78,7 @@ fn parse_decimal_de(text: &str) -> Option<f64> {
 /// Standard photo & Fine-Art print size presets (`mm`) selectable per image in `"Sammel"` and `"Standard"` modes.
 const PHOTO_SIZE_PRESETS_MM: &[(&str, SizeMm)] = &[
     (
-        "Kontaktbogen (30 × 45 mm)",
+        "Contact sheet (30 × 45 mm)",
         SizeMm {
             width_mm: 30.0,
             height_mm: 45.0,
@@ -161,21 +162,21 @@ const PHOTO_SIZE_PRESETS_MM: &[(&str, SizeMm)] = &[
         },
     ),
     (
-        "Quadrat 10 × 10 cm",
+        "Square 10 × 10 cm",
         SizeMm {
             width_mm: 100.0,
             height_mm: 100.0,
         },
     ),
     (
-        "Quadrat 15 × 15 cm",
+        "Square 15 × 15 cm",
         SizeMm {
             width_mm: 150.0,
             height_mm: 150.0,
         },
     ),
     (
-        "Quadrat 20 × 20 cm",
+        "Square 20 × 20 cm",
         SizeMm {
             width_mm: 200.0,
             height_mm: 200.0,
@@ -205,13 +206,13 @@ fn match_photo_size_preset_label(size: SizeMm) -> Option<&'static str> {
 
 /// Built-in gray tone presets (`Grautöne`) for the frame line (`Rahmenlinie`).
 const FRAME_GRAY_PRESETS: &[(&str, Rgb8)] = &[
-    ("Schwarz (0 %)", Rgb8::new(0, 0, 0)),
-    ("Anthrazit (20 %)", Rgb8::new(51, 51, 51)),
-    ("Dunkelgrau (35 %)", Rgb8::new(89, 89, 89)),
-    ("Mittelgrau (50 %)", Rgb8::new(128, 128, 128)),
-    ("Silbergrau (70 %)", Rgb8::new(179, 179, 179)),
-    ("Hellgrau (85 %)", Rgb8::new(217, 217, 217)),
-    ("Weiß (100 %)", Rgb8::new(255, 255, 255)),
+    ("Black (0 %)", Rgb8::new(0, 0, 0)),
+    ("Anthracite (20 %)", Rgb8::new(51, 51, 51)),
+    ("Dark gray (35 %)", Rgb8::new(89, 89, 89)),
+    ("Medium gray (50 %)", Rgb8::new(128, 128, 128)),
+    ("Silver gray (70 %)", Rgb8::new(179, 179, 179)),
+    ("Light gray (85 %)", Rgb8::new(217, 217, 217)),
+    ("White (100 %)", Rgb8::new(255, 255, 255)),
 ];
 
 fn draw_color_swatch_item(ui: &mut Ui, rgb: Rgb8, label: &str, selected: bool) -> egui::Response {
@@ -245,9 +246,12 @@ fn draw_frame_line_rows(
     let mut changed = false;
     let mut color_cmd: Option<EngineCommand> = None;
 
-    ui.label(RichText::new("Rahmenlinie:").color(t.text_dim));
+    ui.label(RichText::new(tr!("Frame line:")).color(t.text_dim));
     ui.horizontal(|ui| {
-        if ui.checkbox(&mut frame_line.enabled, "Aktiv").changed() {
+        if ui
+            .checkbox(&mut frame_line.enabled, tr!("Active"))
+            .changed()
+        {
             changed = true;
         }
         if frame_line.enabled
@@ -256,7 +260,7 @@ fn draw_frame_line_rows(
                     de_drag(&mut frame_line.thickness_mm)
                         .range(0.1..=5.0)
                         .speed(0.1)
-                        .prefix("Stärke ")
+                        .prefix(tr!("Width "))
                         .suffix(" mm"),
                 )
                 .changed()
@@ -267,12 +271,12 @@ fn draw_frame_line_rows(
     ui.end_row();
 
     if frame_line.enabled {
-        ui.label(RichText::new("Rahmenfarbe:").color(t.text_dim));
+        ui.label(RichText::new(tr!("Frame color:")).color(t.text_dim));
         ui.horizontal(|ui| {
             let mut srgb = [frame_line.color.r, frame_line.color.g, frame_line.color.b];
             if ui
                 .color_edit_button_srgb(&mut srgb)
-                .on_hover_text("Freie Rahmenfarbe einstellen")
+                .on_hover_text(tr!("Pick a custom frame color"))
                 .changed()
             {
                 frame_line.color = Rgb8::new(srgb[0], srgb[1], srgb[2]);
@@ -283,7 +287,7 @@ fn draw_frame_line_rows(
             let matched_gray = FRAME_GRAY_PRESETS
                 .iter()
                 .find(|(_, c)| *c == cur_c)
-                .map(|(lbl, _)| (*lbl).to_string());
+                .map(|(lbl, _)| tr(lbl).to_string());
             let matched_custom = custom_colors
                 .iter()
                 .find(|(_, c)| *c == cur_c)
@@ -292,7 +296,10 @@ fn draw_frame_line_rows(
                 .clone()
                 .or_else(|| matched_custom.clone())
                 .unwrap_or_else(|| {
-                    format!("Frei (#{:02X}{:02X}{:02X})", cur_c.r, cur_c.g, cur_c.b)
+                    tr!(
+                        "Custom ({hex})",
+                        hex = format!("#{:02X}{:02X}{:02X}", cur_c.r, cur_c.g, cur_c.b)
+                    )
                 });
 
             egui::ComboBox::from_id_salt((id_prefix, "frame_color_combo"))
@@ -300,9 +307,11 @@ fn draw_frame_line_rows(
                 .width(155.0)
                 .truncate()
                 .show_ui(ui, |ui| {
-                    ui.label(RichText::new("Grautöne:").small().color(t.text_dim));
+                    ui.label(RichText::new(tr!("Gray tones:")).small().color(t.text_dim));
                     for &(lbl, gray_rgb) in FRAME_GRAY_PRESETS {
-                        if draw_color_swatch_item(ui, gray_rgb, lbl, cur_c == gray_rgb).clicked() {
+                        if draw_color_swatch_item(ui, gray_rgb, tr(lbl), cur_c == gray_rgb)
+                            .clicked()
+                        {
                             frame_line.color = gray_rgb;
                             changed = true;
                             ui.close_menu();
@@ -310,7 +319,11 @@ fn draw_frame_line_rows(
                     }
                     if !custom_colors.is_empty() {
                         ui.separator();
-                        ui.label(RichText::new("Eigene Farben:").small().color(t.text_dim));
+                        ui.label(
+                            RichText::new(tr!("Custom colors:"))
+                                .small()
+                                .color(t.text_dim),
+                        );
                         for (lbl, cust_rgb) in custom_colors {
                             if draw_color_swatch_item(ui, *cust_rgb, lbl, cur_c == *cust_rgb)
                                 .clicked()
@@ -326,17 +339,20 @@ fn draw_frame_line_rows(
             if matched_custom.is_some() {
                 if ui
                     .button(RichText::new("🗑").color(t.danger))
-                    .on_hover_text("Gespeicherte eigene Farbe aus der Auswahlliste löschen")
+                    .on_hover_text(tr!("Remove this saved custom color from the list"))
                     .clicked()
                 {
                     color_cmd = Some(EngineCommand::RemoveCustomFrameColor(cur_c));
                 }
             } else if ui
                 .add_enabled(matched_gray.is_none(), egui::Button::new("➕"))
-                .on_hover_text("Aktuelle freie Farbe zur Auswahlliste hinzufügen")
+                .on_hover_text(tr!("Add the current custom color to the list"))
                 .clicked()
             {
-                let name = format!("Farbe #{:02X}{:02X}{:02X}", cur_c.r, cur_c.g, cur_c.b);
+                let name = tr!(
+                    "Color {hex}",
+                    hex = format!("#{:02X}{:02X}{:02X}", cur_c.r, cur_c.g, cur_c.b)
+                );
                 color_cmd = Some(EngineCommand::AddCustomFrameColor { name, color: cur_c });
             }
         });
@@ -450,7 +466,7 @@ impl Default for TemplateStudioState {
     fn default() -> Self {
         Self {
             editing_id: None,
-            name: String::from("Bento-Vorlage 2×2"),
+            name: String::from(tr!("Bento template 2×2")),
             orientation: Orientation::Portrait,
             is_free_mode: false,
             rows: 2,
@@ -741,6 +757,8 @@ pub struct LumaPrintApp {
     pub tokens: Tokens,
     pub kde_typography: KdeTypography,
     pub ui_scale: f32,
+    /// UI language chosen in the settings menu; `None` follows the system locale.
+    pub language: Option<lumaprint_i18n::Language>,
     fonts_installed: bool,
     page_texture: Option<TextureHandle>,
     page_thumb_textures: HashMap<usize, TextureHandle>,
@@ -803,6 +821,7 @@ impl LumaPrintApp {
             tokens: Tokens::for_kind(theme_kind),
             kde_typography: KdeTypography::default(),
             ui_scale: 1.0,
+            language: None,
             fonts_installed: false,
             page_texture: None,
             page_thumb_textures: HashMap::new(),
@@ -815,7 +834,7 @@ impl LumaPrintApp {
             show_template_builder_modal: false,
             show_about_modal: false,
             new_preset_name: String::new(),
-            new_template_name: String::from("Kontaktbogen 2x2"),
+            new_template_name: String::from(tr!("Contact sheet 2x2")),
             new_template_rows: 2,
             new_template_cols: usize::from(2u8),
             template_studio: TemplateStudioState::default(),
@@ -918,7 +937,7 @@ impl LumaPrintApp {
     }
 
     fn draw_dock_placement_menu(&mut self, ui: &mut Ui) {
-        ui.label(RichText::new("Bilder-Pool Position").strong());
+        ui.label(RichText::new(tr!("Image pool position")).strong());
         for pos in [
             FilmstripPosition::Left,
             FilmstripPosition::RightTabbed,
@@ -932,7 +951,7 @@ impl LumaPrintApp {
             }
         }
         ui.separator();
-        ui.label(RichText::new("Bogenliste Position").strong());
+        ui.label(RichText::new(tr!("Sheet list position")).strong());
         for pos in PageListPosition::ALL {
             let is_sel = self.session.doc.page_list_position == pos;
             if ui.radio(is_sel, pos.label()).clicked() {
@@ -958,9 +977,9 @@ impl LumaPrintApp {
         let (rect, resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
         let resp = resp
             .on_hover_cursor(egui::CursorIcon::Grab)
-            .on_hover_text(
-                "Mit der Maus ziehen, um das Dock an eine andere Position zu verschieben (Rechtsklick für Menü)",
-            );
+            .on_hover_text(tr!(
+                "Drag to move the dock to another position (right-click for menu)"
+            ));
 
         let p = ui.painter();
         let fill = if is_selected {
@@ -1161,17 +1180,27 @@ impl LumaPrintApp {
                 if let Some(scale) = settings.ui_scale {
                     self.ui_scale = scale.clamp(0.5, 3.0);
                 }
+                self.language = settings
+                    .language
+                    .as_deref()
+                    .and_then(lumaprint_i18n::Language::from_code);
+                lumaprint_i18n::set_language(
+                    self.language
+                        .unwrap_or_else(lumaprint_i18n::Language::from_env),
+                );
                 self.dirty_preview = true;
             }
             SettingsLoad::Missing => {}
             SettingsLoad::Invalid { backup, reason } => {
                 self.session.status_message = match backup {
-                    Some(b) => format!(
-                        "Gespeicherte Einstellungen nicht lesbar ({reason}); gesichert als {}. Standardwerte aktiv.",
-                        b.display()
+                    Some(b) => tr!(
+                        "Saved settings are unreadable ({reason}); backed up as {backup}. Using defaults.",
+                        reason = reason,
+                        backup = b.display()
                     ),
-                    None => format!(
-                        "Gespeicherte Einstellungen nicht lesbar ({reason}). Standardwerte aktiv."
+                    None => tr!(
+                        "Saved settings are unreadable ({reason}). Using defaults.",
+                        reason = reason
                     ),
                 };
             }
@@ -1184,7 +1213,31 @@ impl LumaPrintApp {
         let mut settings = self.session.persistent_settings();
         settings.ui_theme = Some(format!("{:?}", self.theme_kind));
         settings.ui_scale = Some(self.ui_scale);
+        settings.language = self.language.map(|l| l.code().to_string());
         settings
+    }
+
+    /// Sets the UI language from the saved settings, or from the system locale when none is
+    /// saved. Call before the app (and its session) is created, so texts the engine builds at
+    /// startup are already in the right language.
+    pub fn init_language() {
+        let saved = settings_file_path()
+            .and_then(|path| match load_settings_file(&path) {
+                SettingsLoad::Loaded(settings) => settings.language,
+                _ => None,
+            })
+            .and_then(|code| lumaprint_i18n::Language::from_code(&code));
+        lumaprint_i18n::set_language(saved.unwrap_or_else(lumaprint_i18n::Language::from_env));
+    }
+
+    /// Switches the UI language (`None` = follow the system locale). Texts the UI builds every
+    /// frame switch at once; texts that were created earlier (status line, preset names) keep
+    /// their language.
+    fn set_ui_language(&mut self, language: Option<lumaprint_i18n::Language>) {
+        self.language = language;
+        lumaprint_i18n::set_language(language.unwrap_or_else(lumaprint_i18n::Language::from_env));
+        // Layout warnings are created by the layout solver; recompute them in the new language.
+        self.dirty_preview = true;
     }
 
     /// Writes the settings file when something changed; checked at most once per second unless `force`.
@@ -1201,8 +1254,7 @@ impl LumaPrintApp {
             return;
         }
         if let Err(e) = save_settings_file(&path, &current) {
-            self.session.status_message =
-                format!("Einstellungen konnten nicht gespeichert werden: {e}");
+            self.session.status_message = tr!("Could not save settings: {error}", error = e);
         }
         // Also on error, so a failing save is reported once per change instead of every second.
         self.saved_settings = Some(current);
@@ -1438,7 +1490,7 @@ impl LumaPrintApp {
             _ => {}
         }
         if let Err(e) = self.session.execute(cmd) {
-            self.session.status_message = format!("Hinweis: {e}");
+            self.session.status_message = tr!("Note: {error}", error = e);
         }
         self.dirty_preview = true;
     }
@@ -1451,6 +1503,11 @@ impl LumaPrintApp {
         let (tx, rx) = std::sync::mpsc::channel();
         self.dialog_rx = Some(rx);
         let start_dir = default_dialog_start_dir();
+        let title = tr!("Add images or folders to the image pool");
+        let images_filter = tr!("Images & folders");
+        let image_files = tr!("Image files");
+        let all_files = tr!("All files");
+        let accept = tr!("Add");
         std::thread::spawn(move || {
             let py_script = r#"
 import os, sys, ctypes
@@ -1464,15 +1521,16 @@ from PyQt6.QtWidgets import QApplication, QFileDialog, QDialog, QWidget
 
 app = QApplication(sys.argv)
 start_dir = sys.argv[1] if len(sys.argv) > 1 else "."
+title, images_filter, all_files, accept = sys.argv[2:6]
 
 # Instantiate QFileDialog directly (not subclassed and without DontUseNativeDialog)
 # so Qt6's canBeNativeDialog() stays true and loads KDEPlasmaPlatformTheme6's KFileWidget.
-dlg = QFileDialog(None, "Bilder oder Ordner zum Bilder-Pool hinzufügen", start_dir)
+dlg = QFileDialog(None, title, start_dir)
 dlg.setFileMode(QFileDialog.FileMode.ExistingFiles)
 dlg.setNameFilter(
-    "Bilder & Ordner (*.tif *.tiff *.png *.jpg *.jpeg *.webp *.bmp *.TIF *.TIFF *.PNG *.JPG *.JPEG *.WEBP *.BMP);;Alle Dateien (*)"
+    images_filter + " (*.tif *.tiff *.png *.jpg *.jpeg *.webp *.bmp *.TIF *.TIFF *.PNG *.JPG *.JPEG *.WEBP *.BMP);;" + all_files + " (*)"
 )
-dlg.setLabelText(QFileDialog.DialogLabel.Accept, "Hinzufügen")
+dlg.setLabelText(QFileDialog.DialogLabel.Accept, accept)
 
 def enable_kde_files_and_dirs():
     try:
@@ -1486,7 +1544,7 @@ def enable_kde_files_and_dirs():
                     ptr = sip.unwrapinstance(w)
                     # KFile::Files (0x4) | KFile::Directory (0x2) | KFile::ExistingOnly (0x8) = 0x0e
                     set_mode(ptr, 0x0e)
-                    dlg.setLabelText(QFileDialog.DialogLabel.Accept, "Hinzufügen")
+                    dlg.setLabelText(QFileDialog.DialogLabel.Accept, accept)
                     return
     except Exception:
         pass
@@ -1500,7 +1558,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         print(p)
 "#;
             let out = std::process::Command::new("python3")
-                .args(["-c", py_script, &start_dir])
+                .args(["-c", py_script, &start_dir, title, images_filter, all_files, accept])
                 .output()
                 .and_then(|o| {
                     if o.status.success() || o.status.code() == Some(0) {
@@ -1513,12 +1571,14 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     std::process::Command::new("kdialog")
                         .args([
                             "--title",
-                            "Bilder zum Bilder-Pool hinzufügen",
+                            title,
                             "--multiple",
                             "--separate-output",
                             "--getopenfilename",
                             &start_dir,
-                            "Bilddateien (*.tif *.tiff *.png *.jpg *.jpeg *.TIF *.TIFF *.PNG *.JPG *.JPEG)|Alle Dateien (*)",
+                            &format!(
+                                "{image_files} (*.tif *.tiff *.png *.jpg *.jpeg *.TIF *.TIFF *.PNG *.JPG *.JPEG)|{all_files} (*)"
+                            ),
                         ])
                         .output()
                 })
@@ -1528,9 +1588,11 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             "--file-selection",
                             "--multiple",
                             "--separator=\n",
-                            "--title=Bilder zum Bilder-Pool hinzufügen",
-                            "--file-filter=Bilddateien (TIFF, PNG, JPEG) | *.tif *.tiff *.TIF *.TIFF *.png *.PNG *.jpg *.jpeg *.JPG *.JPEG",
-                            "--file-filter=Alle Dateien | *",
+                            &format!("--title={title}"),
+                            &format!(
+                                "--file-filter={image_files} (TIFF, PNG, JPEG) | *.tif *.tiff *.TIF *.TIFF *.png *.PNG *.jpg *.jpeg *.JPG *.JPEG"
+                            ),
+                            &format!("--file-filter={all_files} | *"),
                         ])
                         .output()
                 });
@@ -1569,11 +1631,12 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             ExportFileFormat::Tiff16 => "16-Bit TIFF (*.tif *.tiff)|16-Bit PNG (*.png)",
             ExportFileFormat::Png16 => "16-Bit PNG (*.png)|16-Bit TIFF (*.tif *.tiff)",
         };
+        let title = tr!("Export 16-bit sheet");
         std::thread::spawn(move || {
             let out = std::process::Command::new("kdialog")
                 .args([
                     "--title",
-                    "16-Bit Druckbogen exportieren",
+                    title,
                     "--getsavefilename",
                     &default_path,
                     filter_str,
@@ -1585,7 +1648,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             "--file-selection",
                             "--save",
                             &format!("--filename={default_path}"),
-                            "--title=16-Bit Druckbogen exportieren",
+                            &format!("--title={title}"),
                         ])
                         .output()
                 });
@@ -1615,23 +1678,28 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             .find(|d| d.exists())
             .map(|d| d.to_string_lossy().into_owned())
             .unwrap_or_else(default_dialog_start_dir);
+        let title = tr!("Select ICC paper profile");
+        let icc_profiles = tr!("ICC color profiles");
+        let all_files = tr!("All files");
         std::thread::spawn(move || {
             let out = std::process::Command::new("kdialog")
                 .args([
                     "--title",
-                    "ICC-Papierprofil auswählen",
+                    title,
                     "--getopenfilename",
                     &start_dir,
-                    "ICC-Farbprofile (*.icc *.icm *.ICC *.ICM)|Alle Dateien (*)",
+                    &format!("{icc_profiles} (*.icc *.icm *.ICC *.ICM)|{all_files} (*)"),
                 ])
                 .output()
                 .or_else(|_| {
                     std::process::Command::new("zenity")
                         .args([
                             "--file-selection",
-                            "--title=ICC-Papierprofil auswählen",
-                            "--file-filter=ICC-Farbprofile (*.icc, *.icm) | *.icc *.icm *.ICC *.ICM",
-                            "--file-filter=Alle Dateien | *",
+                            &format!("--title={title}"),
+                            &format!(
+                                "--file-filter={icc_profiles} (*.icc, *.icm) | *.icc *.icm *.ICC *.ICM"
+                            ),
+                            &format!("--file-filter={all_files} | *"),
                         ])
                         .output()
                 });
@@ -1679,14 +1747,16 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         let exp_dpi = self.session.doc.export.dpi.max(72);
                         match self.session.export_print_file(&path, exp_dpi) {
                             Ok(()) => {
-                                let msg = format!(
-                                    "Druckbogen ({exp_dpi} dpi) nach '{p_str}' exportiert."
+                                let msg = tr!(
+                                    "Sheet ({dpi} dpi) exported to '{path}'.",
+                                    dpi = exp_dpi,
+                                    path = p_str
                                 );
                                 self.session.status_message = msg.clone();
                                 self.print_job_ui_state = PrintJobUiState::Success(msg);
                             }
                             Err(e) => {
-                                let err_msg = format!("Export-Fehler: {e}");
+                                let err_msg = tr!("Export error: {error}", error = e);
                                 self.session.status_message = err_msg.clone();
                                 self.print_job_ui_state = PrintJobUiState::Error(err_msg);
                             }
@@ -1711,9 +1781,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
     fn import_folder_with_guard(&mut self, folder_path: &Path) {
         let paths = scan_folder_for_images(folder_path);
         if paths.is_empty() {
-            self.session.status_message = format!(
-                "Keine unterstützten Bilddateien in '{}' gefunden.",
-                folder_path.display()
+            self.session.status_message = tr!(
+                "No supported image files found in '{folder}'.",
+                folder = folder_path.display()
             );
         } else if paths.len() > 50 {
             self.pending_folder_import = Some(paths);
@@ -1979,7 +2049,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     let err_msg = match e {
                         lumaprint_engine::EngineError::Cups(ce) => ce.to_string(),
                         lumaprint_engine::EngineError::InvalidParam(msg) => msg,
-                        other => format!("Druckfehler: {other}"),
+                        other => tr!("Print error: {error}", error = other),
                     };
                     self.session.status_message = err_msg.clone();
                     self.print_job_ui_state = PrintJobUiState::Error(err_msg);
@@ -2203,8 +2273,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         .inner_margin(egui::Margin::symmetric(14, 8))
                         .show(ui, |ui| {
                             ui.label(
-                                RichText::new(format!(
-                                    "📥 {os_hovered_count} Datei(en) ablegen: Links in den Bilder-Pool oder direkt auf den Bogen zum Platzieren"
+                                RichText::new(tr!(
+                                    "📥 Drop {count} file(s): on the image pool at the left, or directly onto the sheet to place them",
+                                    count = os_hovered_count
                                 ))
                                 .strong()
                                 .color(self.tokens.text),
@@ -2238,19 +2309,19 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     .iter()
                     .find(|i| i.id == id)
                     .map(|i| i.display_name.as_str())
-                    .unwrap_or("Bild");
-                format!("🖼 {name} → Auf Bogen oder Bildstelle ziehen")
+                    .unwrap_or(tr!("Image"));
+                tr!("🖼 {name} → drag onto the sheet or a slot", name = name)
             }
             DragPayload::PageSlot {
                 page_index,
                 slot_index,
                 ..
-            } => format!(
-                "🔄 Bogen {} · Slot {} (auf anderen Slot oder zurück in den Pool ziehen)",
-                page_index + 1,
-                slot_index + 1
+            } => tr!(
+                "🔄 Sheet {page} · slot {slot} (drag onto another slot or back into the pool)",
+                page = page_index + 1,
+                slot = slot_index + 1
             ),
-            DragPayload::ReorderPage(pi) => format!("📄 Bogen {} verschieben", pi + 1),
+            DragPayload::ReorderPage(pi) => tr!("📄 Move sheet {page}", page = pi + 1),
             DragPayload::DockPanel(_) => String::new(),
         };
         egui::Area::new(egui::Id::new("lumaprint_dnd_floating_badge"))
@@ -2280,22 +2351,25 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             .show(ctx, |ui| {
                 // A: Main Menu Bar: Datei | Ansicht | Bearbeiten | Einstellungen | Hilfe
                 egui::menu::bar(ui, |ui| {
-                    ui.menu_button("Datei", |ui| {
-                        if ui.button("➕ Hinzufügen (Bilder / Ordner)…").clicked() {
+                    ui.menu_button(tr!("File"), |ui| {
+                        if ui.button(tr!("➕ Add (images / folders)…")).clicked() {
                             self.open_native_add_picker();
                             ui.close_menu();
                         }
-                        if ui.button("💾 16-Bit Druckbogen exportieren…").clicked() {
+                        if ui.button(tr!("💾 Export 16-bit sheet…")).clicked() {
                             self.open_native_export_picker();
                             ui.close_menu();
                         }
                         ui.separator();
-                        if ui.button("🧪 Testbilder in Pool laden").clicked() {
+                        if ui
+                            .button(tr!("🧪 Load test images into the pool"))
+                            .clicked()
+                        {
                             self.exec(EngineCommand::AddDemoImages);
                             ui.close_menu();
                         }
                         if ui
-                            .button("🪄 Pool-Bilder auf Bögen verteilen")
+                            .button(tr!("🪄 Distribute pool images onto sheets"))
                             .clicked()
                         {
                             self.exec(EngineCommand::AutoDistributePoolImages {
@@ -2305,7 +2379,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
                         ui.separator();
                         if ui
-                            .button("Einstellungen Initialisieren (Auf Werkseinstellungen zurücksetzen)")
+                            .button(tr!("Reset settings (restore factory defaults)"))
                             .clicked()
                         {
                             self.exec(EngineCommand::ResetToDefaults);
@@ -2313,13 +2387,13 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
                     });
 
-                    ui.menu_button("Ansicht", |ui| {
+                    ui.menu_button(tr!("View"), |ui| {
                         let view_mode = self.session.doc.canvas_view_mode;
                         let page_cnt = self.session.doc.page_count();
                         if ui
                             .radio(
                                 view_mode == CanvasViewMode::SinglePage,
-                                "▢ Einzelbogen-Ansicht  (Ctrl+1)",
+                                tr!("▢ Single sheet view  (Ctrl+1)"),
                             )
                             .clicked()
                         {
@@ -2329,7 +2403,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         if ui
                             .radio(
                                 view_mode == CanvasViewMode::AllPagesOverview,
-                                format!("⊞ Alle Bögen Übersicht ({page_cnt})  (Ctrl+2)"),
+                                tr!(
+                                    "⊞ All sheets overview ({count})  (Ctrl+2)",
+                                    count = page_cnt
+                                ),
                             )
                             .clicked()
                         {
@@ -2346,7 +2423,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         let mut show_left = !self.session.doc.left_dock_collapsed
                             && self.session.doc.filmstrip_position != FilmstripPosition::Hidden;
                         if ui
-                            .checkbox(&mut show_left, "Zeige Linkes Dock / Pool  (F9)")
+                            .checkbox(&mut show_left, tr!("Show left dock / pool  (F9)"))
                             .changed()
                         {
                             if show_left {
@@ -2363,7 +2440,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         let mut show_right = self.session.doc.show_settings_panel
                             && !self.session.doc.right_dock_collapsed;
                         if ui
-                            .checkbox(&mut show_right, "Zeige Druck-Einstellungen  (F10)")
+                            .checkbox(&mut show_right, tr!("Show print settings  (F10)"))
                             .changed()
                         {
                             self.session.doc.show_settings_panel = show_right;
@@ -2371,31 +2448,31 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
                         let mut show_bottom = !self.session.doc.bottom_dock_collapsed;
                         if ui
-                            .checkbox(&mut show_bottom, "Zeige Unteres Dock / Bogenliste  (F8)")
+                            .checkbox(&mut show_bottom, tr!("Show bottom dock / sheet list  (F8)"))
                             .changed()
                         {
                             self.session.doc.bottom_dock_collapsed = !show_bottom;
                         }
 
-                        ui.menu_button("◫ Docks platzieren", |ui| {
+                        ui.menu_button(tr!("◫ Arrange docks"), |ui| {
                             self.draw_dock_placement_menu(ui);
                         });
 
                         ui.separator();
                         let _ = ui.checkbox(
                             &mut self.session.doc.show_slot_guides,
-                            "Zeige Rahmen um Slots (gestrichelte Linie)  (Ctrl+G)",
+                            tr!("Show slot frames (dashed line)  (Ctrl+G)"),
                         );
                         let _ = ui.checkbox(
                             &mut self.session.doc.show_rulers,
-                            "Zeige Lineal  (Ctrl+R)",
+                            tr!("Show rulers  (Ctrl+R)"),
                         );
 
                         ui.separator();
                         let mut sp = self.session.doc.color.softproof;
                         let mut sp_changed = false;
                         if ui
-                            .checkbox(&mut sp.enabled, "👁 Softproof aktivieren  (Ctrl+Shift+S)")
+                            .checkbox(&mut sp.enabled, tr!("👁 Enable soft proof  (Ctrl+Shift+S)"))
                             .changed()
                         {
                             sp_changed = true;
@@ -2405,7 +2482,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 sp.enabled,
                                 egui::Checkbox::new(
                                     &mut sp.simulate_paper_white,
-                                    "Papierweiß simulieren  (Ctrl+Shift+W)",
+                                    tr!("Simulate paper white  (Ctrl+Shift+W)"),
                                 ),
                             )
                             .changed()
@@ -2415,7 +2492,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         if ui
                             .checkbox(
                                 &mut sp.gamut_warning,
-                                "⚠ Gamut-Warnung anzeigen  (Ctrl+Shift+G)",
+                                tr!("⚠ Show gamut warning  (Ctrl+Shift+G)"),
                             )
                             .changed()
                         {
@@ -2429,25 +2506,25 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         ui.label(
                             RichText::new(format!("Zoom ({:.0} %)", self.zoom * 100.0)).strong(),
                         );
-                        if ui.button("🔍+ Zoom vergrößern  (Ctrl++)").clicked() {
+                        if ui.button(tr!("🔍+ Zoom in  (Ctrl++)")).clicked() {
                             self.zoom = (self.zoom + 0.15).min(2.5);
                             ui.close_menu();
                         }
-                        if ui.button("🔍− Zoom verkleinern  (Ctrl+-)").clicked() {
+                        if ui.button(tr!("🔍− Zoom out  (Ctrl+-)")).clicked() {
                             self.zoom = (self.zoom - 0.15).max(0.4);
                             ui.close_menu();
                         }
-                        if ui.button("🔍 Zoom 100 % zurücksetzen  (Ctrl+0)").clicked() {
+                        if ui.button(tr!("🔍 Reset zoom to 100 %  (Ctrl+0)")).clicked() {
                             self.zoom = 1.0;
                             ui.close_menu();
                         }
                     });
 
-                    ui.menu_button("Bearbeiten", |ui| {
+                    ui.menu_button(tr!("Edit"), |ui| {
                         if ui
                             .add_enabled(
                                 self.session.can_undo(),
-                                egui::Button::new("Rückgängig (Ctrl+Z)"),
+                                egui::Button::new(tr!("Undo (Ctrl+Z)")),
                             )
                             .clicked()
                         {
@@ -2457,7 +2534,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         if ui
                             .add_enabled(
                                 self.session.can_redo(),
-                                egui::Button::new("Wiederholen (Ctrl+Y)"),
+                                egui::Button::new(tr!("Redo (Ctrl+Y)")),
                             )
                             .clicked()
                         {
@@ -2465,29 +2542,29 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             ui.close_menu();
                         }
                         ui.separator();
-                        if ui.button("+ Neuer leerer Bogen").clicked() {
+                        if ui.button(tr!("+ New empty sheet")).clicked() {
                             self.exec(EngineCommand::AddPage {
                                 initial_image_id: None,
                             });
                             ui.close_menu();
                         }
-                        if ui.button("⧉ Aktuellen Bogen duplizieren").clicked() {
+                        if ui.button(tr!("⧉ Duplicate current sheet")).clicked() {
                             let pi = self.session.doc.active_page_index;
                             self.exec(EngineCommand::DuplicatePage { page_index: pi });
                             ui.close_menu();
                         }
-                        if ui.button("🧹 Aktuellen Bogen leeren").clicked() {
+                        if ui.button(tr!("🧹 Clear current sheet")).clicked() {
                             let pi = self.session.doc.active_page_index;
                             self.exec(EngineCommand::ClearPageSlots { page_index: pi });
                             ui.close_menu();
                         }
                     });
 
-                    ui.menu_button("Einstellungen", |ui| {
+                    ui.menu_button(tr!("Settings"), |ui| {
                         ui.spacing_mut().item_spacing = Vec2::new(8.0, 5.0);
-                        ui.menu_button("Darstellung", |ui| {
+                        ui.menu_button(tr!("Appearance"), |ui| {
                             ui.spacing_mut().item_spacing = Vec2::new(8.0, 5.0);
-                            ui.label(RichText::new("Oberflächen-Theme").strong());
+                            ui.label(RichText::new(tr!("UI theme")).strong());
                             for tk in ThemeKind::ALL {
                                 if ui.radio(self.theme_kind == tk, tk.label()).clicked() {
                                     self.theme_kind = tk;
@@ -2496,17 +2573,18 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             }
                             ui.separator();
                             ui.label(
-                                RichText::new(format!(
-                                    "Schrift & Skalierung (KDE: {} {:.0} pt)",
-                                    self.kde_typography.family_name, self.kde_typography.point_size
+                                RichText::new(tr!(
+                                    "Font & scaling (KDE: {font} {size} pt)",
+                                    font = self.kde_typography.family_name,
+                                    size = format!("{:.0}", self.kde_typography.point_size)
                                 ))
                                 .strong(),
                             );
                             for (scale, lbl) in [
-                                (0.90_f32, "90 % (Kompakt)"),
-                                (1.00_f32, "100 % (KDE-Standard)"),
-                                (1.10_f32, "110 % (Größer)"),
-                                (1.25_f32, "125 % (Groß)"),
+                                (0.90_f32, tr!("90 % (compact)")),
+                                (1.00_f32, tr!("100 % (KDE default)")),
+                                (1.10_f32, tr!("110 % (larger)")),
+                                (1.25_f32, tr!("125 % (large)")),
                             ] {
                                 if ui
                                     .radio((self.ui_scale - scale).abs() < 0.02, lbl)
@@ -2517,20 +2595,40 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 }
                             }
                         });
+                        ui.menu_button(tr!("Language"), |ui| {
+                            ui.spacing_mut().item_spacing = Vec2::new(8.0, 5.0);
+                            let current = lumaprint_i18n::language();
+                            if ui
+                                .radio(self.language.is_none(), tr!("System default"))
+                                .clicked()
+                            {
+                                self.set_ui_language(None);
+                                ui.close_menu();
+                            }
+                            for lang in lumaprint_i18n::Language::ALL {
+                                if ui
+                                    .radio(self.language.is_some() && current == lang, lang.label())
+                                    .clicked()
+                                {
+                                    self.set_ui_language(Some(lang));
+                                    ui.close_menu();
+                                }
+                            }
+                        });
                         ui.separator();
-                        ui.menu_button("Docks platzieren", |ui| {
+                        ui.menu_button(tr!("Arrange docks"), |ui| {
                             ui.spacing_mut().item_spacing = Vec2::new(8.0, 5.0);
                             self.draw_dock_placement_menu(ui);
                         });
                         ui.separator();
-                        ui.label(RichText::new("Maßeinheit").strong());
+                        ui.label(RichText::new(tr!("Unit of measurement")).strong());
                         for unit in [DisplayUnit::Mm, DisplayUnit::Inch] {
                             if ui
                                 .radio(
                                     self.session.doc.display_unit == unit,
                                     match unit {
-                                        DisplayUnit::Mm => "Millimeter (mm)",
-                                        DisplayUnit::Inch => "Zoll (inch)",
+                                        DisplayUnit::Mm => tr!("Millimeters (mm)"),
+                                        DisplayUnit::Inch => tr!("Inches (inch)"),
                                     },
                                 )
                                 .clicked()
@@ -2540,13 +2638,13 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             }
                         }
                         ui.separator();
-                        ui.label(RichText::new("Arbeitsbereich-Hintergrundfarbe").strong());
+                        ui.label(RichText::new(tr!("Workspace background color")).strong());
                         for tone in CanvasBackdropTone::ALL {
                             let lbl = match tone {
-                                CanvasBackdropTone::DarkGray => "Dunkelgrau (Standard)",
-                                CanvasBackdropTone::MediumGray => "Mittelgrau",
-                                CanvasBackdropTone::LightGray => "Hellgrau",
-                                CanvasBackdropTone::White => "Weiß",
+                                CanvasBackdropTone::DarkGray => tr!("Dark gray (default)"),
+                                CanvasBackdropTone::MediumGray => tr!("Medium gray"),
+                                CanvasBackdropTone::LightGray => tr!("Light gray"),
+                                CanvasBackdropTone::White => tr!("White"),
                             };
                             if ui
                                 .radio(self.session.doc.canvas_backdrop == tone, lbl)
@@ -2558,7 +2656,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
                         ui.separator();
                         ui.label(
-                            RichText::new("Monitor-Farbmanagement (Wayland / KWin)").strong(),
+                            RichText::new(tr!("Monitor color management (Wayland / KWin)"))
+                                .strong(),
                         );
                         let cur_disp = self.session.doc.color.display_color_space;
                         for dm in DisplayColorSpaceMode::ALL {
@@ -2573,32 +2672,34 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             let wl_status = wayland_color_management_status();
                             let (badge_text, badge_col) = if wl_status.protocol_supported {
                                 let mon_str = match wl_status.monitor_detected_gamut {
-                                    WaylandDetectedGamut::AdobeRgb => "Adobe RGB Monitor erkannt",
-                                    WaylandDetectedGamut::DisplayP3 => {
-                                        "Wide-Gamut (Display P3) erkannt"
+                                    WaylandDetectedGamut::AdobeRgb => {
+                                        tr!("Adobe RGB monitor detected")
                                     }
-                                    WaylandDetectedGamut::Srgb => "Standard sRGB erkannt",
-                                    WaylandDetectedGamut::Unknown => "wp_color_manager_v1 aktiv",
+                                    WaylandDetectedGamut::DisplayP3 => {
+                                        tr!("Wide gamut (Display P3) detected")
+                                    }
+                                    WaylandDetectedGamut::Srgb => tr!("Standard sRGB detected"),
+                                    WaylandDetectedGamut::Unknown => {
+                                        tr!("wp_color_manager_v1 active")
+                                    }
                                 };
                                 let icc_str = if wl_status.monitor_has_icc_profile {
                                     " + ICC"
                                 } else {
                                     ""
                                 };
-                                let active_str = self.session.doc.color.resolved_display_space.name();
-                                (
-                                    format!("✓ {mon_str}{icc_str} → {active_str}"),
-                                    t.success,
-                                )
+                                let active_str =
+                                    self.session.doc.color.resolved_display_space.name();
+                                (format!("✓ {mon_str}{icc_str} → {active_str}"), t.success)
                             } else {
-                                (String::from("sRGB (Standard-Oberfläche)"), t.text_dim)
+                                (String::from(tr!("sRGB (standard surface)")), t.text_dim)
                             };
                             ui.label(RichText::new(badge_text).small().color(badge_col));
                         }
                     });
 
-                    ui.menu_button("Hilfe", |ui| {
-                        if ui.button("ℹ Über LumaPrint…").clicked() {
+                    ui.menu_button(tr!("Help"), |ui| {
+                        if ui.button(tr!("ℹ About LumaPrint…")).clicked() {
                             self.show_about_modal = true;
                             ui.close_menu();
                         }
@@ -2612,13 +2713,13 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 // B: Strictly Global Toolbar (Undo/Redo with vector icons, View Mode, Slot Frame Icon, Global Softproof/Gamut)
                 ui.horizontal_wrapped(|ui| {
                     if draw_undo_redo_button(ui, &t, true, self.session.can_undo())
-                        .on_hover_text("Rückgängig (Ctrl+Z)")
+                        .on_hover_text(tr!("Undo (Ctrl+Z)"))
                         .clicked()
                     {
                         self.exec(EngineCommand::Undo);
                     }
                     if draw_undo_redo_button(ui, &t, false, self.session.can_redo())
-                        .on_hover_text("Wiederholen (Ctrl+Y)")
+                        .on_hover_text(tr!("Redo (Ctrl+Y)"))
                         .clicked()
                     {
                         self.exec(EngineCommand::Redo);
@@ -2632,9 +2733,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     if ui
                         .selectable_label(
                             view_mode == CanvasViewMode::SinglePage,
-                            "▢ Einzelbogen",
+                            tr!("▢ Single sheet"),
                         )
-                        .on_hover_text("Detailansicht des aktiven Bogens (Ctrl+1)")
+                        .on_hover_text(tr!("Detail view of the active sheet (Ctrl+1)"))
                         .clicked()
                     {
                         self.exec(EngineCommand::SetCanvasViewMode(CanvasViewMode::SinglePage));
@@ -2642,9 +2743,11 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     if ui
                         .selectable_label(
                             view_mode == CanvasViewMode::AllPagesOverview,
-                            format!("⊞ Alle Bögen ({page_cnt})"),
+                            tr!("⊞ All sheets ({count})", count = page_cnt),
                         )
-                        .on_hover_text("Leuchtpult-Übersicht aller Druckbögen nebeneinander (Ctrl+2)")
+                        .on_hover_text(tr!(
+                            "Light-table overview of all sheets side by side (Ctrl+2)"
+                        ))
                         .clicked()
                     {
                         self.exec(EngineCommand::SetCanvasViewMode(
@@ -2653,13 +2756,13 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     }
 
                     if draw_slot_guides_toolbar_button(ui, &t, self.session.doc.show_slot_guides)
-                        .on_hover_text("Zeige Rahmen um Slots (gestrichelte Linie) (Ctrl+G)")
+                        .on_hover_text(tr!("Show slot frames (dashed line) (Ctrl+G)"))
                         .clicked()
                     {
                         self.session.doc.show_slot_guides = !self.session.doc.show_slot_guides;
                     }
                     if draw_rulers_toolbar_button(ui, &t, self.session.doc.show_rulers)
-                        .on_hover_text("Zeige Lineal (Ctrl+R)")
+                        .on_hover_text(tr!("Show rulers (Ctrl+R)"))
                         .clicked()
                     {
                         self.session.doc.show_rulers = !self.session.doc.show_rulers;
@@ -2671,8 +2774,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     let mut sp = self.session.doc.color.softproof;
                     let mut sp_changed = false;
                     if ui
-                        .selectable_label(sp.enabled, "👁 Softproof")
-                        .on_hover_text("Simuliert das gewählte Papier-ICC-Profil auf dem Bildschirm (Ctrl+Shift+S)")
+                        .selectable_label(sp.enabled, tr!("👁 Soft proof"))
+                        .on_hover_text(tr!(
+                            "Simulates the selected paper ICC profile on screen (Ctrl+Shift+S)"
+                        ))
                         .clicked()
                     {
                         sp.enabled = !sp.enabled;
@@ -2680,8 +2785,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     }
                     if sp.enabled {
                         if ui
-                            .checkbox(&mut sp.simulate_paper_white, "Papierweiß")
-                            .on_hover_text("Papierweiß simulieren (Ctrl+Shift+W)")
+                            .checkbox(&mut sp.simulate_paper_white, tr!("Paper white"))
+                            .on_hover_text(tr!("Simulate paper white (Ctrl+Shift+W)"))
                             .changed()
                         {
                             sp_changed = true;
@@ -2701,8 +2806,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             });
                     }
                     if ui
-                        .selectable_label(sp.gamut_warning, "⚠ Gamut-Warnung")
-                        .on_hover_text("Markiert nicht druckbare Farben farbig (Ctrl+Shift+G)")
+                        .selectable_label(sp.gamut_warning, tr!("⚠ Gamut warning"))
+                        .on_hover_text(tr!(
+                            "Highlights colors that cannot be printed (Ctrl+Shift+G)"
+                        ))
                         .clicked()
                     {
                         sp.gamut_warning = !sp.gamut_warning;
@@ -2719,10 +2826,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         let t = self.tokens;
         if self.session.doc.left_dock_collapsed {
             let tip = match (has_left_pool, has_left_pages) {
-                (true, true) => "Linkes Dock ausklappen: Bilder-Pool & Bogenliste (F9)",
-                (true, false) => "Bilder-Pool links ausklappen (F9)",
-                (false, true) => "Bogenliste links ausklappen (F9)",
-                (false, false) => "Linkes Dock ausklappen (F9)",
+                (true, true) => tr!("Expand left dock: image pool & sheet list (F9)"),
+                (true, false) => tr!("Expand image pool at the left (F9)"),
+                (false, true) => tr!("Expand sheet list at the left (F9)"),
+                (false, false) => tr!("Expand left dock (F9)"),
             };
             let badge = match (has_left_pool, has_left_pages) {
                 (true, true) => "▶\n\n🖼\n\n📄",
@@ -2807,7 +2914,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     ui.spacing_mut().item_spacing.x = 0.0;
                     if has_left_pool && has_left_pages {
                         let pool_lbl = format!("🖼 Pool ({})", self.session.doc.images.len());
-                        let pages_lbl = format!("📄 Bögen ({})", self.session.doc.page_count());
+                        let pages_lbl =
+                            tr!("📄 Sheets ({count})", count = self.session.doc.page_count());
                         let tab_w = measure_tab_width(ui, &pool_lbl)
                             .max(measure_tab_width(ui, &pages_lbl))
                             .min((tabs_max_w * 0.5).floor());
@@ -2830,11 +2938,17 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             self.left_dock_tab = SharedDockTab::PageList;
                         }
                     } else if has_left_pool {
-                        let lbl = format!("🖼 Bilder-Pool ({})", self.session.doc.images.len());
+                        let lbl = tr!(
+                            "🖼 Image pool ({count})",
+                            count = self.session.doc.images.len()
+                        );
                         let tab_w = measure_tab_width(ui, &lbl).min(tabs_max_w);
                         let _ = self.draggable_dock_tab(ui, DockDragItem::Pool, lbl, true, tab_w);
                     } else {
-                        let lbl = format!("📄 Bogenliste ({})", self.session.doc.page_count());
+                        let lbl = tr!(
+                            "📄 Sheet list ({count})",
+                            count = self.session.doc.page_count()
+                        );
                         let tab_w = measure_tab_width(ui, &lbl).min(tabs_max_w);
                         let _ =
                             self.draggable_dock_tab(ui, DockDragItem::PageList, lbl, true, tab_w);
@@ -2847,7 +2961,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 egui::Button::new(RichText::new("◀").color(t.text_dim))
                                     .frame(false),
                             )
-                            .on_hover_text("Linkes Dock einklappen (F9)")
+                            .on_hover_text(tr!("Collapse left dock (F9)"))
                             .clicked()
                         {
                             self.session.doc.left_dock_collapsed = true;
@@ -2895,10 +3009,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
         if self.session.doc.bottom_dock_collapsed {
             let label = match (has_pages, has_pool) {
-                (true, true) => "▲  Bogenliste & Bilder-Pool ausklappen (F8)",
-                (true, false) => "▲  Bogenliste ausklappen (F8)",
-                (false, true) => "▲  Bilder-Pool ausklappen (F8)",
-                (false, false) => "▲  Ausklappen (F8)",
+                (true, true) => tr!("▲  Expand sheet list & image pool (F8)"),
+                (true, false) => tr!("▲  Expand sheet list (F8)"),
+                (false, true) => tr!("▲  Expand image pool (F8)"),
+                (false, false) => tr!("▲  Expand (F8)"),
             };
             let fill_col = t.dock;
             let collapsed_id = if is_in_canvas {
@@ -3011,8 +3125,14 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         let tab_row_resp = ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
             if has_pages && has_pool {
-                let pages_lbl = format!("📄 Bogenliste ({})", self.session.doc.page_count());
-                let pool_lbl = format!("🖼 Bilder-Pool ({})", self.session.doc.images.len());
+                let pages_lbl = tr!(
+                    "📄 Sheet list ({count})",
+                    count = self.session.doc.page_count()
+                );
+                let pool_lbl = tr!(
+                    "🖼 Image pool ({count})",
+                    count = self.session.doc.images.len()
+                );
                 let tab_w = measure_tab_width(ui, &pages_lbl)
                     .max(measure_tab_width(ui, &pool_lbl))
                     .min((tabs_max_w * 0.5).floor());
@@ -3035,11 +3155,17 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     self.bottom_dock_tab = SharedDockTab::Pool;
                 }
             } else if has_pages {
-                let lbl = format!("📄 Bogenliste ({})", self.session.doc.page_count());
+                let lbl = tr!(
+                    "📄 Sheet list ({count})",
+                    count = self.session.doc.page_count()
+                );
                 let tab_w = measure_tab_width(ui, &lbl).min(tabs_max_w);
                 let _ = self.draggable_dock_tab(ui, DockDragItem::PageList, lbl, true, tab_w);
             } else {
-                let lbl = format!("🖼 Bilder-Pool ({})", self.session.doc.images.len());
+                let lbl = tr!(
+                    "🖼 Image pool ({count})",
+                    count = self.session.doc.images.len()
+                );
                 let tab_w = measure_tab_width(ui, &lbl).min(tabs_max_w);
                 let _ = self.draggable_dock_tab(ui, DockDragItem::Pool, lbl, true, tab_w);
             }
@@ -3050,7 +3176,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         [collapse_w, 28.0],
                         egui::Button::new(RichText::new("▼").color(t.text_dim)).frame(false),
                     )
-                    .on_hover_text("Unteres Dock einklappen (F8)")
+                    .on_hover_text(tr!("Collapse bottom dock (F8)"))
                     .clicked()
                 {
                     self.session.doc.bottom_dock_collapsed = true;
@@ -3079,18 +3205,18 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         if is_horizontal {
             ui.horizontal(|ui| {
                 if ui
-                    .small_button("➕ Hinzufügen")
+                    .small_button(tr!("➕ Add"))
                     .on_hover_text(
-                        "Bilder oder Ordner auswählen und zum Bilder-Pool hinzufügen (oder per Drag&Drop hereinziehen)",
+                        tr!("Choose images or folders to add to the image pool (or drag and drop them here)"),
                     )
                     .clicked()
                 {
                     self.open_native_add_picker();
                 }
                 if ui
-                    .small_button("🪄 Auf Bögen verteilen")
+                    .small_button(tr!("🪄 Distribute onto sheets"))
                     .on_hover_text(
-                        "Verteilt Bilder aus dem Pool automatisch auf freie Bildstellen und legt bei Bedarf neue Bögen an",
+                        tr!("Automatically distributes pool images onto free slots and adds new sheets when needed"),
                     )
                     .clicked()
                 {
@@ -3100,7 +3226,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 }
                 ui.checkbox(
                     &mut self.session.doc.pool_filter_unassigned_only,
-                    "Nur unplatzierte zeigen",
+                    tr!("Show unplaced only"),
                 );
             });
             ui.add_space(2.0);
@@ -3108,9 +3234,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             // Single "Hinzufügen" button (images and folders allowed) + "Auf Bögen verteilen"
             ui.horizontal(|ui| {
                 if ui
-                    .button("➕ Hinzufügen")
+                    .button(tr!("➕ Add"))
                     .on_hover_text(
-                        "Bilder oder Ordner auswählen und zum Bilder-Pool hinzufügen (oder per Drag&Drop hereinziehen)",
+                        tr!("Choose images or folders to add to the image pool (or drag and drop them here)"),
                     )
                     .clicked()
                 {
@@ -3118,9 +3244,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 }
 
                 if ui
-                    .button("🪄 Auf Bögen verteilen")
+                    .button(tr!("🪄 Distribute onto sheets"))
                     .on_hover_text(
-                        "Verteilt Bilder aus dem Pool automatisch auf freie Bildstellen und legt bei Bedarf neue Bögen an",
+                        tr!("Automatically distributes pool images onto free slots and adds new sheets when needed"),
                     )
                     .clicked()
                 {
@@ -3133,7 +3259,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             ui.add_space(2.0);
             ui.checkbox(
                 &mut self.session.doc.pool_filter_unassigned_only,
-                "Nur unplatzierte zeigen",
+                tr!("Show unplaced only"),
             );
 
             ui.add_space(4.0);
@@ -3287,9 +3413,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         let t = self.tokens;
         let row_resp = row_resp
             .on_hover_cursor(egui::CursorIcon::Grab)
-            .on_hover_text(
-                "In den Bogen oder auf eine Bildstelle ziehen (Doppelklick zum Platzieren, Rechtsklick für Aktionen)",
-            );
+            .on_hover_text(tr!(
+                "Drag onto the sheet or a slot (double-click to place, right-click for actions)"
+            ));
 
         let bg_fill = if is_sel {
             t.accent.gamma_multiply(0.20)
@@ -3352,19 +3478,21 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         painter.text(
             Pos2::new(text_x, text_top + 16.0),
             egui::Align2::LEFT_TOP,
-            format!(
-                "{}×{} · {}-Bit",
-                img.meta.width, img.meta.height, img.meta.bit_depth_per_channel
+            tr!(
+                "{width}×{height} · {bits}-bit",
+                width = img.meta.width,
+                height = img.meta.height,
+                bits = img.meta.bit_depth_per_channel
             ),
             FontId::proportional(10.5),
             t.text_dim,
         );
 
         let (badge_txt, badge_col) = if usage_count == 0 {
-            (String::from("○ Nicht platziert"), t.text_faint)
+            (String::from(tr!("○ Not placed")), t.text_faint)
         } else if usage_count == 1 {
             (
-                format!("● Platziert ({usage_pages})"),
+                tr!("● Placed ({pages})", pages = usage_pages),
                 Color32::from_rgb(80, 210, 130),
             )
         } else {
@@ -3402,10 +3530,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             let active_page = self.session.doc.active_page_index;
             let active_slot = self.session.doc.active_slot_index;
             if ui
-                .button(format!(
-                    "📥 Auf Bogen {} · Slot {} legen",
-                    active_page + 1,
-                    active_slot + 1
+                .button(tr!(
+                    "📥 Put on sheet {page} · slot {slot}",
+                    page = active_page + 1,
+                    slot = active_slot + 1
                 ))
                 .clicked()
             {
@@ -3416,31 +3544,31 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 });
                 ui.close_menu();
             }
-            if ui.button("📄 Auf neuen Bogen legen").clicked() {
+            if ui.button(tr!("📄 Put on a new sheet")).clicked() {
                 *pending_cmd = Some(EngineCommand::AddPage {
                     initial_image_id: Some(img.id),
                 });
                 ui.close_menu();
             }
             ui.separator();
-            if ui.button("✂ Bildbeschnitt…").clicked() {
+            if ui.button(tr!("✂ Crop image…")).clicked() {
                 *open_crop_for_idx = Some(idx);
                 ui.close_menu();
             }
-            if ui.button("↻ 90° rechts drehen").clicked() {
+            if ui.button(tr!("↻ Rotate 90° right")).clicked() {
                 self.rotate_image_by(img.id, 90);
                 ui.close_menu();
             }
-            if ui.button("↔ Horizontal spiegeln").clicked() {
+            if ui.button(tr!("↔ Flip horizontally")).clicked() {
                 self.toggle_flip_horizontal(img.id);
                 ui.close_menu();
             }
-            if ui.button("↕ Vertikal spiegeln").clicked() {
+            if ui.button(tr!("↕ Flip vertically")).clicked() {
                 self.toggle_flip_vertical(img.id);
                 ui.close_menu();
             }
             ui.separator();
-            if ui.button("🗑 Aus Bilder-Pool entfernen").clicked() {
+            if ui.button(tr!("🗑 Remove from image pool")).clicked() {
                 *pending_cmd = Some(EngineCommand::RemoveImage { image_id: img.id });
                 ui.close_menu();
             }
@@ -3557,7 +3685,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             let is_flip_v = active_crop.is_some_and(|c| c.flip_vertical);
 
             if draw_frameless_canvas_icon(ui, &t, CanvasActionIcon::FitSlot, enabled, is_fit)
-                .on_hover_text("Bild einpassen (Alles sichtbar im Slot, Standard)")
+                .on_hover_text(tr!("Fit image (entire image visible in the slot, default)"))
                 .clicked()
             {
                 if let Some((_, img_id)) = target_slot_and_img {
@@ -3566,7 +3694,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             }
 
             if draw_frameless_canvas_icon(ui, &t, CanvasActionIcon::FillSlot, enabled, is_fill)
-                .on_hover_text("Fläche ausfüllen (Slot vollständig füllen)")
+                .on_hover_text(tr!("Fill area (fill the slot completely)"))
                 .clicked()
             {
                 if let Some((_, img_id)) = target_slot_and_img {
@@ -3577,7 +3705,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             ui.separator();
 
             if draw_frameless_canvas_icon(ui, &t, CanvasActionIcon::Crop, enabled, false)
-                .on_hover_text("Bildbeschnitt…")
+                .on_hover_text(tr!("Crop image…"))
                 .clicked()
             {
                 if let Some((_, img_id)) = target_slot_and_img {
@@ -3589,7 +3717,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             }
 
             if draw_frameless_canvas_icon(ui, &t, CanvasActionIcon::RotateLeft, enabled, false)
-                .on_hover_text("90° links drehen (-90°)")
+                .on_hover_text(tr!("Rotate 90° left (-90°)"))
                 .clicked()
             {
                 if let Some((_, img_id)) = target_slot_and_img {
@@ -3598,7 +3726,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             }
 
             if draw_frameless_canvas_icon(ui, &t, CanvasActionIcon::RotateRight, enabled, false)
-                .on_hover_text("90° rechts drehen (+90°)")
+                .on_hover_text(tr!("Rotate 90° right (+90°)"))
                 .clicked()
             {
                 if let Some((_, img_id)) = target_slot_and_img {
@@ -3613,7 +3741,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 enabled,
                 is_flip_h,
             )
-            .on_hover_text("Horizontal spiegeln")
+            .on_hover_text(tr!("Flip horizontally"))
             .clicked()
             {
                 if let Some((_, img_id)) = target_slot_and_img {
@@ -3628,7 +3756,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 enabled,
                 is_flip_v,
             )
-            .on_hover_text("Vertikal spiegeln")
+            .on_hover_text(tr!("Flip vertically"))
             .clicked()
             {
                 if let Some((_, img_id)) = target_slot_and_img {
@@ -3639,7 +3767,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             ui.separator();
 
             if draw_frameless_canvas_icon(ui, &t, CanvasActionIcon::RemoveFromSlot, enabled, false)
-                .on_hover_text("Bild von dieser Bildstelle entfernen (bleibt im Pool)")
+                .on_hover_text(tr!("Remove image from this slot (stays in the pool)"))
                 .clicked()
             {
                 if let Some((slot_idx, _)) = target_slot_and_img {
@@ -3652,14 +3780,21 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             }
 
             // Right side: display any active layout warning (e.g. low PPI) subtly without needing a footer
-            if let Some(first_warn) = self
-                .cached_solved
-                .as_ref()
-                .and_then(|s| s.warnings.first())
-                .cloned()
-            {
+            if let Some((first_warn, is_error)) = self.cached_solved.as_ref().and_then(|s| {
+                // The only blocking layout error: a gallery wrap that does not fit the paper
+                // (checked on the state, not on the warning text).
+                let is_error = match &self.session.doc.layout {
+                    LayoutMode::GalleryWrap(gw) => {
+                        let req = gw.required_paper_size_mm();
+                        s.paper_size_mm.width_mm + 0.1 < req.width_mm
+                            || s.paper_size_mm.height_mm + 0.1 < req.height_mm
+                    }
+                    _ => false,
+                };
+                s.warnings.first().cloned().map(|w| (w, is_error))
+            }) {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let col = if first_warn.starts_with("FEHLER") {
+                    let col = if is_error {
                         Color32::from_rgb(255, 95, 95)
                     } else {
                         Color32::from_rgb(255, 200, 80)
@@ -3778,7 +3913,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             painter.text(
                 ts_rect.left_top() + Vec2::new(4.0, 2.0),
                 egui::Align2::LEFT_TOP,
-                "1:1 PROBESTREIFEN",
+                tr!("1:1 TEST STRIP"),
                 FontId::proportional(11.0),
                 Color32::from_rgb(50, 230, 110),
             );
@@ -3832,7 +3967,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 p.text(
                                     card_rect.center(),
                                     egui::Align2::CENTER_CENTER,
-                                    "+ Neuer Bogen\n(Klicken oder Bild hierher ziehen)",
+                                    tr!("+ New sheet\n(click or drag an image here)"),
                                     FontId::proportional(13.0),
                                     t.text_dim,
                                 );
@@ -3870,7 +4005,11 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                     p.text(
                                         card_rect.left_top() + Vec2::new(10.0, 6.0),
                                         egui::Align2::LEFT_TOP,
-                                        format!("Bogen {} · {}", pi + 1, layout_lbl),
+                                        tr!(
+                                            "Sheet {page} · {layout}",
+                                            page = pi + 1,
+                                            layout = layout_lbl
+                                        ),
                                         FontId::proportional(12.5),
                                         if is_active_page { t.accent } else { t.text },
                                     );
@@ -4456,14 +4595,15 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         };
 
                         ui.menu_button(
-                            format!(
-                                "📏 Bildmaße ({:.0} × {:.0} mm)…",
-                                cur_size.width_mm, cur_size.height_mm
+                            tr!(
+                                "📏 Image size ({width} × {height} mm)…",
+                                width = format!("{:.0}", cur_size.width_mm),
+                                height = format!("{:.0}", cur_size.height_mm)
                             ),
                             |ui| {
                                 ui.set_min_width(230.0);
                                 ui.label(
-                                    RichText::new("Eigene Maße (Breite × Höhe):")
+                                    RichText::new(tr!("Custom size (width × height):"))
                                         .small()
                                         .color(self.tokens.text_dim),
                                 );
@@ -4487,9 +4627,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                         .changed();
                                     if ui
                                         .button("⇄")
-                                        .on_hover_text(
-                                            "Breite und Höhe tauschen (Hoch-/Querformat)",
-                                        )
+                                        .on_hover_text(tr!(
+                                            "Swap width and height (portrait/landscape)"
+                                        ))
                                         .clicked()
                                     {
                                         std::mem::swap(
@@ -4529,7 +4669,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
                                 let mut lock_aspect = keep_aspect;
                                 if ui
-                                    .checkbox(&mut lock_aspect, "🔒 Seitenverhältnis sperren")
+                                    .checkbox(&mut lock_aspect, tr!("🔒 Lock aspect ratio"))
                                     .changed()
                                 {
                                     match page_layout_clone.clone() {
@@ -4554,11 +4694,11 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                     .and_then(SourceImageEntry::original_size_mm)
                                 {
                                     ui.separator();
-                                    let label = format!(
-                                        "Originalgröße ({} × {} mm, {:.0} dpi)",
-                                        fmt_mm_de(orig.width_mm),
-                                        fmt_mm_de(orig.height_mm),
-                                        dpi
+                                    let label = tr!(
+                                        "Original size ({width} × {height} mm, {dpi} dpi)",
+                                        width = fmt_mm_de(orig.width_mm),
+                                        height = fmt_mm_de(orig.height_mm),
+                                        dpi = format!("{dpi:.0}")
                                     );
                                     if ui
                                         .selectable_label(
@@ -4579,13 +4719,15 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
                                 ui.separator();
                                 ui.label(
-                                    RichText::new("Standard-Fotogrößen (auto Hoch/Quer):")
-                                        .small()
-                                        .color(self.tokens.text_dim),
+                                    RichText::new(tr!(
+                                        "Standard photo sizes (auto portrait/landscape):"
+                                    ))
+                                    .small()
+                                    .color(self.tokens.text_dim),
                                 );
                                 for &(lbl, preset_sz) in PHOTO_SIZE_PRESETS_MM {
                                     let is_match = matches_photo_size_preset(cur_size, preset_sz);
-                                    if ui.selectable_label(is_match, lbl).clicked() {
+                                    if ui.selectable_label(is_match, tr(lbl)).clicked() {
                                         pending_cmd = Some(EngineCommand::SetComposerSlotSize {
                                             page_index,
                                             slot_index: Some(slot.slot_index),
@@ -4599,7 +4741,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 if is_sammel {
                                     ui.separator();
                                     if ui
-                                        .button("📦 Größe auf alle Bilder des Bogens anwenden")
+                                        .button(tr!("📦 Apply size to all images on the sheet"))
                                         .clicked()
                                     {
                                         pending_cmd = Some(EngineCommand::SetComposerSlotSize {
@@ -4616,7 +4758,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
                         if is_sammel
                             && ui
-                                .button("➕ Bild nochmals auf Sammelbogen hinzufügen")
+                                .button(tr!("➕ Add image to the gang sheet again"))
                                 .clicked()
                         {
                             pending_cmd = Some(EngineCommand::PlacePoolImageOnSheet {
@@ -4629,37 +4771,37 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         ui.separator();
                     }
 
-                    if ui.button("📐 Bild einpassen (Standard)").clicked() {
+                    if ui.button(tr!("📐 Fit image (default)")).clicked() {
                         self.set_image_fit_mode(img_id, false);
                         ui.close_menu();
                     }
-                    if ui.button("⬛ Fläche ausfüllen").clicked() {
+                    if ui.button(tr!("⬛ Fill area")).clicked() {
                         self.set_image_fit_mode(img_id, true);
                         ui.close_menu();
                     }
                     ui.separator();
-                    if ui.button("✂ Bildbeschnitt…").clicked() {
+                    if ui.button(tr!("✂ Crop image…")).clicked() {
                         open_crop_for_id = Some(img_id);
                         ui.close_menu();
                     }
-                    if ui.button("↺ 90° links drehen").clicked() {
+                    if ui.button(tr!("↺ Rotate 90° left")).clicked() {
                         self.rotate_image_by(img_id, -90);
                         ui.close_menu();
                     }
-                    if ui.button("↻ 90° rechts drehen").clicked() {
+                    if ui.button(tr!("↻ Rotate 90° right")).clicked() {
                         self.rotate_image_by(img_id, 90);
                         ui.close_menu();
                     }
-                    if ui.button("↔ Horizontal spiegeln").clicked() {
+                    if ui.button(tr!("↔ Flip horizontally")).clicked() {
                         self.toggle_flip_horizontal(img_id);
                         ui.close_menu();
                     }
-                    if ui.button("↕ Vertikal spiegeln").clicked() {
+                    if ui.button(tr!("↕ Flip vertically")).clicked() {
                         self.toggle_flip_vertical(img_id);
                         ui.close_menu();
                     }
                     ui.separator();
-                    if ui.button("🗑 Bild von dieser Stelle entfernen").clicked() {
+                    if ui.button(tr!("🗑 Remove image from this slot")).clicked() {
                         pending_cmd = Some(EngineCommand::AssignImageToPageSlot {
                             page_index,
                             slot_index: slot.slot_index,
@@ -4672,9 +4814,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 // Empty Slot Drop Zone placeholder hint
                 if show_guides && slot_r.width() > 54.0 && slot_r.height() > 28.0 {
                     let hint = if slot_r.width() > 110.0 {
-                        format!(
-                            "+ Bild hierher ziehen\n({:.0} × {:.0} mm)",
-                            slot.slot_rect_mm.width_mm, slot.slot_rect_mm.height_mm
+                        tr!(
+                            "+ Drag an image here\n({width} × {height} mm)",
+                            width = format!("{:.0}", slot.slot_rect_mm.width_mm),
+                            height = format!("{:.0}", slot.slot_rect_mm.height_mm)
                         )
                     } else {
                         format!("Slot {}", slot.slot_index + 1)
@@ -4708,7 +4851,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         .get(self.session.doc.active_image_index)
                     {
                         if ui
-                            .button(format!("📥 '{}' hier platzieren", pool_img.display_name))
+                            .button(tr!("📥 Place '{name}' here", name = pool_img.display_name))
                             .clicked()
                         {
                             pending_cmd = Some(EngineCommand::AssignImageToPageSlot {
@@ -4719,7 +4862,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             ui.close_menu();
                         }
                     } else {
-                        ui.label("Bilder-Pool ist leer.");
+                        ui.label(tr!("The image pool is empty."));
                     }
                 });
             }
@@ -4884,7 +5027,12 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             p.text(
                 Pos2::new(card_rect.center().x, card_rect.max.y - 9.0),
                 egui::Align2::CENTER_CENTER,
-                format!("Bogen {} ({assigned_cnt}/{total_slots})", pi + 1),
+                tr!(
+                    "Sheet {page} ({assigned}/{total})",
+                    page = pi + 1,
+                    assigned = assigned_cnt,
+                    total = total_slots
+                ),
                 FontId::proportional(10.5),
                 if is_active { t.accent } else { t.text },
             );
@@ -4950,12 +5098,14 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         p.text(
             add_rect.center(),
             egui::Align2::CENTER_CENTER,
-            "+ Neuer\nBogen",
+            tr!("+ New\nsheet"),
             FontId::proportional(11.5),
             t.text_dim,
         );
         if add_resp
-            .on_hover_text("Leeren Bogen anlegen (oder Bild aus dem Pool hierher ziehen)")
+            .on_hover_text(tr!(
+                "Add an empty sheet (or drag an image from the pool here)"
+            ))
             .clicked()
         {
             *pending_cmd = Some(EngineCommand::AddPage {
@@ -4990,13 +5140,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         total_pages: usize,
     ) {
         resp.context_menu(|ui| {
-            ui.label(RichText::new(format!("Bogen {}", page_index + 1)).strong());
+            ui.label(RichText::new(tr!("Sheet {page}", page = page_index + 1)).strong());
             ui.separator();
             if ui
-                .add_enabled(
-                    page_index > 0,
-                    egui::Button::new("◀ Nach links verschieben"),
-                )
+                .add_enabled(page_index > 0, egui::Button::new(tr!("◀ Move left")))
                 .clicked()
             {
                 self.exec(EngineCommand::MovePage {
@@ -5008,7 +5155,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             if ui
                 .add_enabled(
                     page_index + 1 < total_pages,
-                    egui::Button::new("▶ Nach rechts verschieben"),
+                    egui::Button::new(tr!("▶ Move right")),
                 )
                 .clicked()
             {
@@ -5019,16 +5166,16 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 ui.close_menu();
             }
             ui.separator();
-            if ui.button("⧉ Bogen duplizieren").clicked() {
+            if ui.button(tr!("⧉ Duplicate sheet")).clicked() {
                 self.exec(EngineCommand::DuplicatePage { page_index });
                 ui.close_menu();
             }
-            if ui.button("🧹 Alle Bildstellen leeren").clicked() {
+            if ui.button(tr!("🧹 Clear all slots")).clicked() {
                 self.exec(EngineCommand::ClearPageSlots { page_index });
                 ui.close_menu();
             }
             if ui
-                .button("🗑 Bogen entfernen (Bilder bleiben im Pool)")
+                .button(tr!("🗑 Remove sheet (images stay in the pool)"))
                 .clicked()
             {
                 self.exec(EngineCommand::RemovePage { page_index });
@@ -5111,9 +5258,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     ui.painter()
                         .vline(r.min.x, r.y_range(), Stroke::new(1.0_f32, t.separator));
                     let tooltip = if has_right_pool {
-                        "Rechtes Dock (Druck-Einstellungen & Bilder-Pool) ausklappen (F10)"
+                        tr!("Expand right dock (print settings & image pool) (F10)")
                     } else {
-                        "Druck-Einstellungen ausklappen (F10)"
+                        tr!("Expand print settings (F10)")
                     };
                     ui.vertical_centered(|ui| {
                         if ui
@@ -5157,8 +5304,11 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
                     let tab_row_resp = ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
-                        let settings_lbl = "⚙ Einstellungen";
-                        let pool_lbl = format!("🖼 Bilder-Pool ({})", self.session.doc.images.len());
+                        let settings_lbl = tr!("⚙ Settings");
+                        let pool_lbl = tr!(
+                            "🖼 Image pool ({count})",
+                            count = self.session.doc.images.len()
+                        );
                         let tab_w = measure_tab_width(ui, settings_lbl)
                             .max(measure_tab_width(ui, &pool_lbl))
                             .min((tabs_max_w * 0.5).floor());
@@ -5206,7 +5356,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                     egui::Button::new(RichText::new("▶").color(t.text_dim))
                                         .frame(false),
                                 )
-                                .on_hover_text("Rechtes Dock an den Rand einklappen (F10)")
+                                .on_hover_text(tr!("Collapse right dock to the edge (F10)"))
                                 .clicked()
                             {
                                 self.session.doc.right_dock_collapsed = true;
@@ -5225,7 +5375,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     ui.horizontal(|ui| {
                         let lbl_resp = ui.add(
                             egui::Label::new(
-                                RichText::new("⚙ Druck-Einstellungen")
+                                RichText::new(tr!("⚙ Print settings"))
                                     .strong()
                                     .color(t.text),
                             )
@@ -5241,7 +5391,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                     egui::Button::new(RichText::new("▶").color(t.text_dim))
                                         .frame(false),
                                 )
-                                .on_hover_text("Rechtes Dock an den Rand einklappen (F10)")
+                                .on_hover_text(tr!("Collapse right dock to the edge (F10)"))
                                 .clicked()
                             {
                                 self.session.doc.right_dock_collapsed = true;
@@ -5270,7 +5420,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     .show_inside(ui, |ui| {
                         // Tab Header Bar: [ 🖨 Drucken | 💾 Export ] - equal width sized to widest tab (text + padding)
                         let avail_w = ui.available_width().max(160.0);
-                        let print_lbl = "🖨 Drucken";
+                        let print_lbl = tr!("🖨 Print");
                         let export_lbl = "💾 Export";
                         let tab_w = measure_tab_width(ui, print_lbl)
                             .max(measure_tab_width(ui, export_lbl))
@@ -5324,7 +5474,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         ui.set_max_width(ui.available_width());
                         self.draw_dock_section(
                             ui,
-                            "★ Voreinstellungen (Presets)",
+                            "presets",
+                            tr!("★ Presets"),
                             true,
                             true,
                             |app, ui| {
@@ -5334,7 +5485,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
                         self.draw_dock_section(
                             ui,
-                            "1. Druckereinstellungen",
+                            "printer",
+                            tr!("1. Printer settings"),
                             true,
                             true,
                             |app, ui| {
@@ -5342,18 +5494,26 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             },
                         );
 
-                        let layout_title = format!(
-                            "2. Bogen-Layout (Bogen {}/{})",
-                            self.session.doc.active_page_index + 1,
-                            self.session.doc.page_count()
+                        let layout_title = tr!(
+                            "2. Sheet layout (sheet {page}/{total})",
+                            page = self.session.doc.active_page_index + 1,
+                            total = self.session.doc.page_count()
                         );
-                        self.draw_dock_section(ui, &layout_title, true, true, |app, ui| {
-                            app.draw_layout_settings_section(ui);
-                        });
+                        self.draw_dock_section(
+                            ui,
+                            "layout",
+                            &layout_title,
+                            true,
+                            true,
+                            |app, ui| {
+                                app.draw_layout_settings_section(ui);
+                            },
+                        );
 
                         self.draw_dock_section(
                             ui,
-                            "3. Farbeinstellungen",
+                            "color",
+                            tr!("3. Color settings"),
                             true,
                             true,
                             |app, ui| {
@@ -5363,7 +5523,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
                         self.draw_dock_section(
                             ui,
-                            "4. Druckerstatus & Tintenstände (IPP)",
+                            "ink",
+                            tr!("4. Printer status & ink levels (IPP)"),
                             true,
                             false,
                             |app, ui| {
@@ -5388,14 +5549,14 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             .spacing([12.0, 7.0])
             .min_col_width(95.0)
             .show(ui, |ui| {
-                ui.label(RichText::new("Umfang:").color(t.text_dim));
+                ui.label(RichText::new(tr!("Range:")).color(t.text_dim));
                 ui.horizontal(|ui| {
                     egui::ComboBox::from_id_salt("print_scope_combo")
                         .selected_text(match cur_scope {
-                            PrintScope::AllPages => format!("Alle Bögen ({page_cnt})"),
-                            PrintScope::CurrentPage => format!(
-                                "Aktueller Bogen ({})",
-                                self.session.doc.active_page_index + 1
+                            PrintScope::AllPages => tr!("All sheets ({count})", count = page_cnt),
+                            PrintScope::CurrentPage => tr!(
+                                "Current sheet ({page})",
+                                page = self.session.doc.active_page_index + 1
                             ),
                         })
                         .width(155.0)
@@ -5404,7 +5565,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             if ui
                                 .selectable_label(
                                     cur_scope == PrintScope::AllPages,
-                                    format!("Alle Bögen ({page_cnt})"),
+                                    tr!("All sheets ({count})", count = page_cnt),
                                 )
                                 .clicked()
                             {
@@ -5413,9 +5574,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             if ui
                                 .selectable_label(
                                     cur_scope == PrintScope::CurrentPage,
-                                    format!(
-                                        "Nur aktueller Bogen ({})",
-                                        self.session.doc.active_page_index + 1
+                                    tr!(
+                                        "Current sheet only ({page})",
+                                        page = self.session.doc.active_page_index + 1
                                     ),
                                 )
                                 .clicked()
@@ -5426,11 +5587,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
                     let mut copies = self.session.doc.printer.copies;
                     if ui
-                        .add(
-                            de_drag(&mut copies)
-                                .range(1..=99)
-                                .prefix("Kopien: "),
-                        )
+                        .add(de_drag(&mut copies).range(1..=99).prefix(tr!("Copies: ")))
                         .changed()
                     {
                         self.exec(EngineCommand::SetCopies(copies));
@@ -5438,13 +5595,13 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 });
                 ui.end_row();
 
-                ui.label(RichText::new("Probestreifen:").color(t.text_dim));
+                ui.label(RichText::new(tr!("Test strip:")).color(t.text_dim));
                 let mut ts_on = self.session.doc.test_strip.enabled;
                 if ui
-                    .checkbox(&mut ts_on, "1:1 Ausschnitt drucken")
-                    .on_hover_text(
-                        "Druckt nur einen schmalen Streifenausschnitt im 1:1-Originalmaßstab zum Papiersparen",
-                    )
+                    .checkbox(&mut ts_on, tr!("Print a 1:1 section"))
+                    .on_hover_text(tr!(
+                        "Prints only a narrow strip at 1:1 original scale to save paper"
+                    ))
                     .changed()
                 {
                     let rect = self.session.doc.test_strip.norm_rect;
@@ -5462,7 +5619,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         let is_sending = matches!(self.print_job_ui_state, PrintJobUiState::Sending { .. });
         let btn_w = ui.available_width().max(160.0);
         if draw_print_button(ui, &t, btn_w, is_sending)
-            .on_hover_text("Auftrag an den gewählten CUPS-Drucker senden")
+            .on_hover_text(tr!("Send the job to the selected CUPS printer"))
             .clicked()
             && !is_sending
         {
@@ -5482,13 +5639,13 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             .spacing([12.0, 7.0])
             .min_col_width(95.0)
             .show(ui, |ui| {
-                ui.label(RichText::new("Umfang:").color(t.text_dim));
+                ui.label(RichText::new(tr!("Range:")).color(t.text_dim));
                 egui::ComboBox::from_id_salt("export_scope_combo")
                     .selected_text(match cur_scope {
-                        PrintScope::AllPages => format!("Alle Bögen ({page_cnt})"),
-                        PrintScope::CurrentPage => format!(
-                            "Aktueller Bogen ({})",
-                            self.session.doc.active_page_index + 1
+                        PrintScope::AllPages => tr!("All sheets ({count})", count = page_cnt),
+                        PrintScope::CurrentPage => tr!(
+                            "Current sheet ({page})",
+                            page = self.session.doc.active_page_index + 1
                         ),
                     })
                     .width(235.0)
@@ -5497,7 +5654,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         if ui
                             .selectable_label(
                                 cur_scope == PrintScope::AllPages,
-                                format!("Alle Bögen ({page_cnt})"),
+                                tr!("All sheets ({count})", count = page_cnt),
                             )
                             .clicked()
                         {
@@ -5506,9 +5663,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         if ui
                             .selectable_label(
                                 cur_scope == PrintScope::CurrentPage,
-                                format!(
-                                    "Nur aktueller Bogen ({})",
-                                    self.session.doc.active_page_index + 1
+                                tr!(
+                                    "Current sheet only ({page})",
+                                    page = self.session.doc.active_page_index + 1
                                 ),
                             )
                             .clicked()
@@ -5518,13 +5675,13 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     });
                 ui.end_row();
 
-                ui.label(RichText::new("Auflösung:").color(t.text_dim));
+                ui.label(RichText::new(tr!("Resolution:")).color(t.text_dim));
                 let dpi_label = |d: u32| -> &'static str {
                     match d {
-                        300 => "300 dpi (Foto-Labor)",
-                        360 => "360 dpi (Standard)",
-                        720 => "720 dpi (Nativ Epson)",
-                        1440 => "1440 dpi (Max. Detail)",
+                        300 => tr!("300 dpi (photo lab)"),
+                        360 => tr!("360 dpi (standard)"),
+                        720 => tr!("720 dpi (Epson native)"),
+                        1440 => tr!("1440 dpi (max. detail)"),
                         _ => "720 dpi",
                     }
                 };
@@ -5546,7 +5703,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     });
                 ui.end_row();
 
-                ui.label(RichText::new("Farbraum:").color(t.text_dim));
+                ui.label(RichText::new(tr!("Color space:")).color(t.text_dim));
                 egui::ComboBox::from_id_salt("export_cs_combo")
                     .selected_text(cur_exp.color_space.label())
                     .width(235.0)
@@ -5565,7 +5722,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     });
                 ui.end_row();
 
-                ui.label(RichText::new("Dateiformat:").color(t.text_dim));
+                ui.label(RichText::new(tr!("File format:")).color(t.text_dim));
                 egui::ComboBox::from_id_salt("export_fmt_combo")
                     .selected_text(cur_exp.format.label())
                     .width(235.0)
@@ -5593,7 +5750,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         ui.add_space(7.0);
         let btn_w = ui.available_width().max(160.0);
         if draw_export_button(ui, &t, btn_w, cur_exp.format)
-            .on_hover_text("16-Bit Druckbogen in Datei exportieren")
+            .on_hover_text(tr!("Export the 16-bit sheet to a file"))
             .clicked()
         {
             self.open_native_export_picker();
@@ -5613,7 +5770,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             PrintJobUiState::Sending { .. } => (
                 t.accent,
                 "⏳",
-                "Druckbogen wird in 720 DPI gerendert und an CUPS übergeben…",
+                tr!("Rendering the sheet at 720 DPI and sending it to CUPS…"),
                 false,
             ),
             PrintJobUiState::Success(m) => (t.success, "✓", m.as_str(), true),
@@ -5646,7 +5803,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui
                                 .small_button("✕")
-                                .on_hover_text("Meldung schließen")
+                                .on_hover_text(tr!("Dismiss message"))
                                 .clicked()
                             {
                                 dismiss = true;
@@ -5663,6 +5820,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
     fn draw_dock_section(
         &mut self,
         ui: &mut Ui,
+        id_salt: &'static str,
         title: &str,
         default_open: bool,
         with_separator: bool,
@@ -5670,7 +5828,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
     ) {
         let t = self.tokens;
         ui.add_space(4.0);
+        // Stable id, so the open state survives a language switch or a changing title.
         egui::CollapsingHeader::new(RichText::new(title).strong().color(t.text))
+            .id_salt(("dock_section", id_salt))
             .default_open(default_open)
             .show_unindented(ui, |ui| {
                 ui.add_space(8.0);
@@ -5692,7 +5852,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             .doc
             .active_preset_name
             .clone()
-            .unwrap_or_else(|| String::from("Aktuelle Einstellungen"));
+            .unwrap_or_else(|| String::from(tr!("Current settings")));
         let presets = self.session.doc.user_backup.presets.clone();
 
         egui::Grid::new("grid_presets")
@@ -5700,7 +5860,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             .spacing([14.0, 10.0])
             .min_col_width(130.0)
             .show(ui, |ui| {
-                ui.label(RichText::new("Vorlage laden:").color(t.text_dim));
+                ui.label(RichText::new(tr!("Load preset:")).color(t.text_dim));
                 egui::ComboBox::from_id_salt("preset_selector")
                     .selected_text(truncate_combo_label(&current_lbl, 28))
                     .width(240.0)
@@ -5718,12 +5878,12 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     });
                 ui.end_row();
 
-                ui.label(RichText::new("Neu speichern:").color(t.text_dim));
+                ui.label(RichText::new(tr!("Save as new:")).color(t.text_dim));
                 ui.horizontal(|ui| {
                     let row_h = ui.spacing().interact_size.y;
                     ui.add(
                         egui::TextEdit::singleline(&mut self.new_preset_name)
-                            .hint_text("Name der Voreinstellung")
+                            .hint_text(tr!("Preset name"))
                             .desired_width(150.0)
                             .min_size(Vec2::new(0.0, row_h))
                             .vertical_align(egui::Align::Center)
@@ -5731,7 +5891,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     );
                     let name = self.new_preset_name.trim().to_string();
                     if ui
-                        .add_enabled(!name.is_empty(), egui::Button::new("+ Speichern"))
+                        .add_enabled(!name.is_empty(), egui::Button::new(tr!("+ Save")))
                         .clicked()
                     {
                         self.exec(EngineCommand::SavePreset { name });
@@ -5776,14 +5936,20 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             .spacing([14.0, 10.0])
             .min_col_width(130.0)
             .show(ui, |ui| {
-                let printer_lbl = ui.label(RichText::new("Drucker:").color(t.text_dim));
+                let printer_lbl = ui.label(RichText::new(tr!("Printer:")).color(t.text_dim));
                 if let Some(ref ap) = active_printer {
                     let tip = if ap.device_uri.is_empty() {
-                        format!("CUPS-Queue: {} ({})", ap.queue_name, ap.state_message)
+                        tr!(
+                            "CUPS queue: {queue} ({state})",
+                            queue = ap.queue_name,
+                            state = ap.state_message
+                        )
                     } else {
-                        format!(
-                            "CUPS-Queue: {} ({})\nURI: {}",
-                            ap.queue_name, ap.state_message, ap.device_uri
+                        tr!(
+                            "CUPS queue: {queue} ({state})\nURI: {uri}",
+                            queue = ap.queue_name,
+                            state = ap.state_message,
+                            uri = ap.device_uri
                         )
                     };
                     printer_lbl.on_hover_text(tip);
@@ -5807,7 +5973,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         });
                     if ui
                         .button("🔄")
-                        .on_hover_text("Installierte Systemdrucker (CUPS) neu einlesen")
+                        .on_hover_text(tr!("Reload the installed system printers (CUPS)"))
                         .clicked()
                     {
                         self.exec(EngineCommand::RefreshPrinters);
@@ -5815,7 +5981,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 });
                 ui.end_row();
 
-                ui.label(RichText::new("Medientyp:").color(t.text_dim));
+                ui.label(RichText::new(tr!("Media type:")).color(t.text_dim));
                 ui.horizontal(|ui| {
                     let media_display = if let Some(ref cm) = active_custom {
                         format!("★ {}", cm.name)
@@ -5892,7 +6058,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 });
                 ui.end_row();
 
-                ui.label(RichText::new("Papierformat:").color(t.text_dim));
+                ui.label(RichText::new(tr!("Paper size:")).color(t.text_dim));
                 let size_display = active_printer
                     .as_ref()
                     .and_then(|ap| {
@@ -5938,7 +6104,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     });
                 ui.end_row();
 
-                ui.label(RichText::new("Papierzufuhr:").color(t.text_dim));
+                ui.label(RichText::new(tr!("Paper source:")).color(t.text_dim));
                 let has_ppd_slots = active_printer
                     .as_ref()
                     .map(|ap| !ap.capabilities.input_slots.is_empty())
@@ -5986,8 +6152,11 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     });
                 ui.end_row();
 
-                ui.label(RichText::new("Randlos:").color(t.text_dim));
-                if ui.checkbox(&mut bl, "Randloser Druck aktivieren").changed() {
+                ui.label(RichText::new(tr!("Borderless:")).color(t.text_dim));
+                if ui
+                    .checkbox(&mut bl, tr!("Enable borderless printing"))
+                    .changed()
+                {
                     self.exec(EngineCommand::SetPaperSource {
                         source: src,
                         borderless: bl,
@@ -5995,7 +6164,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 }
                 ui.end_row();
 
-                ui.label(RichText::new("Druckqualität:").color(t.text_dim));
+                ui.label(RichText::new(tr!("Print quality:")).color(t.text_dim));
                 let has_ppd_res = active_printer
                     .as_ref()
                     .map(|ap| !ap.capabilities.resolutions.is_empty())
@@ -6050,13 +6219,13 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     });
                 ui.end_row();
                 if let Some(ref cm) = active_custom {
-                    ui.label(RichText::new("Custom-Media:").color(t.text_dim));
-                    let info = format!(
-                        "Basis: {} · Slot: {} · Duty: {:+}% · Dry: {:.0}s",
-                        cm.base_media_key,
-                        cm.user_media_id,
-                        cm.ink_duty_percent,
-                        cm.drying_time_sec
+                    ui.label(RichText::new(tr!("Custom media:")).color(t.text_dim));
+                    let info = tr!(
+                        "Base: {base} · slot: {slot} · duty: {duty}% · dry: {dry}s",
+                        base = cm.base_media_key,
+                        slot = cm.user_media_id,
+                        duty = format!("{:+}", cm.ink_duty_percent),
+                        dry = format!("{:.0}", cm.drying_time_sec)
                     );
                     ui.label(RichText::new(info).small().color(t.text_faint));
                     ui.end_row();
@@ -6065,10 +6234,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
         ui.add_space(6.0);
         // Detailed Settings (Detaillierte Einstellungen, EPL manual p. 24)
-        egui::CollapsingHeader::new(
-            RichText::new("Detaillierte Einstellungen").color(t.text_dim),
-        )
-        .default_open(false)
+        egui::CollapsingHeader::new(RichText::new(tr!("Detailed settings")).color(t.text_dim))
+            .id_salt("detailed_printer_settings")
+            .default_open(false)
         .show(ui, |ui| {
             ui.add_space(4.0);
             let mut det = self.session.doc.printer.detailed;
@@ -6078,7 +6246,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     cur_media.supports_black_enhance_overcoat,
                     egui::Checkbox::new(
                         &mut det.black_enhance_overcoat,
-                        "Schwarzverstärkende Beschichtung (Black Enhance Overcoat)",
+                        tr!("Black Enhance Overcoat"),
                     ),
                 )
                 .changed()
@@ -6088,7 +6256,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             if ui
                 .add_enabled(
                     cur_media.supports_gloss_smoothing,
-                    egui::Checkbox::new(&mut det.gloss_smoothing, "Glanzglättung-Modus"),
+                    egui::Checkbox::new(&mut det.gloss_smoothing, tr!("Gloss smoothing mode")),
                 )
                 .changed()
             {
@@ -6097,10 +6265,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             if ui
                 .checkbox(
                     &mut det.bottom_edge_priority,
-                    "Priorisiert Druckqualität Unterkante",
+                    tr!("Prioritize print quality at the bottom edge"),
                 )
                 .on_hover_text(
-                    "Verwendet auf den letzten ~20 mm am unteren Blattrand (wenn das Blatt die hintere Hauptwalze verlässt) einen feineren Papiervorschub und mehr Druckkopfdurchgänge, um Streifenbildung (Banding) am unteren Rand zu verhindern (etwas langsamere Druckgeschwindigkeit am Blattende).",
+                    tr!("Uses a finer paper feed and more print head passes on the last ~20 mm of the sheet (when the paper leaves the rear main roller) to prevent banding at the bottom edge (slightly slower printing at the end of the sheet)."),
                 )
                 .changed()
             {
@@ -6109,7 +6277,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             if ui
                 .checkbox(
                     &mut det.apply_app_paper_settings,
-                    "App-Papiereinstellungen anwenden",
+                    tr!("Apply app paper settings"),
                 )
                 .changed()
             {
@@ -6126,7 +6294,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         let cur_mode_lbl = self.session.doc.layout.kind_label();
 
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Layout-Typ:").color(t.text_dim));
+            ui.label(RichText::new(tr!("Layout type:")).color(t.text_dim));
             ui.label(RichText::new(cur_mode_lbl).strong().color(t.accent));
         });
         ui.add_space(4.0);
@@ -6136,7 +6304,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
             let is_std = matches!(self.session.doc.layout, LayoutMode::Standard(_));
             if draw_layout_type_tile(ui, &t, LayoutTypeIcon::Standard, "Standard", is_std)
-                .on_hover_text("Standard (Einzelbild mit Rändern, Bildgröße oder Randlos)")
+                .on_hover_text(tr!("Standard (single image with margins, image size or borderless)"))
                 .clicked()
                 && !is_std
             {
@@ -6146,8 +6314,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             }
 
             let is_tpl = matches!(self.session.doc.layout, LayoutMode::Template(_));
-            if draw_layout_type_tile(ui, &t, LayoutTypeIcon::Template, "Vorlage", is_tpl)
-                .on_hover_text("Vorlage / Raster (Mehrere Bilder pro Bogen, z. B. 2×2 Kontaktbogen)")
+            if draw_layout_type_tile(ui, &t, LayoutTypeIcon::Template, tr!("Template"), is_tpl)
+                .on_hover_text(tr!("Template / grid (several images per sheet, e.g. a 2×2 contact sheet)"))
                 .clicked()
                 && !is_tpl
             {
@@ -6157,8 +6325,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             }
 
             let is_gw = matches!(self.session.doc.layout, LayoutMode::GalleryWrap(_));
-            if draw_layout_type_tile(ui, &t, LayoutTypeIcon::GalleryWrap, "Gallerie", is_gw)
-                .on_hover_text("Gallerie Wrap (Leinwand-Keilrahmen mit gespiegelten/gedehnten Falzkanten)")
+            if draw_layout_type_tile(ui, &t, LayoutTypeIcon::GalleryWrap, tr!("Gallery"), is_gw)
+                .on_hover_text(tr!("Gallery wrap (canvas stretcher frame with mirrored/stretched edges)"))
                 .clicked()
                 && !is_gw
             {
@@ -6169,7 +6337,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
             let is_pano = matches!(self.session.doc.layout, LayoutMode::Panorama(_));
             if draw_layout_type_tile(ui, &t, LayoutTypeIcon::Panorama, "Panorama", is_pano)
-                .on_hover_text("Panorama (Rollenpapier / freie Bannerlänge)")
+                .on_hover_text(tr!("Panorama (roll paper / free banner length)"))
                 .clicked()
                 && !is_pano
             {
@@ -6179,8 +6347,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             }
 
             let is_free = matches!(self.session.doc.layout, LayoutMode::FreeComposer(_));
-            if draw_layout_type_tile(ui, &t, LayoutTypeIcon::FreeComposer, "Sammel", is_free)
-                .on_hover_text("Sammelbogen / Auto-Nesting (Mehrere Bilder in eigenen Zielgrößen platzsparend auf einen Bogen packen)")
+            if draw_layout_type_tile(ui, &t, LayoutTypeIcon::FreeComposer, tr!("Gang"), is_free)
+                .on_hover_text(tr!("Gang sheet / auto nesting (pack several images in their own sizes onto one sheet to save space)"))
                 .clicked()
                 && !is_free
             {
@@ -6194,11 +6362,13 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         if self.session.doc.page_count() > 1 {
             ui.add_space(4.0);
             if ui
-                .button(format!(
-                    "🔁 Layout dieses Bogens auf alle {} Bögen anwenden",
-                    self.session.doc.page_count()
+                .button(tr!(
+                    "🔁 Apply this sheet's layout to all {count} sheets",
+                    count = self.session.doc.page_count()
                 ))
-                .on_hover_text("Übernimmt das Layout des aktuellen Bogens für alle anderen Bögen im Druckauftrag")
+                .on_hover_text(tr!(
+                    "Applies the current sheet's layout to all other sheets in the print job"
+                ))
                 .clicked()
             {
                 self.exec(EngineCommand::ApplyLayoutToAllPages);
@@ -6262,7 +6432,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     .spacing([14.0, 10.0])
                     .min_col_width(130.0)
                     .show(ui, |ui| {
-                        ui.label(RichText::new("Ausrichtung:").color(t.text_dim));
+                        ui.label(RichText::new(tr!("Orientation:")).color(t.text_dim));
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 8.0;
                             if draw_orientation_tile(
@@ -6271,7 +6441,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 Orientation::Portrait,
                                 std_spec.orientation == Orientation::Portrait,
                             )
-                            .on_hover_text("Hochformat (Portrait)")
+                            .on_hover_text(tr!("Portrait"))
                             .clicked()
                                 && std_spec.orientation != Orientation::Portrait
                             {
@@ -6284,7 +6454,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 Orientation::Landscape,
                                 std_spec.orientation == Orientation::Landscape,
                             )
-                            .on_hover_text("Querformat (Landscape)")
+                            .on_hover_text(tr!("Landscape"))
                             .clicked()
                                 && std_spec.orientation != Orientation::Landscape
                             {
@@ -6295,10 +6465,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         ui.end_row();
 
                         if self.session.doc.printer.borderless {
-                            ui.label(RichText::new("Randlos-Stufe:").color(t.text_dim));
+                            ui.label(RichText::new(tr!("Borderless expansion:")).color(t.text_dim));
                             ui.horizontal(|ui| {
                                 for (lvl, lbl) in [
-                                    (BorderlessExpandLevel::None, "Aus"),
+                                    (BorderlessExpandLevel::None, tr!("Off")),
                                     (BorderlessExpandLevel::Min, "Min"),
                                     (BorderlessExpandLevel::Standard, "Std"),
                                     (BorderlessExpandLevel::Max, "Max"),
@@ -6313,9 +6483,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             });
                             ui.end_row();
 
-                            ui.label(RichText::new("Skalierung:").color(t.text_dim));
+                            ui.label(RichText::new(tr!("Scaling:")).color(t.text_dim));
                             if ui
-                                .checkbox(&mut std_spec.fit_to_scale, "An Papier anpassen")
+                                .checkbox(&mut std_spec.fit_to_scale, tr!("Fit to paper"))
                                 .changed()
                             {
                                 changed = true;
@@ -6323,7 +6493,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             ui.end_row();
                         }
 
-                        ui.label(RichText::new("Zentrieren:").color(t.text_dim));
+                        ui.label(RichText::new(tr!("Centering:")).color(t.text_dim));
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 6.0;
                             for c in [
@@ -6372,21 +6542,21 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         });
                         ui.end_row();
 
-                        ui.label(RichText::new("Maße:").color(t.text_dim));
+                        ui.label(RichText::new(tr!("Size:")).color(t.text_dim));
                         ui.horizontal(|ui| {
                             let prev_crit = std_spec.criterion;
                             if ui
                                 .selectable_value(
                                     &mut std_spec.criterion,
                                     SizingCriterion::Margin,
-                                    "Ränder",
+                                    tr!("Margins"),
                                 )
                                 .changed()
                                 || ui
                                     .selectable_value(
                                         &mut std_spec.criterion,
                                         SizingCriterion::ImageSize,
-                                        "Bildgröße",
+                                        tr!("Image size"),
                                     )
                                     .changed()
                             {
@@ -6424,11 +6594,11 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             if let Some((orig, dpi)) = active_original
                                 && ui
                                     .button("Original")
-                                    .on_hover_text(format!(
-                                        "Originalgröße aus der Bilddatei: {} × {} mm bei {:.0} dpi",
-                                        fmt_mm_de(orig.width_mm),
-                                        fmt_mm_de(orig.height_mm),
-                                        dpi
+                                    .on_hover_text(tr!(
+                                        "Original size from the image file: {width} × {height} mm at {dpi} dpi",
+                                        width = fmt_mm_de(orig.width_mm),
+                                        height = fmt_mm_de(orig.height_mm),
+                                        dpi = format!("{dpi:.0}")
                                     ))
                                     .clicked()
                             {
@@ -6441,7 +6611,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         ui.end_row();
 
                         if std_spec.criterion == SizingCriterion::Margin {
-                            ui.label(RichText::new("Oben / Unten:").color(t.text_dim));
+                            ui.label(RichText::new(tr!("Top / bottom:")).color(t.text_dim));
                             ui.horizontal(|ui| {
                                 let top_changed = ui
                                     .add(
@@ -6486,7 +6656,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             });
                             ui.end_row();
 
-                            ui.label(RichText::new("Links / Rechts:").color(t.text_dim));
+                            ui.label(RichText::new(tr!("Left / right:")).color(t.text_dim));
                             ui.horizontal(|ui| {
                                 let left_changed = ui
                                     .add(
@@ -6531,7 +6701,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             });
                             ui.end_row();
                         } else {
-                            ui.label(RichText::new("Breite / Höhe:").color(t.text_dim));
+                            ui.label(RichText::new(tr!("Width / height:")).color(t.text_dim));
                             ui.horizontal(|ui| {
                                 let w_changed = ui
                                     .add(
@@ -6577,7 +6747,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             ui.end_row();
 
                             if std_spec.centering != CenteringMode::Center {
-                                ui.label(RichText::new("Position (L / O):").color(t.text_dim));
+                                ui.label(RichText::new(tr!("Position (L / T):")).color(t.text_dim));
                                 ui.horizontal(|ui| {
                                     let can_x = matches!(
                                         std_spec.centering,
@@ -6596,7 +6766,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                                 .max_decimals(1)
                                                 .suffix(" mm"),
                                         )
-                                        .on_hover_text("Abstand vom linken Blattrand")
+                                        .on_hover_text(tr!("Distance from the left paper edge"))
                                         .changed()
                                     {
                                         changed = true;
@@ -6611,7 +6781,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                                 .max_decimals(1)
                                                 .suffix(" mm"),
                                         )
-                                        .on_hover_text("Abstand vom oberen Blattrand")
+                                        .on_hover_text(tr!("Distance from the top paper edge"))
                                         .changed()
                                     {
                                         changed = true;
@@ -6621,9 +6791,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             }
                         }
 
-                        ui.label(RichText::new("Proportionen:").color(t.text_dim));
+                        ui.label(RichText::new(tr!("Proportions:")).color(t.text_dim));
                         if ui
-                            .checkbox(&mut std_spec.keep_aspect_ratio, "Seitenverhältnis sperren")
+                            .checkbox(&mut std_spec.keep_aspect_ratio, tr!("Lock aspect ratio"))
                             .changed()
                         {
                             changed = true;
@@ -6658,7 +6828,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     .spacing([14.0, 10.0])
                     .min_col_width(130.0)
                     .show(ui, |ui| {
-                        ui.label(RichText::new("Erforderl. Blatt:").color(t.text_dim));
+                        ui.label(RichText::new(tr!("Required paper:")).color(t.text_dim));
                         ui.label(
                             RichText::new(format!("{:.1} × {:.1} mm", req.width_mm, req.height_mm))
                                 .color(t.accent)
@@ -6666,7 +6836,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         );
                         ui.end_row();
 
-                        ui.label(RichText::new("Leinwand (B × H):").color(t.text_dim));
+                        ui.label(RichText::new(tr!("Canvas (W × H):")).color(t.text_dim));
                         ui.horizontal(|ui| {
                             if ui
                                 .add(
@@ -6688,7 +6858,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         });
                         ui.end_row();
 
-                        ui.label(RichText::new("Keilrahmen-Tiefe:").color(t.text_dim));
+                        ui.label(RichText::new(tr!("Stretcher depth:")).color(t.text_dim));
                         ui.horizontal(|ui| {
                             if ui
                                 .add(
@@ -6700,7 +6870,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             {
                                 changed = true;
                             }
-                            ui.label("+ Rückseite:");
+                            ui.label(tr!("+ back:"));
                             if ui
                                 .add(
                                     de_drag(&mut gw.back_extension_mm)
@@ -6715,7 +6885,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         });
                         ui.end_row();
 
-                        ui.label(RichText::new("Kanten-Effekt:").color(t.text_dim));
+                        ui.label(RichText::new(tr!("Edge effect:")).color(t.text_dim));
                         egui::ComboBox::from_id_salt("gw_effect_combo")
                             .selected_text(gw.effect.label())
                             .width(245.0)
@@ -6738,9 +6908,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             });
                         ui.end_row();
 
-                        ui.label(RichText::new("Schnittmarken:").color(t.text_dim));
+                        ui.label(RichText::new(tr!("Cut marks:")).color(t.text_dim));
                         if ui
-                            .checkbox(&mut gw.cut_marks, "Eck-Faltmarken drucken")
+                            .checkbox(&mut gw.cut_marks, tr!("Print corner fold marks"))
                             .changed()
                         {
                             changed = true;
@@ -6771,7 +6941,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         } else {
                             tpl.normalized_slots.len()
                         };
-                        format!("{} ({} Slots)", tpl.name, count)
+                        tr!("{name} ({count} slots)", name = tpl.name, count = count)
                     })
                     .unwrap_or_else(|| tpl_spec.template_id.clone());
                 let short_tpl_label = truncate_combo_label(&current_tpl_label, 28);
@@ -6781,7 +6951,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     .spacing([14.0, 10.0])
                     .min_col_width(130.0)
                     .show(ui, |ui| {
-                        ui.label(RichText::new("Vorlage:").color(t.text_dim));
+                        ui.label(RichText::new(tr!("Template:")).color(t.text_dim));
                         let combo_resp = egui::ComboBox::from_id_salt("tpl_selector")
                             .selected_text(short_tpl_label)
                             .width(245.0)
@@ -6800,7 +6970,11 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                     } else {
                                         tpl.normalized_slots.len()
                                     };
-                                    let lbl = format!("{} ({} Slots)", tpl.name, count);
+                                    let lbl = tr!(
+                                        "{name} ({count} slots)",
+                                        name = tpl.name,
+                                        count = count
+                                    );
                                     if ui
                                         .selectable_value(
                                             &mut tpl_spec.template_id,
@@ -6818,7 +6992,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         combo_resp.response.on_hover_text(&current_tpl_label);
                         ui.end_row();
 
-                        ui.label(RichText::new("Ausrichtung:").color(t.text_dim));
+                        ui.label(RichText::new(tr!("Orientation:")).color(t.text_dim));
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 8.0;
                             if draw_orientation_tile(
@@ -6827,7 +7001,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 Orientation::Portrait,
                                 tpl_spec.orientation == Orientation::Portrait,
                             )
-                            .on_hover_text("Hochformat (Portrait)")
+                            .on_hover_text(tr!("Portrait"))
                             .clicked()
                                 && tpl_spec.orientation != Orientation::Portrait
                             {
@@ -6840,7 +7014,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 Orientation::Landscape,
                                 tpl_spec.orientation == Orientation::Landscape,
                             )
-                            .on_hover_text("Querformat (Landscape)")
+                            .on_hover_text(tr!("Landscape"))
                             .clicked()
                                 && tpl_spec.orientation != Orientation::Landscape
                             {
@@ -6850,18 +7024,18 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         });
                         ui.end_row();
 
-                        ui.label(RichText::new("Einpassung:").color(t.text_dim));
+                        ui.label(RichText::new(tr!("Fit:")).color(t.text_dim));
                         if ui
-                            .checkbox(&mut tpl_spec.show_full_images, "Bilder ganz anzeigen")
+                            .checkbox(&mut tpl_spec.show_full_images, tr!("Show entire images"))
                             .changed()
                         {
                             changed = true;
                         }
                         ui.end_row();
 
-                        ui.label(RichText::new("Schnittmarken:").color(t.text_dim));
+                        ui.label(RichText::new(tr!("Cut marks:")).color(t.text_dim));
                         if ui
-                            .checkbox(&mut tpl_spec.cut_marks, "✂ Eck-Schnittmarken an Slots")
+                            .checkbox(&mut tpl_spec.cut_marks, tr!("✂ Corner cut marks at slots"))
                             .changed()
                         {
                             changed = true;
@@ -6882,7 +7056,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             custom_color_cmd = fl_cmd;
                         }
 
-                        ui.label(RichText::new("Bildunterschrift:").color(t.text_dim));
+                        ui.label(RichText::new(tr!("Caption:")).color(t.text_dim));
                         egui::ComboBox::from_id_salt("tpl_caption_mode_combo")
                             .selected_text(tpl_spec.caption_mode.label())
                             .width(245.0)
@@ -6907,9 +7081,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if ui
-                        .button(RichText::new("📐 Vorlagen-Studio (Neu…)").strong())
+                        .button(RichText::new(tr!("📐 Template studio (new…)")).strong())
                         .on_hover_text(
-                            "Öffnet das 2-stufige Vorlagen-Studio (1. Raster & Bento-Wizard -> 2. Freier Slot-Editor mit Millimeter-Eingabe)",
+                            tr!("Opens the two-step template studio (1. grid & bento wizard -> 2. free slot editor with millimeter input)"),
                         )
                         .clicked()
                     {
@@ -6917,9 +7091,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             orientation: tpl_spec.orientation,
                             cut_marks: tpl_spec.cut_marks,
                             caption_mode: tpl_spec.caption_mode,
-                            name: format!(
-                                "Studio-Vorlage #{}",
-                                self.session.doc.user_backup.custom_templates.len() + 1
+                            name: tr!(
+                                "Studio template #{number}",
+                                number = self.session.doc.user_backup.custom_templates.len() + 1
                             ),
                             ..TemplateStudioState::default()
                         };
@@ -6927,9 +7101,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     }
 
                     if ui
-                        .button("✎ Aktuelle anpassen…")
+                        .button(tr!("✎ Edit current…"))
                         .on_hover_text(
-                            "Lädt die aktuell gewählte Vorlage direkt in den freien Millimeter-Slot-Editor des Vorlagen-Studios",
+                            tr!("Loads the selected template directly into the free millimeter slot editor of the template studio"),
                         )
                         .clicked()
                     {
@@ -6952,7 +7126,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     .spacing([14.0, 10.0])
                     .min_col_width(130.0)
                     .show(ui, |ui| {
-                        ui.label(RichText::new("Rollenbreite:").color(t.text_dim));
+                        ui.label(RichText::new(tr!("Roll width:")).color(t.text_dim));
                         if ui
                             .add(
                                 egui::Slider::new(&mut pano.print_width_mm, 89.0..=431.8)
@@ -7010,11 +7184,12 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     .unwrap_or(cur_size.width_mm / cur_size.height_mm.max(1.0))
                     .max(0.05);
                 let preset_lbl = match_photo_size_preset_label(cur_size)
-                    .map(str::to_string)
+                    .map(|lbl| tr(lbl).to_string())
                     .unwrap_or_else(|| {
-                        format!(
-                            "Frei ({:.0} × {:.0} mm)",
-                            cur_size.width_mm, cur_size.height_mm
+                        tr!(
+                            "Custom ({width} × {height} mm)",
+                            width = format!("{:.0}", cur_size.width_mm),
+                            height = format!("{:.0}", cur_size.height_mm)
                         )
                     });
 
@@ -7023,7 +7198,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     .spacing([14.0, 10.0])
                     .min_col_width(130.0)
                     .show(ui, |ui| {
-                        ui.label(RichText::new("Ausrichtung:").color(t.text_dim));
+                        ui.label(RichText::new(tr!("Orientation:")).color(t.text_dim));
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 8.0;
                             if draw_orientation_tile(
@@ -7032,7 +7207,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 Orientation::Portrait,
                                 comp.orientation == Orientation::Portrait,
                             )
-                            .on_hover_text("Hochformat (Portrait)")
+                            .on_hover_text(tr!("Portrait"))
                             .clicked()
                                 && comp.orientation != Orientation::Portrait
                             {
@@ -7045,7 +7220,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 Orientation::Landscape,
                                 comp.orientation == Orientation::Landscape,
                             )
-                            .on_hover_text("Querformat (Landscape)")
+                            .on_hover_text(tr!("Landscape"))
                             .clicked()
                                 && comp.orientation != Orientation::Landscape
                             {
@@ -7055,17 +7230,17 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         });
                         ui.end_row();
 
-                        ui.label(RichText::new("Rand / Abstand:").color(t.text_dim));
+                        ui.label(RichText::new(tr!("Margin / gap:")).color(t.text_dim));
                         ui.horizontal(|ui| {
                             if ui
                                 .add(
                                     de_drag(&mut comp.page_margin_mm)
                                         .range(0.0..=50.0)
                                         .speed(0.5)
-                                        .prefix("Rand ")
+                                        .prefix(tr!("Margin "))
                                         .suffix(" mm"),
                                 )
-                                .on_hover_text("Mindest-Seitenrand des Sammelbogens")
+                                .on_hover_text(tr!("Minimum margin of the gang sheet"))
                                 .changed()
                             {
                                 changed = true;
@@ -7075,10 +7250,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                     de_drag(&mut comp.nest_gap_mm)
                                         .range(0.0..=30.0)
                                         .speed(0.5)
-                                        .prefix("Abst. ")
+                                        .prefix(tr!("Gap "))
                                         .suffix(" mm"),
                                 )
-                                .on_hover_text("Schnittabstand zwischen den verschachtelten Bildern")
+                                .on_hover_text(tr!("Cutting gap between the nested images"))
                                 .changed()
                             {
                                 changed = true;
@@ -7086,11 +7261,11 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         });
                         ui.end_row();
 
-                        ui.label(RichText::new("Auto-Nesting:").color(t.text_dim));
+                        ui.label(RichText::new(tr!("Auto nesting:")).color(t.text_dim));
                         if ui
-                            .checkbox(&mut comp.allow_rotation_in_nest, "90°-Drehung erlauben")
+                            .checkbox(&mut comp.allow_rotation_in_nest, tr!("Allow 90° rotation"))
                             .on_hover_text(
-                                "Dreht Bilder bei Bedarf automatisch um 90°, um mehr Fotos platzsparend auf den Bogen zu packen",
+                                tr!("Automatically rotates images by 90° when needed to fit more photos onto the sheet"),
                             )
                             .changed()
                         {
@@ -7098,9 +7273,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
                         ui.end_row();
 
-                        ui.label(RichText::new("Schnittmarken:").color(t.text_dim));
+                        ui.label(RichText::new(tr!("Cut marks:")).color(t.text_dim));
                         if ui
-                            .checkbox(&mut comp.cut_marks, "✂ Eck-Schnittmarken an Bildern")
+                            .checkbox(&mut comp.cut_marks, tr!("✂ Corner cut marks at images"))
                             .changed()
                         {
                             changed = true;
@@ -7122,9 +7297,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
 
                         let size_row_lbl = if let Some(si) = selected_slot_idx {
-                            format!("Bildmaße (#{}):", si + 1)
+                            tr!("Image size (#{slot}):", slot = si + 1)
                         } else {
-                            String::from("Größe (Nächstes):")
+                            String::from(tr!("Size (next):"))
                         };
                         ui.label(RichText::new(size_row_lbl).color(t.text_dim));
                         egui::ComboBox::from_id_salt("comp_size_preset_combo")
@@ -7135,7 +7310,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 for &(lbl, preset_sz) in PHOTO_SIZE_PRESETS_MM {
                                     let is_match =
                                         matches_photo_size_preset(cur_size, preset_sz);
-                                    if ui.selectable_label(is_match, lbl).clicked() {
+                                    if ui.selectable_label(is_match, tr(lbl)).clicked() {
                                         if let Some(si) = selected_slot_idx {
                                             size_cmd = Some(EngineCommand::SetComposerSlotSize {
                                                 page_index: active_page,
@@ -7152,7 +7327,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             });
                         ui.end_row();
 
-                        ui.label(RichText::new("Breite / Höhe:").color(t.text_dim));
+                        ui.label(RichText::new(tr!("Width / height:")).color(t.text_dim));
                         ui.horizontal(|ui| {
                             let w_changed = ui
                                 .add(
@@ -7173,7 +7348,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 .changed();
                             if ui
                                 .button("⇄")
-                                .on_hover_text("Breite und Höhe tauschen")
+                                .on_hover_text(tr!("Swap width and height"))
                                 .clicked()
                             {
                                 std::mem::swap(&mut cur_size.width_mm, &mut cur_size.height_mm);
@@ -7224,9 +7399,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         });
                         ui.end_row();
 
-                        ui.label(RichText::new("Proportionen:").color(t.text_dim));
+                        ui.label(RichText::new(tr!("Proportions:")).color(t.text_dim));
                         if ui
-                            .checkbox(&mut comp.keep_aspect_ratio, "Seitenverhältnis sperren")
+                            .checkbox(&mut comp.keep_aspect_ratio, tr!("Lock aspect ratio"))
                             .changed()
                         {
                             changed = true;
@@ -7237,9 +7412,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     if ui
-                        .button("📏 Größe auf alle Bilder")
+                        .button(tr!("📏 Apply size to all images"))
                         .on_hover_text(
-                            "Übernimmt die eingestellte Bildgröße für alle platzierten Bilder auf dem Sammelbogen",
+                            tr!("Applies the chosen image size to all placed images on the gang sheet"),
                         )
                         .clicked()
                     {
@@ -7252,9 +7427,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     }
                     if self.session.doc.images.len() > 1
                         && ui
-                            .button("📦 Alle packen")
+                            .button(tr!("📦 Pack all"))
                             .on_hover_text(
-                                "Packt alle Bilder aus dem Bilder-Pool platzsparend auf den Sammelbogen",
+                                tr!("Packs all images from the image pool onto the gang sheet to save space"),
                             )
                             .clicked()
                     {
@@ -7297,7 +7472,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             p.file_path
                 .as_ref()
                 .map(|pb| pb.display().to_string())
-                .unwrap_or_else(|| String::from("(integriert / synthetisch)"))
+                .unwrap_or_else(|| String::from(tr!("(built-in / synthetic)")))
         }
 
         egui::Grid::new("grid_color_top")
@@ -7305,12 +7480,12 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             .spacing([14.0, 10.0])
             .min_col_width(130.0)
             .show(ui, |ui| {
-                ui.label(RichText::new("Ansicht:").color(t.text_dim));
+                ui.label(RichText::new(tr!("View:")).color(t.text_dim));
                 ui.horizontal(|ui| {
                     if ui
                         .selectable_label(!advanced, "Normal")
                         .on_hover_text(
-                            "Vereinfachte Ansicht mit optimalen Standardwerten (Relativ Farbmetrisch + Tiefenkompensierung bzw. Adobe RGB).",
+                            tr!("Simplified view with optimal defaults (relative colorimetric + black point compensation, or Adobe RGB)."),
                         )
                         .clicked()
                         && advanced
@@ -7318,9 +7493,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         self.exec(EngineCommand::SetColorAdvancedMode(false));
                     }
                     if ui
-                        .selectable_label(advanced, "Erweitert")
+                        .selectable_label(advanced, tr!("Advanced"))
                         .on_hover_text(
-                            "Erweiterte Steuerung für manuelle ICC-Profilwahl, Rendering Intent, Schwarzweiß (ABW) und Kalibrierungs-Rohdruck.",
+                            tr!("Advanced controls for manual ICC profile selection, rendering intent, black & white (ABW) and raw calibration prints."),
                         )
                         .clicked()
                         && !advanced
@@ -7330,7 +7505,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 });
                 ui.end_row();
 
-                ui.label(RichText::new("Farbmodus:").color(t.text_dim));
+                ui.label(RichText::new(tr!("Color mode:")).color(t.text_dim));
                 // Radio list instead of a combo box: with only 2–4 modes there is no need for a popup,
                 // which egui clips at the bottom screen edge (only two rows visible).
                 let abw_in_printer = self.session.printer_supports_abw();
@@ -7357,9 +7532,11 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             std::mem::discriminant(m) == std::mem::discriminant(&cur_mode);
                         let label = match m {
                             ColorManagementMode::AdvancedBwPhoto if abw_in_printer => {
-                                "Schwarzweiß (Advanced B&W im Drucker)"
+                                tr!("Black & white (Advanced B&W in the printer)")
                             }
-                            ColorManagementMode::AdvancedBwPhoto => "Schwarzweiß (LumaPrint-Tonung)",
+                            ColorManagementMode::AdvancedBwPhoto => {
+                                tr!("Black & white (LumaPrint toning)")
+                            }
                             _ => m.label(),
                         };
                         if ui.radio(is_sel, label).clicked() && !is_sel {
@@ -7373,13 +7550,13 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     // Normal mode: clean, self-explanatory summary rows
                     match &self.session.doc.color.mode {
                         ColorManagementMode::UseIccProfile => {
-                            ui.label(RichText::new("Aktives Profil:").color(t.text_dim));
+                            ui.label(RichText::new(tr!("Active profile:")).color(t.text_dim));
                             if let Some(prof) = self.session.active_icc_profile() {
                                 let short_desc = truncate_text(&prof.description, 31);
-                                let tip = format!(
-                                    "Profil: {}\nDatei: {}\nAutomatisch aktiv: Relativ Farbmetrisch + Tiefenkompensierung (BPC)\nDruckertreiber: NoColorAdjustment (Kein doppeltes Farbmanagement)",
-                                    prof.description,
-                                    icc_file_display(prof)
+                                let tip = tr!(
+                                    "Profile: {profile}\nFile: {file}\nApplied automatically: relative colorimetric + black point compensation (BPC)\nPrinter driver: NoColorAdjustment (no double color management)",
+                                    profile = prof.description,
+                                    file = icc_file_display(prof)
                                 );
                                 ui.label(
                                     RichText::new(format!("✓ {short_desc}"))
@@ -7390,16 +7567,16 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             } else {
                                 ui.horizontal(|ui| {
                                     ui.label(
-                                        RichText::new("⚠ Kein Profil")
+                                        RichText::new(tr!("⚠ No profile"))
                                             .small()
                                             .color(t.warning),
                                     )
                                     .on_hover_text(
-                                        "Für das gewählte Papier wurde noch kein ICC-Profil gefunden. Wählen Sie eine .icc/.icm-Datei aus.",
+                                        tr!("No ICC profile was found for the selected paper yet. Choose an .icc/.icm file."),
                                     );
                                     if ui
-                                        .small_button("📂 ICC wählen…")
-                                        .on_hover_text("Eigene .icc / .icm Profildatei laden")
+                                        .small_button(tr!("📂 Choose ICC…"))
+                                        .on_hover_text(tr!("Load your own .icc / .icm profile file"))
                                         .clicked()
                                     {
                                         self.open_native_icc_picker();
@@ -7409,14 +7586,14 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             ui.end_row();
                         }
                         ColorManagementMode::PrinterManagesColor { .. } => {
-                            ui.label(RichText::new("Übergabe:").color(t.text_dim));
+                            ui.label(RichText::new(tr!("Output:")).color(t.text_dim));
                             ui.label(
-                                RichText::new("✓ Adobe RGB (Automatisch)")
+                                RichText::new(tr!("✓ Adobe RGB (automatic)"))
                                     .small()
                                     .color(t.success),
                             )
                             .on_hover_text(
-                                "Übergibt die Druckdaten im großen Adobe-RGB-Farbraum an den Druckertreiber (wie Epson Print Layout 'Intent: Automatisch', LUT 0x06).",
+                                tr!("Sends the print data in the wide Adobe RGB color space to the printer driver (like Epson Print Layout 'Intent: Automatic', LUT 0x06)."),
                             );
                             ui.end_row();
                         }
@@ -7427,10 +7604,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     if let ColorManagementMode::PrinterManagesColor { space } =
                         self.session.doc.color.mode
                     {
-                        ui.label(RichText::new("Intent / Farbraum:").color(t.text_dim));
+                        ui.label(RichText::new(tr!("Intent / color space:")).color(t.text_dim));
                         let space_label = match space {
-                            lumaprint_cms::WorkingColorSpace::Srgb => "sRGB (EPSON Standard)",
-                            _ => "Adobe RGB (EPL Automatisch / Empfohlen)",
+                            lumaprint_cms::WorkingColorSpace::Srgb => tr!("sRGB (EPSON standard)"),
+                            _ => tr!("Adobe RGB (EPL automatic / recommended)"),
                         };
                         egui::ComboBox::from_id_salt("printer_color_space_combo")
                             .selected_text(truncate_text(space_label, 34))
@@ -7439,11 +7616,11 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 for (sp, lbl) in [
                                     (
                                         lumaprint_cms::WorkingColorSpace::AdobeRgb1998,
-                                        "Adobe RGB (EPL Automatisch / Empfohlen)",
+                                        tr!("Adobe RGB (EPL automatic / recommended)"),
                                     ),
                                     (
                                         lumaprint_cms::WorkingColorSpace::Srgb,
-                                        "sRGB (EPSON Standard)",
+                                        tr!("sRGB (EPSON standard)"),
                                     ),
                                 ] {
                                     if ui.selectable_label(space == sp, lbl).clicked() {
@@ -7455,15 +7632,15 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             });
                         ui.end_row();
 
-                        ui.label(RichText::new("Treiber-Status:").color(t.text_dim));
+                        ui.label(RichText::new(tr!("Driver status:")).color(t.text_dim));
                         let (lut_badge, lut_tip) = match space {
                             lumaprint_cms::WorkingColorSpace::Srgb => (
-                                "✓ Drucker-LUT aktiv (sRGB, 0x00)",
-                                "Übergibt das Bild in sRGB mit EpsonColorMode=EpsonStandard (LUT 0x00) an den Druckertreiber.",
+                                tr!("✓ Printer LUT active (sRGB, 0x00)"),
+                                tr!("Sends the image in sRGB with EpsonColorMode=EpsonStandard (LUT 0x00) to the printer driver."),
                             ),
                             _ => (
-                                "✓ Drucker-LUT aktiv (Adobe RGB, 0x06)",
-                                "Konvertiert das Bild wie Epson Print Layout ('Intent: Automatisch') nach Adobe RGB (1998) und aktiviert EpsonColorMode=EpsonAdobeRGB (LUT 0x06).",
+                                tr!("✓ Printer LUT active (Adobe RGB, 0x06)"),
+                                tr!("Converts the image to Adobe RGB (1998) like Epson Print Layout ('Intent: Automatic') and enables EpsonColorMode=EpsonAdobeRGB (LUT 0x06)."),
                             ),
                         };
                         ui.label(
@@ -7480,11 +7657,11 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         ColorManagementMode::UseIccProfile
                     ) {
                         let auto_icc = self.session.doc.color.auto_select_icc_for_media;
-                        ui.label(RichText::new("ICC-Profilwahl:").color(t.text_dim));
+                        ui.label(RichText::new(tr!("ICC profile:")).color(t.text_dim));
                         ui.horizontal(|ui| {
                             if ui
-                                .radio(auto_icc, "Automatisch")
-                                .on_hover_text("Passendes ICC-Profil automatisch anhand des gewählten Papiers auswählen")
+                                .radio(auto_icc, tr!("Automatic"))
+                                .on_hover_text(tr!("Select the matching ICC profile automatically from the chosen paper"))
                                 .clicked()
                                 && !auto_icc
                             {
@@ -7494,8 +7671,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 });
                             }
                             if ui
-                                .radio(!auto_icc, "Manuell")
-                                .on_hover_text("Beliebiges installiertes oder eigenes ICC-Profil (.icc / .icm) frei auswählen")
+                                .radio(!auto_icc, tr!("Manual"))
+                                .on_hover_text(tr!("Choose any installed or custom ICC profile (.icc / .icm)"))
                                 .clicked()
                                 && auto_icc
                             {
@@ -7526,14 +7703,14 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         ui.end_row();
 
                         if !auto_icc {
-                            ui.label(RichText::new("Manuelles ICC:").color(t.text_dim));
+                            ui.label(RichText::new(tr!("Manual ICC:")).color(t.text_dim));
                             let avail = self.session.available_icc_profile_list();
                             let cur_sel_label = self
                                 .session
                                 .active_icc_profile()
                                 .map(|p| p.description.clone())
                                 .or_else(|| self.session.doc.color.custom_icc_profile_path.clone())
-                                .unwrap_or_else(|| String::from("Profil wählen…"));
+                                .unwrap_or_else(|| String::from(tr!("Choose profile…")));
                             ui.horizontal(|ui| {
                                 egui::ComboBox::from_id_salt("manual_icc_combo")
                                     .selected_text(truncate_text(&cur_sel_label, 26))
@@ -7562,7 +7739,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                     });
                                 if ui
                                     .button("📂")
-                                    .on_hover_text("ICC-Profildatei (.icc / .icm) von der Festplatte laden…")
+                                    .on_hover_text(tr!("Load an ICC profile file (.icc / .icm) from disk…"))
                                     .clicked()
                                 {
                                     self.open_native_icc_picker();
@@ -7575,19 +7752,19 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             if let Some(prof) = self.session.active_icc_profile() {
                                 (
                                     truncate_text(&prof.description, 32),
-                                    format!(
-                                        "Profil: {}\nDatei: {}",
-                                        prof.description,
-                                        icc_file_display(prof)
+                                    tr!(
+                                        "Profile: {profile}\nFile: {file}",
+                                        profile = prof.description,
+                                        file = icc_file_display(prof)
                                     ),
                                 )
                             } else {
                                 (
-                                    String::from("Automatisch (aus PPD)"),
-                                    String::from("Kein separates ICC-Profil geladen."),
+                                    String::from(tr!("Automatic (from PPD)")),
+                                    String::from(tr!("No separate ICC profile loaded.")),
                                 )
                             };
-                        ui.label(RichText::new("Aktives Profil:").color(t.text_dim));
+                        ui.label(RichText::new(tr!("Active profile:")).color(t.text_dim));
                         ui.label(RichText::new(active_icc_short).color(t.accent).strong())
                             .on_hover_text(active_icc_tip);
                         ui.end_row();
@@ -7610,8 +7787,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         ui.end_row();
 
                         let mut bpc = self.session.doc.color.black_point_compensation;
-                        ui.label(RichText::new("Tiefenkomp.:").color(t.text_dim));
-                        if ui.checkbox(&mut bpc, "Aktiviert (BPC)").changed() {
+                        ui.label(RichText::new(tr!("Black point comp.:")).color(t.text_dim));
+                        if ui.checkbox(&mut bpc, tr!("Enabled (BPC)")).changed() {
                             self.exec(EngineCommand::SetBlackPointCompensation(bpc));
                         }
                         ui.end_row();
@@ -7621,14 +7798,14 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         self.session.doc.color.mode,
                         ColorManagementMode::NoColorAdjustment
                     ) {
-                        ui.label(RichText::new("Hinweis:").color(t.text_dim));
+                        ui.label(RichText::new(tr!("Note:")).color(t.text_dim));
                         ui.label(
-                            RichText::new("⚠ Unkorrigierte Rohdaten (nur für Testcharts)")
+                            RichText::new(tr!("⚠ Uncorrected raw data (test charts only)"))
                                 .small()
                                 .color(t.warning),
                         )
                         .on_hover_text(
-                            "Sendet unkorrigierte RGB-Werte ohne Farbmanagement direkt an den Druckertreiber (nur zum Drucken von Kalibrierungs-Testcharts für die Profilerstellung).",
+                            tr!("Sends uncorrected RGB values without color management directly to the printer driver (only for printing calibration test charts for profiling)."),
                         );
                         ui.end_row();
                     }
@@ -7644,15 +7821,15 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             .active_system_printer()
                             .map(|sp| sp.capabilities.driver_color_control)
                             .unwrap_or_default();
-                        ui.label(RichText::new("Treiber-Status:").color(t.text_dim));
+                        ui.label(RichText::new(tr!("Driver status:")).color(t.text_dim));
                         if self.session.driver_handles_abw() {
                             ui.label(
-                                RichText::new("✓ Advanced B&W im Drucker")
+                                RichText::new(tr!("✓ Advanced B&W in the printer"))
                                     .small()
                                     .color(t.success),
                             )
                             .on_hover_text(
-                                "Sendet sRGB mit EpsonColorMode=AdvancedBW und den ABW-Einstellungen (EpsonAbw*) wie Epson Print Layout. Graukonvertierung und Tonung übernimmt die Drucker-Firmware; die Vorschau ist eine Annäherung.",
+                                tr!("Sends sRGB with EpsonColorMode=AdvancedBW and the ABW settings (EpsonAbw*) like Epson Print Layout. The printer firmware does the gray conversion and toning; the preview is an approximation."),
                             );
                         } else {
                             let (prefix, badge_col) = if drv_ctrl.is_known_driver_disable() {
@@ -7671,7 +7848,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     }
                 }
 
-                ui.label(RichText::new("Druck-Schärfung:").color(t.text_dim));
+                ui.label(RichText::new(tr!("Output sharpening:")).color(t.text_dim));
                 egui::ComboBox::from_id_salt("output_sharp_combo")
                     .selected_text(sharp.label())
                     .width(245.0)
@@ -7688,9 +7865,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     let mut detailed = self.session.doc.printer.detailed;
                     ui.label(RichText::new("Dithering:").color(t.text_dim));
                     if ui
-                        .checkbox(&mut detailed.spool_dithering, "16 → 8 Bit mit Dithering")
+                        .checkbox(&mut detailed.spool_dithering, tr!("16 → 8 bit with dithering"))
                         .on_hover_text(
-                            "An (Standard): verhindert Tonwertstufen in feinen Verläufen.\nAus: einfaches Runden – 8-Bit-Bilder gehen unverändert an den Drucker (wie Epson Print Layout), die Druckdatei wird deutlich kleiner.",
+                            tr!("On (default): prevents banding in fine gradients.\nOff: simple rounding – 8-bit images go to the printer unchanged (like Epson Print Layout), and the print file is much smaller."),
                         )
                         .changed()
                     {
@@ -7723,11 +7900,11 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             .spacing([14.0, 10.0])
             .min_col_width(130.0)
             .show(ui, |ui| {
-                ui.label(RichText::new("Farbton:").color(t.text_dim));
+                ui.label(RichText::new(tr!("Tone:")).color(t.text_dim));
                 ui.horizontal(|ui| {
                     for (preset, lbl) in [
                         (AbwTonePreset::Neutral, "Neutral"),
-                        (AbwTonePreset::Cool, "Kühl"),
+                        (AbwTonePreset::Cool, tr!("Cool")),
                         (AbwTonePreset::Warm, "Warm"),
                         (AbwTonePreset::Sepia, "Sepia"),
                     ] {
@@ -7739,23 +7916,23 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 });
                 ui.end_row();
 
-                ui.label(RichText::new("Mittelgrauwert:").color(t.text_dim));
+                ui.label(RichText::new(tr!("Midtone:")).color(t.text_dim));
                 egui::ComboBox::from_id_salt("abw_midtone_combo")
                     .selected_text(match abw.midtone {
-                        AbwMidtone::Light => "Hell",
+                        AbwMidtone::Light => tr!("Light"),
                         AbwMidtone::Normal => "Normal",
-                        AbwMidtone::Dark => "Dunkel",
-                        AbwMidtone::Darker => "Dunkler",
-                        AbwMidtone::Darkest => "Dunkelste",
+                        AbwMidtone::Dark => tr!("Dark"),
+                        AbwMidtone::Darker => tr!("Darker"),
+                        AbwMidtone::Darkest => tr!("Darkest"),
                     })
                     .width(245.0)
                     .show_ui(ui, |ui| {
                         for (mt, lbl) in [
-                            (AbwMidtone::Light, "Hell"),
+                            (AbwMidtone::Light, tr!("Light")),
                             (AbwMidtone::Normal, "Normal"),
-                            (AbwMidtone::Dark, "Dunkel"),
-                            (AbwMidtone::Darker, "Dunkler"),
-                            (AbwMidtone::Darkest, "Dunkelste"),
+                            (AbwMidtone::Dark, tr!("Dark")),
+                            (AbwMidtone::Darker, tr!("Darker")),
+                            (AbwMidtone::Darkest, tr!("Darkest")),
                         ] {
                             if ui.selectable_value(&mut abw.midtone, mt, lbl).changed() {
                                 changed = true;
@@ -7764,7 +7941,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     });
                 ui.end_row();
 
-                ui.label(RichText::new("2D-Farbzirkel:").color(t.text_dim));
+                ui.label(RichText::new(tr!("2D color wheel:")).color(t.text_dim));
                 ui.vertical(|ui| {
                     let (wheel_rect, wheel_resp) =
                         ui.allocate_exact_size(Vec2::new(136.0, 136.0), Sense::click_and_drag());
@@ -7833,49 +8010,49 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 });
                 ui.end_row();
 
-                ui.label(RichText::new("Helligkeit:").color(t.text_dim));
+                ui.label(RichText::new(tr!("Brightness:")).color(t.text_dim));
                 changed |= ui
                     .add(egui::Slider::new(&mut abw.brightness, -25..=25))
                     .changed();
                 ui.end_row();
 
-                ui.label(RichText::new("Kontrast:").color(t.text_dim));
+                ui.label(RichText::new(tr!("Contrast:")).color(t.text_dim));
                 changed |= ui
                     .add(egui::Slider::new(&mut abw.contrast, -25..=25))
                     .changed();
                 ui.end_row();
 
-                ui.label(RichText::new("Schatten-Ton:").color(t.text_dim));
+                ui.label(RichText::new(tr!("Shadow tonality:")).color(t.text_dim));
                 changed |= ui
                     .add(egui::Slider::new(&mut abw.shadow_toning, -25..=25))
                     .changed();
                 ui.end_row();
 
-                ui.label(RichText::new("Lichter-Ton:").color(t.text_dim));
+                ui.label(RichText::new(tr!("Highlight tonality:")).color(t.text_dim));
                 changed |= ui
                     .add(egui::Slider::new(&mut abw.highlight_toning, -25..=25))
                     .changed();
                 ui.end_row();
 
-                ui.label(RichText::new("Opt. Dichte:").color(t.text_dim));
+                ui.label(RichText::new(tr!("Max. optical density:")).color(t.text_dim));
                 changed |= ui
                     .add(egui::Slider::new(&mut abw.max_optical_density, -50..=0))
                     .changed();
                 ui.end_row();
 
-                ui.label(RichText::new("Spitzlichter:").color(t.text_dim));
+                ui.label(RichText::new(tr!("Highlight point shift:")).color(t.text_dim));
                 egui::ComboBox::from_id_salt("abw_hl_shift_combo")
                     .selected_text(match abw.highlight_shift {
-                        AbwHighlightShift::Off => "Aus",
-                        AbwHighlightShift::ImageArea => "Ein (Bildbereich)",
-                        AbwHighlightShift::FullPage => "Ein (Ganze Seite)",
+                        AbwHighlightShift::Off => tr!("Off"),
+                        AbwHighlightShift::ImageArea => tr!("On (image area)"),
+                        AbwHighlightShift::FullPage => tr!("On (full page)"),
                     })
                     .width(245.0)
                     .show_ui(ui, |ui| {
                         for (hs, lbl) in [
-                            (AbwHighlightShift::Off, "Aus"),
-                            (AbwHighlightShift::ImageArea, "Ein (Bildbereich)"),
-                            (AbwHighlightShift::FullPage, "Ein (Ganze Seite)"),
+                            (AbwHighlightShift::Off, tr!("Off")),
+                            (AbwHighlightShift::ImageArea, tr!("On (image area)")),
+                            (AbwHighlightShift::FullPage, tr!("On (full page)")),
                         ] {
                             if ui
                                 .selectable_value(&mut abw.highlight_shift, hs, lbl)
@@ -7898,7 +8075,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         ui.horizontal(|ui| {
             ui.label(RichText::new(&self.session.printer_status.state_summary).color(t.text_dim));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("🔄 IPP Aktualisieren").clicked() {
+                if ui.button(tr!("🔄 Refresh IPP")).clicked() {
                     self.session.refresh_printer_status(800);
                 }
             });
@@ -7908,7 +8085,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         if self.session.printer_status.channels.is_empty() {
             ui.label(
                 RichText::new(
-                    "Keine IPP-Tintenstände geladen (über '🔄 IPP Aktualisieren' vom gewählten Drucker abfragen).",
+                    tr!("No IPP ink levels loaded (query them from the selected printer with '🔄 Refresh IPP')."),
                 )
                 .small()
                 .color(t.text_faint),
@@ -7955,7 +8132,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         // 1. Bildbeschnitt (Crop) Modal (EPL manual p. 15, 43)
         if self.show_crop_modal {
             let mut open = self.show_crop_modal;
-            egui::Window::new("✂ Bildbeschnitt (EPL Crop-Ansicht)")
+            egui::Window::new(tr!("✂ Crop image (EPL crop view)"))
+                .id(egui::Id::new("crop_modal"))
                 .open(&mut open)
                 .resizable(false)
                 .show(ctx, |ui| {
@@ -7969,16 +8147,21 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         let mut crop = img.crop;
                         let mut changed = false;
                         changed |= ui
-                            .add(egui::Slider::new(&mut crop.norm_x, 0.0..=0.8).text("Links (X)"))
+                            .add(
+                                egui::Slider::new(&mut crop.norm_x, 0.0..=0.8)
+                                    .text(tr!("Left (X)")),
+                            )
                             .changed();
                         changed |= ui
-                            .add(egui::Slider::new(&mut crop.norm_y, 0.0..=0.8).text("Oben (Y)"))
+                            .add(
+                                egui::Slider::new(&mut crop.norm_y, 0.0..=0.8).text(tr!("Top (Y)")),
+                            )
                             .changed();
                         changed |= ui
-                            .add(egui::Slider::new(&mut crop.norm_w, 0.1..=1.0).text("Breite"))
+                            .add(egui::Slider::new(&mut crop.norm_w, 0.1..=1.0).text(tr!("Width")))
                             .changed();
                         changed |= ui
-                            .add(egui::Slider::new(&mut crop.norm_h, 0.1..=1.0).text("Höhe"))
+                            .add(egui::Slider::new(&mut crop.norm_h, 0.1..=1.0).text(tr!("Height")))
                             .changed();
                         if changed {
                             self.exec(EngineCommand::SetImageCrop {
@@ -8000,16 +8183,16 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         if let Some(paths) = self.pending_folder_import.clone() {
             let mut close_modal = false;
             let mut confirm_import = false;
-            egui::Window::new("📁 Großen Ordner in Bilder-Pool importieren?")
+            egui::Window::new(tr!("📁 Import a large folder into the image pool?"))
+                .id(egui::Id::new("folder_import_modal"))
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
                 .show(ctx, |ui| {
                     ui.label(
-                        RichText::new(format!(
-                            "Der ausgewählte Ordner enthält {} Bilder.\nBist du sicher, dass alle {} Bilder in den Bilder-Pool geladen werden sollen?",
-                            paths.len(),
-                            paths.len()
+                        RichText::new(tr!(
+                            "The selected folder contains {count} images.\nDo you really want to load all {count} images into the image pool?",
+                            count = paths.len()
                         ))
                         .strong(),
                     );
@@ -8017,7 +8200,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     ui.horizontal(|ui| {
                         if ui
                             .button(
-                                RichText::new(format!("✓ Ja, {} Bilder importieren", paths.len()))
+                                RichText::new(tr!("✓ Yes, import {count} images", count = paths.len()))
                                     .strong(),
                             )
                             .clicked()
@@ -8025,7 +8208,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             confirm_import = true;
                             close_modal = true;
                         }
-                        if ui.button("Abbrechen").clicked() {
+                        if ui.button(tr!("Cancel")).clicked() {
                             close_modal = true;
                         }
                     });
@@ -8041,7 +8224,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         // 4. "Über LumaPrint" Info-Dialog (Hilfe -> Über LumaPrint…)
         if self.show_about_modal {
             let mut open = self.show_about_modal;
-            egui::Window::new("ℹ Über LumaPrint")
+            egui::Window::new(tr!("ℹ About LumaPrint"))
+                .id(egui::Id::new("about_modal"))
                 .open(&mut open)
                 .collapsible(false)
                 .resizable(false)
@@ -8060,23 +8244,23 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             .color(self.tokens.text_dim),
                     );
                     ui.add_space(8.0);
-                    ui.label(
-                        "LumaPrint ist ein herstellerunabhängiges 16-Bit Fine-Art Layout-, Softproof- \
-                         und Druckwerkzeug für Linux/CUPS (inspiriert von Epson Print Layout).",
-                    );
+                    ui.label(tr!(
+                        "LumaPrint is a vendor-independent 16-bit fine-art layout, soft proof \
+                         and printing tool for Linux/CUPS (inspired by Epson Print Layout)."
+                    ));
                     ui.add_space(6.0);
-                    ui.label("Kernfunktionen:");
-                    ui.label("• 16-Bit Farbpipeline mit ICC-Softproof, Papierweiß-Simulation & Gamut-Warnung");
-                    ui.label("• Erweitertes Schwarzweiß (ABW) mit 2D-Farbzirkel und Tonwertkurven");
-                    ui.label("• Mehrseiten-Bogenlayout (Standard, Vorlagen, Gallerie-Wrap, Freier Composer)");
-                    ui.label("• Automatische CUPS-PPD-Erkennung & Custom-Media-Unterstützung (.emx)");
+                    ui.label(tr!("Key features:"));
+                    ui.label(tr!("• 16-bit color pipeline with ICC soft proof, paper white simulation & gamut warning"));
+                    ui.label(tr!("• Advanced black & white (ABW) with 2D color wheel and tone curves"));
+                    ui.label(tr!("• Multi-sheet layout (standard, templates, gallery wrap, free composer)"));
+                    ui.label(tr!("• Automatic CUPS PPD detection & custom media support (.emx)"));
                     ui.add_space(8.0);
                     ui.separator();
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("📖 Dokumentation:").strong());
+                        ui.label(RichText::new(tr!("📖 Documentation:")).strong());
                         ui.label(
-                            RichText::new("Benutzerhandbuch (Link folgt in Kürze)")
+                            RichText::new(tr!("User manual (link coming soon)"))
                                 .color(self.tokens.text_dim),
                         );
                     });
@@ -8138,7 +8322,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 if is_custom {
                     tpl.name
                 } else {
-                    format!("{} (Frei)", tpl.name)
+                    tr!("{name} (free)", name = tpl.name)
                 },
                 rects,
                 tpl_spec.cut_marks || tpl.cut_marks,
@@ -8151,7 +8335,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         } else {
             (
                 None,
-                String::from("Freie Vorlage"),
+                String::from(tr!("Free template")),
                 vec![RectMm::new(20.0, 20.0, 100.0, 150.0)],
                 tpl_spec.cut_marks,
                 tpl_spec.caption_mode,
@@ -8191,7 +8375,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         ctx.show_viewport_immediate(
             egui::ViewportId::from_hash_of("lumaprint_template_studio_viewport"),
             egui::ViewportBuilder::default()
-                .with_title("LumaPrint – Vorlagen-Studio (Bento-Wizard & Freier Slot-Editor)")
+                .with_title(tr!(
+                    "LumaPrint – template studio (bento wizard & free slot editor)"
+                ))
                 .with_inner_size([1160.0, 780.0])
                 .with_min_inner_size([840.0, 540.0])
                 .with_resizable(true),
@@ -8200,7 +8386,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     // Fallback when multi-viewport is unavailable (e.g. headless unit tests):
                     // Render inside a movable, freely resizable egui::Window
                     let mut open = self.show_template_builder_modal;
-                    egui::Window::new("📐 Vorlagen-Studio – Bento-Wizard & Freier Slot-Editor")
+                    egui::Window::new(tr!("📐 Template studio – bento wizard & free slot editor"))
+                        .id(egui::Id::new("template_studio_window"))
                         .order(egui::Order::Foreground)
                         .open(&mut open)
                         .collapsible(false)
@@ -8294,23 +8481,23 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             )
             .show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Vorlagenname:").color(t.text_dim));
+                    ui.label(RichText::new(tr!("Template name:")).color(t.text_dim));
                     ui.add(
                         egui::TextEdit::singleline(&mut self.template_studio.name)
                             .desired_width(195.0),
                     );
                     ui.separator();
-                    ui.label(RichText::new("Ausrichtung:").color(t.text_dim));
+                    ui.label(RichText::new(tr!("Orientation:")).color(t.text_dim));
                     let prev_ori = self.template_studio.orientation;
                     ui.selectable_value(
                         &mut self.template_studio.orientation,
                         Orientation::Portrait,
-                        "Hochformat",
+                        tr!("Portrait"),
                     );
                     ui.selectable_value(
                         &mut self.template_studio.orientation,
                         Orientation::Landscape,
-                        "Querformat",
+                        tr!("Landscape"),
                     );
                     if self.template_studio.orientation != prev_ori
                         && self.template_studio.is_free_mode
@@ -8323,11 +8510,11 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let badge = if !self.template_studio.is_free_mode {
-                            RichText::new("● Stufe 1: Raster- & Bento-Wizard")
+                            RichText::new(tr!("● Step 1: grid & bento wizard"))
                                 .color(t.accent)
                                 .strong()
                         } else {
-                            RichText::new("● Stufe 2: Freier Slot-Editor (Einbahnstraße)")
+                            RichText::new(tr!("● Step 2: free slot editor (one-way)"))
                                 .color(Color32::from_rgb(245, 175, 60))
                                 .strong()
                         };
@@ -8349,12 +8536,12 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             .show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new(format!(
-                            "Papierformat: {} ({:.1} × {:.1} mm)  ·  {} aktive Bildstellen",
-                            self.session.doc.printer.paper_size_key,
-                            paper_size_mm.width_mm,
-                            paper_size_mm.height_mm,
-                            slot_count
+                        RichText::new(tr!(
+                            "Paper size: {paper} ({width} × {height} mm)  ·  {count} active slots",
+                            paper = self.session.doc.printer.paper_size_key,
+                            width = format!("{:.1}", paper_size_mm.width_mm),
+                            height = format!("{:.1}", paper_size_mm.height_mm),
+                            count = slot_count
                         ))
                         .color(t.text_dim),
                     );
@@ -8366,7 +8553,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             .add_enabled(
                                 can_save,
                                 egui::Button::new(
-                                    RichText::new("✓ Vorlage speichern & auf Bogen anwenden")
+                                    RichText::new(tr!("✓ Save template & apply to sheet"))
                                         .strong()
                                         .color(Color32::WHITE),
                                 )
@@ -8379,7 +8566,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
                         ui.add_space(6.0);
                         if ui
-                            .add(egui::Button::new("Abbrechen").min_size(Vec2::new(105.0, 30.0)))
+                            .add(egui::Button::new(tr!("Cancel")).min_size(Vec2::new(105.0, 30.0)))
                             .clicked()
                         {
                             *cancel_close = true;
@@ -8413,18 +8600,18 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         studio_card_frame(&t).show(ui, |ui| {
                             ui.set_min_width(ui.available_width());
                             ui.label(
-                                RichText::new("✂ Schnittmarken & Bildunterschrift")
+                                RichText::new(tr!("✂ Cut marks & caption"))
                                     .strong()
                                     .color(t.accent),
                             );
                             ui.add_space(4.0);
                             ui.checkbox(
                                 &mut self.template_studio.cut_marks,
-                                "Eck-Schnittmarken um jede Bildstelle",
+                                tr!("Corner cut marks around each slot"),
                             );
                             ui.add_space(4.0);
                             ui.horizontal(|ui| {
-                                ui.label(RichText::new("Unterschrift:").color(t.text_dim));
+                                ui.label(RichText::new(tr!("Caption:")).color(t.text_dim));
                                 egui::ComboBox::from_id_salt("studio_caption_combo")
                                     .selected_text(self.template_studio.caption_mode.label())
                                     .width(210.0)
@@ -8462,7 +8649,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         studio_card_frame(&t).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.label(
-                RichText::new("1. Basis-Raster & Ränder (mm)")
+                RichText::new(tr!("1. Base grid & margins (mm)"))
                     .strong()
                     .color(t.accent),
             );
@@ -8474,7 +8661,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 .spacing([10.0, 6.0])
                 .min_col_width(105.0)
                 .show(ui, |ui| {
-                    ui.label(RichText::new("Zeilen × Spalten:").color(t.text_dim));
+                    ui.label(RichText::new(tr!("Rows × columns:")).color(t.text_dim));
                     ui.horizontal(|ui| {
                         grid_changed |= ui
                             .add(
@@ -8494,15 +8681,15 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     });
                     ui.end_row();
 
-                    ui.label(RichText::new("Außenränder:").color(t.text_dim));
+                    ui.label(RichText::new(tr!("Outer margins:")).color(t.text_dim));
                     ui.checkbox(
                         &mut self.template_studio.uniform_margins,
-                        "🔗 Alle 4 Seiten koppeln",
+                        tr!("🔗 Link all 4 sides"),
                     );
                     ui.end_row();
 
                     if self.template_studio.uniform_margins {
-                        ui.label(RichText::new("Rand rundum:").color(t.text_dim));
+                        ui.label(RichText::new(tr!("Margin all round:")).color(t.text_dim));
                         let mut m = self.template_studio.margins_mm.top_mm;
                         if ui
                             .add(de_drag(&mut m).range(0.0..=80.0).speed(0.5).suffix(" mm"))
@@ -8512,7 +8699,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
                         ui.end_row();
                     } else {
-                        ui.label(RichText::new("Oben / Unten:").color(t.text_dim));
+                        ui.label(RichText::new(tr!("Top / bottom:")).color(t.text_dim));
                         ui.horizontal(|ui| {
                             ui.add(
                                 de_drag(&mut self.template_studio.margins_mm.top_mm)
@@ -8530,7 +8717,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         });
                         ui.end_row();
 
-                        ui.label(RichText::new("Links / Rechts:").color(t.text_dim));
+                        ui.label(RichText::new(tr!("Left / right:")).color(t.text_dim));
                         ui.horizontal(|ui| {
                             ui.add(
                                 de_drag(&mut self.template_studio.margins_mm.left_mm)
@@ -8549,7 +8736,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         ui.end_row();
                     }
 
-                    ui.label(RichText::new("Steg H / V:").color(t.text_dim));
+                    ui.label(RichText::new(tr!("Gutter H / V:")).color(t.text_dim));
                     ui.horizontal(|ui| {
                         ui.add(
                             de_drag(&mut self.template_studio.gap_h_mm)
@@ -8580,14 +8767,14 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         studio_card_frame(&t).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.label(
-                RichText::new("2. Zellen verbinden (Bento-Layout)")
+                RichText::new(tr!("2. Merge cells (bento layout)"))
                     .strong()
                     .color(t.accent),
             );
             ui.label(
-                RichText::new(
-                    "Rechts im Bogen Zellen anklicken oder mit gedrückter Maustaste über mehrere Zellen ziehen:",
-                )
+                RichText::new(tr!(
+                    "Click cells in the sheet on the right, or drag across several cells:"
+                ))
                 .small()
                 .color(t.text_faint),
             );
@@ -8601,16 +8788,13 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
             ui.horizontal_wrapped(|ui| {
                 if ui
-                    .add_enabled(
-                        can_merge,
-                        egui::Button::new("⊞ Zellen verbinden (Merge)"),
-                    )
+                    .add_enabled(can_merge, egui::Button::new(tr!("⊞ Merge cells")))
                     .clicked()
                 {
                     self.template_studio.merge_selected_cells();
                 }
                 if ui
-                    .add_enabled(has_selection, egui::Button::new("⊟ Trennen"))
+                    .add_enabled(has_selection, egui::Button::new(tr!("⊟ Split")))
                     .clicked()
                 {
                     self.template_studio.unmerge_selected_cells();
@@ -8618,7 +8802,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 if ui
                     .add_enabled(
                         has_selection,
-                        egui::Button::new("⬜ Zelle leer / aktiv"),
+                        egui::Button::new(tr!("⬜ Cell empty / active")),
                     )
                     .clicked()
                 {
@@ -8627,27 +8811,31 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             });
 
             ui.add_space(4.0);
-            ui.label(RichText::new("Schnellvorlagen:").small().color(t.text_dim));
+            ui.label(
+                RichText::new(tr!("Quick templates:"))
+                    .small()
+                    .color(t.text_dim),
+            );
             ui.horizontal_wrapped(|ui| {
-                if ui.small_button("Standard-Raster").clicked() {
+                if ui.small_button(tr!("Standard grid")).clicked() {
                     self.template_studio.merged_regions.clear();
                     self.template_studio.disabled_cells.clear();
                 }
-                if ui.small_button("1 Groß oben + 3 Unten").clicked() {
+                if ui.small_button(tr!("1 large top + 3 below")).clicked() {
                     self.template_studio.rows = 3;
                     self.template_studio.cols = 3;
                     self.template_studio.merged_regions = vec![[0, 0, 1, 2]];
                     self.template_studio.disabled_cells.clear();
                     self.template_studio.selected_cells = Some([0, 0, 1, 2]);
                 }
-                if ui.small_button("1 Groß links + 2 Rechts").clicked() {
+                if ui.small_button(tr!("1 large left + 2 right")).clicked() {
                     self.template_studio.rows = 2;
                     self.template_studio.cols = 3;
                     self.template_studio.merged_regions = vec![[0, 0, 1, 1]];
                     self.template_studio.disabled_cells.clear();
                     self.template_studio.selected_cells = Some([0, 0, 1, 1]);
                 }
-                if ui.small_button("Panorama + 2 Unten").clicked() {
+                if ui.small_button(tr!("Panorama + 2 below")).clicked() {
                     self.template_studio.rows = 2;
                     self.template_studio.cols = 2;
                     self.template_studio.merged_regions = vec![[0, 0, 0, 1]];
@@ -8663,13 +8851,13 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         studio_card_frame(&t).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.label(
-                RichText::new("3. Freier Slot-Editor (Einbahnstraße)")
+                RichText::new(tr!("3. Free slot editor (one-way)"))
                     .strong()
                     .color(Color32::from_rgb(245, 175, 60)),
             );
             ui.label(
                 RichText::new(
-                    "Für freie Maus-Platzierung & exakte Millimeter-Maße. Ein Zurück zum Raster ist danach nicht mehr möglich.",
+                    tr!("For free mouse placement & exact millimeter sizes. You cannot go back to the grid afterwards."),
                 )
                 .small()
                 .color(t.text_faint),
@@ -8677,7 +8865,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             ui.add_space(4.0);
             if ui
                 .button(
-                    RichText::new("🔓 In freien Modus wechseln (kein Zurück)")
+                    RichText::new(tr!("🔓 Switch to free mode (no way back)"))
                         .strong()
                         .color(Color32::from_rgb(255, 195, 85)),
                 )
@@ -8695,20 +8883,24 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         studio_card_frame(&t).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.label(
-                RichText::new("1. Bildstellen hinzufügen & Einrasten")
+                RichText::new(tr!("1. Add slots & snapping"))
                     .strong()
                     .color(Color32::from_rgb(245, 175, 60)),
             );
             ui.add_space(4.0);
             ui.checkbox(
                 &mut self.template_studio.snap_enabled,
-                "🧲 Magnetisches Einrasten (Ränder, Mitte & Slots)",
+                tr!("🧲 Magnetic snapping (edges, center & slots)"),
             );
             ui.add_space(4.0);
-            ui.label(RichText::new("Festmaß-Stempel:").small().color(t.text_dim));
+            ui.label(
+                RichText::new(tr!("Fixed-size stamps:"))
+                    .small()
+                    .color(t.text_dim),
+            );
             ui.horizontal_wrapped(|ui| {
                 let stamps: &[(&str, f64, f64)] = &[
-                    ("+ Freier Slot", 80.0, 80.0),
+                    (tr!("+ Free slot"), 80.0, 80.0),
                     ("+ 9×13 cm", 89.0, 127.0),
                     ("+ 10×15 cm", 102.0, 152.0),
                     ("+ 13×18 cm", 127.0, 178.0),
@@ -8743,7 +8935,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 && sel_idx < self.template_studio.free_slots_mm.len()
             {
                 ui.label(
-                    RichText::new(format!("2. Bildstelle #{} (Manuelle Maße)", sel_idx + 1))
+                    RichText::new(tr!("2. Slot #{slot} (manual size)", slot = sel_idx + 1))
                         .strong()
                         .color(t.accent),
                 );
@@ -8777,7 +8969,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         });
                         ui.end_row();
 
-                        ui.label(RichText::new("Breite / Höhe:").color(t.text_dim));
+                        ui.label(RichText::new(tr!("Width / height:")).color(t.text_dim));
                         ui.horizontal(|ui| {
                             ui.add(
                                 de_drag(&mut slot.width_mm)
@@ -8801,19 +8993,19 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
                 ui.add_space(6.0);
                 ui.horizontal_wrapped(|ui| {
-                    if ui.small_button("🔄 B ↔ H tauschen").clicked() {
+                    if ui.small_button(tr!("🔄 Swap W ↔ H")).clicked() {
                         let s = &mut self.template_studio.free_slots_mm[sel_idx];
                         std::mem::swap(&mut s.width_mm, &mut s.height_mm);
                     }
-                    if ui.small_button("↔ Horiz. zentrieren").clicked() {
+                    if ui.small_button(tr!("↔ Center horiz.")).clicked() {
                         let s = &mut self.template_studio.free_slots_mm[sel_idx];
                         s.x_mm = ((paper_size_mm.width_mm - s.width_mm) * 0.5).max(0.0);
                     }
-                    if ui.small_button("↕ Vert. zentrieren").clicked() {
+                    if ui.small_button(tr!("↕ Center vert.")).clicked() {
                         let s = &mut self.template_studio.free_slots_mm[sel_idx];
                         s.y_mm = ((paper_size_mm.height_mm - s.height_mm) * 0.5).max(0.0);
                     }
-                    if ui.small_button("⧉ Duplizieren").clicked() {
+                    if ui.small_button(tr!("⧉ Duplicate")).clicked() {
                         let s = self.template_studio.free_slots_mm[sel_idx];
                         let dup = RectMm::new(
                             (s.x_mm + 8.0).min(paper_size_mm.width_mm - s.width_mm),
@@ -8828,7 +9020,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     if ui
                         .add_enabled(
                             self.template_studio.free_slots_mm.len() > 1,
-                            egui::Button::new("🗑 Löschen").small(),
+                            egui::Button::new(tr!("🗑 Delete")).small(),
                         )
                         .clicked()
                     {
@@ -8843,9 +9035,9 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 });
             } else {
                 ui.label(
-                    RichText::new(
-                        "Klicke rechts im Bogen eine Bildstelle an, um ihre exakten Millimeter-Maße zu bearbeiten.",
-                    )
+                    RichText::new(tr!(
+                        "Click a slot in the sheet on the right to edit its exact millimeter size."
+                    ))
                     .small()
                     .color(t.text_faint),
                 );
@@ -8920,10 +9112,13 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         let sample_caption = |idx: usize, r_mm: RectMm, mode: SlotCaptionMode| -> Option<String> {
             match mode {
                 SlotCaptionMode::None => None,
-                SlotCaptionMode::Filename => Some(format!("Foto_{:02}.tif", idx + 1)),
-                SlotCaptionMode::NumberAndFilename => {
-                    Some(format!("#{:02}  Foto_{:02}.tif", idx + 1, idx + 1))
-                }
+                SlotCaptionMode::Filename => Some(format!("{}_{:02}.tif", tr!("Photo"), idx + 1)),
+                SlotCaptionMode::NumberAndFilename => Some(format!(
+                    "#{:02}  {}_{:02}.tif",
+                    idx + 1,
+                    tr!("Photo"),
+                    idx + 1
+                )),
                 SlotCaptionMode::DimensionsAndPpi => Some(format!(
                     "{:.1}×{:.1} mm (360 ppi)",
                     r_mm.width_mm, r_mm.height_mm
@@ -10221,7 +10416,7 @@ fn draw_orientation_tile(
                 inner_stroke,
                 StrokeKind::Middle,
             );
-            "Hochformat"
+            tr!("Portrait")
         }
         Orientation::Landscape => {
             let sheet = Rect::from_center_size(icon_c, Vec2::new(19.0, 13.0));
@@ -10239,7 +10434,7 @@ fn draw_orientation_tile(
                 inner_stroke,
                 StrokeKind::Middle,
             );
-            "Querformat"
+            tr!("Landscape")
         }
     };
 
@@ -10335,7 +10530,7 @@ fn draw_centering_tile(
                 slot_stroke,
                 StrokeKind::Middle,
             );
-            "Mitte"
+            tr!("Center")
         }
         CenteringMode::Horizontal => {
             // Vertical center axis + horizontally centered photo + up/down freedom arrows
@@ -10448,7 +10643,7 @@ fn draw_centering_tile(
                 ],
                 slot_stroke,
             );
-            "Frei"
+            tr!("Free")
         }
     };
 
@@ -10988,11 +11183,21 @@ fn draw_print_button(ui: &mut Ui, tokens: &Tokens, width: f32, is_sending: bool)
 
     let cy = rect.center().y;
     let label_text = if is_sending {
-        "Druckauftrag wird gesendet…"
+        tr!("Sending print job…")
     } else {
-        "Drucken"
+        tr!("Print")
     };
-    let icon_cx = rect.center().x - if is_sending { 95.0 } else { 32.0 };
+    // Center icon + label as one group (the label width depends on the language).
+    let label_w = ui
+        .painter()
+        .layout_no_wrap(
+            label_text.to_string(),
+            FontId::proportional(14.0),
+            tokens.accent_text,
+        )
+        .size()
+        .x;
+    let icon_cx = rect.center().x - (13.0 + label_w) * 0.5;
     let icon_stroke = Stroke::new(1.4_f32, tokens.accent_text);
 
     // Vector Printer Icon (top paper tray, main body, bottom output sheet) vertically centered at `cy`
@@ -11050,8 +11255,8 @@ fn draw_export_button(
     );
 
     let label = match format {
-        ExportFileFormat::Tiff16 => "💾 16-Bit TIFF exportieren…",
-        ExportFileFormat::Png16 => "💾 16-Bit PNG exportieren…",
+        ExportFileFormat::Tiff16 => tr!("💾 Export 16-bit TIFF…"),
+        ExportFileFormat::Png16 => tr!("💾 Export 16-bit PNG…"),
     };
     p.text(
         rect.center(),

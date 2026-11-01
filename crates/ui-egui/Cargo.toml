@@ -19,6 +19,7 @@ lumaprint-doc = { workspace = true }
 lumaprint-layout = { workspace = true }
 lumaprint-render = { workspace = true }
 lumaprint-engine = { workspace = true }
+lumaprint-i18n = { workspace = true }
 egui = { workspace = true }
 eframe = { workspace = true }
 winit = { workspace = true }
