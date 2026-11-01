@@ -82,7 +82,7 @@ pub(crate) static DE: &[(&str, &str)] = &[
     ),
     (
         "Gallery Wrap (canvas stretcher frame)",
-        "Gallerie Wrap (Leinwand-Keilrahmen)",
+        "Galerie Wrap (Leinwand-Keilrahmen)",
     ),
     ("Template (multiple images)", "Vorlage (Mehrere Bilder)"),
     ("Gang sheet (auto nesting)", "Sammelbogen (Auto-Nesting)"),
