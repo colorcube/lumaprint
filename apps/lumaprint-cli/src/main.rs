@@ -169,7 +169,7 @@ fn cmd_media() -> String {
             m.key,
             m.name,
             if m.uses_matte_black { "MK" } else { "PK" },
-            m.default_feed.label_de(false),
+            m.default_feed.label(false),
             if m.supports_black_enhance_overcoat {
                 "Ja"
             } else {

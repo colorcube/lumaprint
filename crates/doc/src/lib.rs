@@ -14,6 +14,7 @@ use lumaprint_cms::{RenderingIntent, SoftproofConfig, WorkingColorSpace};
 pub use lumaprint_codecs::ImageMetadata;
 use lumaprint_color::{AbwSettings, ColorAdjustments, Rgb8};
 use lumaprint_geom::{BorderlessExpandLevel, DisplayUnit, MarginsMm, Orientation, RectMm, SizeMm};
+use lumaprint_i18n::tr;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -53,18 +54,18 @@ impl PaperSource {
         Self::RollPaper,
     ];
 
-    pub fn label_de(self, borderless: bool) -> &'static str {
+    pub fn label(self, borderless: bool) -> &'static str {
         match (self, borderless) {
-            (Self::RearFeed, false) => "Hinterer Einzug (Einzelblatt)",
-            (Self::RearFeed, true) => "Hinterer Einzug (Randlos)",
-            (Self::FrontFineArt, false) => "Vorderer Einzug – Fine Art",
-            (Self::FrontFineArt, true) => "Vorderer Einzug – Fine Art (Randlos)",
-            (Self::FrontThick, false) => "Vorderer Einzug – Dickes Papier",
-            (Self::FrontThick, true) => "Vorderer Einzug – Dickes Papier (Randlos)",
-            (Self::FrontPosterBoard, _) => "Vorderer Einzug – Posterboard (Gerader Weg)",
-            (Self::FrontGlossyNoRoller, _) => "Vorderer Einzug – Ohne Auswurfwalze (Glanz)",
-            (Self::RollPaper, false) => "Rollenpapier",
-            (Self::RollPaper, true) => "Rollenpapier (Randlos)",
+            (Self::RearFeed, false) => tr!("Rear feed (sheet)"),
+            (Self::RearFeed, true) => tr!("Rear feed (borderless)"),
+            (Self::FrontFineArt, false) => tr!("Front feed – Fine Art"),
+            (Self::FrontFineArt, true) => tr!("Front feed – Fine Art (borderless)"),
+            (Self::FrontThick, false) => tr!("Front feed – Thick paper"),
+            (Self::FrontThick, true) => tr!("Front feed – Thick paper (borderless)"),
+            (Self::FrontPosterBoard, _) => tr!("Front feed – Poster board (straight path)"),
+            (Self::FrontGlossyNoRoller, _) => tr!("Front feed – No eject roller (glossy)"),
+            (Self::RollPaper, false) => tr!("Roll paper"),
+            (Self::RollPaper, true) => tr!("Roll paper (borderless)"),
         }
     }
 
@@ -101,14 +102,14 @@ impl PrintQuality {
         Self::CarbonBlack5760x1440,
     ];
 
-    pub fn label_de(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
-            Self::Draft360 => "Entwurf (720 x 360 dpi)",
-            Self::Normal720 => "Normal / Fein (720 x 720 dpi)",
-            Self::SuperFine1440x720 => "Qualität / SuperFine (1440 x 720 dpi)",
-            Self::High1440x1440 => "Hohe Qualität / Foto (1440 x 1440 dpi)",
-            Self::MaxQuality2880x1440 => "Max. Qualität (2880 x 1440 dpi)",
-            Self::CarbonBlack5760x1440 => "Ultra-Qualität (5760 x 1440 dpi)",
+            Self::Draft360 => tr!("Draft (720 x 360 dpi)"),
+            Self::Normal720 => tr!("Normal / Fine (720 x 720 dpi)"),
+            Self::SuperFine1440x720 => tr!("Quality / SuperFine (1440 x 720 dpi)"),
+            Self::High1440x1440 => tr!("High quality / Photo (1440 x 1440 dpi)"),
+            Self::MaxQuality2880x1440 => tr!("Max. quality (2880 x 1440 dpi)"),
+            Self::CarbonBlack5760x1440 => tr!("Ultra quality (5760 x 1440 dpi)"),
         }
     }
 
@@ -512,12 +513,12 @@ pub enum CenteringMode {
 impl CenteringMode {
     pub const ALL: [Self; 4] = [Self::None, Self::Center, Self::Vertical, Self::Horizontal];
 
-    pub fn label_de(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
-            Self::None => "Kein (Frei verschiebbar)",
-            Self::Center => "Mitte (Horizontal & Vertikal)",
-            Self::Vertical => "Vertikal zentriert",
-            Self::Horizontal => "Horizontal zentriert",
+            Self::None => tr!("None (free placement)"),
+            Self::Center => tr!("Center (horizontal & vertical)"),
+            Self::Vertical => tr!("Centered vertically"),
+            Self::Horizontal => tr!("Centered horizontally"),
         }
     }
 }
@@ -634,14 +635,14 @@ pub enum GalleryWrapEffect {
 }
 
 impl GalleryWrapEffect {
-    pub fn label_de(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
-            Self::None => "Kein (Weißer Rand)",
-            Self::SolidColor(_) => "Farbe",
-            Self::MirrorImage => "Bild spiegeln",
-            Self::MirrorShaded { .. } => "Spiegelbild (Schattierungen / Unschärfe)",
-            Self::WrapImage => "Wrap Bild",
-            Self::WrapShaded { .. } => "Wrap Bild (Schattierungen / Unschärfe)",
+            Self::None => tr!("None (white edge)"),
+            Self::SolidColor(_) => tr!("Color"),
+            Self::MirrorImage => tr!("Mirror image"),
+            Self::MirrorShaded { .. } => tr!("Mirrored image (shading / blur)"),
+            Self::WrapImage => tr!("Wrap image"),
+            Self::WrapShaded { .. } => tr!("Wrap image (shading / blur)"),
         }
     }
 }
@@ -709,12 +710,12 @@ impl SlotCaptionMode {
         Self::DimensionsAndPpi,
     ];
 
-    pub fn label_de(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
-            Self::None => "Keine",
-            Self::Filename => "Dateiname",
-            Self::NumberAndFilename => "Slot-Nr. + Dateiname (#01 …)",
-            Self::DimensionsAndPpi => "Bildmaße (mm) & Auflösung (ppi)",
+            Self::None => tr!("None"),
+            Self::Filename => tr!("File name"),
+            Self::NumberAndFilename => tr!("Slot no. + file name (#01 …)"),
+            Self::DimensionsAndPpi => tr!("Image size (mm) & resolution (ppi)"),
         }
     }
 }
@@ -823,13 +824,13 @@ impl Default for LayoutMode {
 }
 
 impl LayoutMode {
-    pub fn kind_label_de(&self) -> &'static str {
+    pub fn kind_label(&self) -> &'static str {
         match self {
-            Self::Standard(_) => "Standard (Einzelbild)",
-            Self::Panorama(_) => "Panorama (Rollenpapier / Banner)",
-            Self::GalleryWrap(_) => "Gallerie Wrap (Leinwand-Keilrahmen)",
-            Self::Template(_) => "Vorlage (Mehrere Bilder)",
-            Self::FreeComposer(_) => "Sammelbogen (Auto-Nesting)",
+            Self::Standard(_) => tr!("Standard (single image)"),
+            Self::Panorama(_) => tr!("Panorama (roll paper / banner)"),
+            Self::GalleryWrap(_) => tr!("Gallery Wrap (canvas stretcher frame)"),
+            Self::Template(_) => tr!("Template (multiple images)"),
+            Self::FreeComposer(_) => tr!("Gang sheet (auto nesting)"),
         }
     }
 }
@@ -933,14 +934,14 @@ pub enum ColorManagementMode {
 }
 
 impl ColorManagementMode {
-    pub fn label_de(&self) -> &'static str {
+    pub fn label(&self) -> &'static str {
         match self {
-            Self::UseIccProfile => "Farbverbindlich (ICC-Papierprofil)",
-            Self::AdvancedBwPhoto => "Schwarzweiß (Advanced B&W)",
-            Self::PrinterManagesColor { .. } => "Drucker-Automatik",
-            Self::Grayscale => "Graustufen",
+            Self::UseIccProfile => tr!("Color-managed (ICC paper profile)"),
+            Self::AdvancedBwPhoto => tr!("Black & white (Advanced B&W)"),
+            Self::PrinterManagesColor { .. } => tr!("Printer automatic"),
+            Self::Grayscale => tr!("Grayscale"),
             Self::Vibrant => "Photograph (Vibrant)",
-            Self::NoColorAdjustment => "Kalibrierung (Kein Farbmanagement)",
+            Self::NoColorAdjustment => tr!("Calibration (no color management)"),
         }
     }
 }
@@ -958,12 +959,12 @@ pub enum OutputSharpening {
 impl OutputSharpening {
     pub const ALL: [Self; 4] = [Self::Off, Self::Low, Self::Standard, Self::High];
 
-    pub fn label_de(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
-            Self::Off => "Aus (1:1 Original)",
-            Self::Low => "Niedrig",
-            Self::Standard => "Standard (Empfohlen)",
-            Self::High => "Hoch (Mattes Fine-Art-Papier)",
+            Self::Off => tr!("Off (1:1 original)"),
+            Self::Low => tr!("Low"),
+            Self::Standard => tr!("Standard (recommended)"),
+            Self::High => tr!("High (matte fine art paper)"),
         }
     }
 }
@@ -990,9 +991,9 @@ impl DisplayColorSpaceMode {
         Self::Srgb,
     ];
 
-    pub fn label_de(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
-            Self::AutoWayland => "Automatisch (Wayland / KWin)",
+            Self::AutoWayland => tr!("Automatic (Wayland / KWin)"),
             Self::DisplayP3 => "Display P3 (Wide Gamut)",
             Self::AdobeRgb1998 => "Adobe RGB (1998) (Wide Gamut)",
             Self::Srgb => "sRGB (Standard)",
@@ -1076,13 +1077,13 @@ impl FilmstripPosition {
         matches!(self, Self::Bottom | Self::BottomFullWidth)
     }
 
-    pub fn label_de(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
-            Self::Left => "Links am Rand",
-            Self::RightTabbed => "Rechts (Tab bei Druck-Einstellungen)",
-            Self::Bottom => "Nur im Bogen unten",
-            Self::BottomFullWidth => "Auf volle Breite unten",
-            Self::Hidden => "Ausgeblendet",
+            Self::Left => tr!("Left edge"),
+            Self::RightTabbed => tr!("Right (tab next to print settings)"),
+            Self::Bottom => tr!("Below the sheet only"),
+            Self::BottomFullWidth => tr!("Full width at the bottom"),
+            Self::Hidden => tr!("Hidden"),
         }
     }
 }
@@ -1102,11 +1103,11 @@ pub enum PageListPosition {
 impl PageListPosition {
     pub const ALL: [Self; 3] = [Self::BottomInCanvas, Self::BottomFullWidth, Self::Left];
 
-    pub fn label_de(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
-            Self::BottomInCanvas => "Nur im Bogen unten",
-            Self::BottomFullWidth => "Auf volle Breite unten",
-            Self::Left => "Links am Rand",
+            Self::BottomInCanvas => tr!("Below the sheet only"),
+            Self::BottomFullWidth => tr!("Full width at the bottom"),
+            Self::Left => tr!("Left edge"),
         }
     }
 }
@@ -1141,12 +1142,12 @@ impl ExportColorSpace {
         Self::Unchanged,
     ];
 
-    pub fn label_de(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
-            Self::PrinterPipeline => "Drucker-ICC / Farbpipeline",
+            Self::PrinterPipeline => tr!("Printer ICC / color pipeline"),
             Self::Srgb => "sRGB (IEC 61966-2-1)",
             Self::AdobeRgb1998 => "Adobe RGB (1998)",
-            Self::Unchanged => "Unverändert (Quell-Farbraum)",
+            Self::Unchanged => tr!("Unchanged (source color space)"),
         }
     }
 }
@@ -1162,7 +1163,7 @@ pub enum ExportFileFormat {
 impl ExportFileFormat {
     pub const ALL: [Self; 2] = [Self::Tiff16, Self::Png16];
 
-    pub fn label_de(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::Tiff16 => "16-Bit TIFF (.tif)",
             Self::Png16 => "16-Bit PNG (.png)",
@@ -1216,16 +1217,20 @@ pub enum PrintScope {
 }
 
 impl PrintScope {
-    pub fn label_de(self, total_pages: usize, active_page: usize) -> String {
+    pub fn label(self, total_pages: usize, active_page: usize) -> String {
         match self {
             Self::AllPages => {
                 if total_pages <= 1 {
-                    String::from("Alle Bögen (1 Bogen)")
+                    tr!("All sheets (1 sheet)").to_string()
                 } else {
-                    format!("Alle Bögen (1..{total_pages})")
+                    tr!("All sheets (1..{total_pages})", total_pages = total_pages)
                 }
             }
-            Self::CurrentPage => format!("Nur aktueller Bogen ({}/{total_pages})", active_page + 1),
+            Self::CurrentPage => tr!(
+                "Current sheet only ({page}/{total_pages})",
+                page = active_page + 1,
+                total_pages = total_pages
+            ),
         }
     }
 }

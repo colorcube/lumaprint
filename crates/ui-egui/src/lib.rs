@@ -926,7 +926,7 @@ impl LumaPrintApp {
             FilmstripPosition::BottomFullWidth,
         ] {
             let is_sel = self.session.doc.filmstrip_position == pos;
-            if ui.radio(is_sel, pos.label_de()).clicked() {
+            if ui.radio(is_sel, pos.label()).clicked() {
                 self.set_pool_position(pos);
                 ui.close_menu();
             }
@@ -935,7 +935,7 @@ impl LumaPrintApp {
         ui.label(RichText::new("Bogenliste Position").strong());
         for pos in PageListPosition::ALL {
             let is_sel = self.session.doc.page_list_position == pos;
-            if ui.radio(is_sel, pos.label_de()).clicked() {
+            if ui.radio(is_sel, pos.label()).clicked() {
                 self.set_page_list_position(pos);
                 ui.close_menu();
             }
@@ -2562,7 +2562,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         );
                         let cur_disp = self.session.doc.color.display_color_space;
                         for dm in DisplayColorSpaceMode::ALL {
-                            if ui.radio(cur_disp == dm, dm.label_de()).clicked() {
+                            if ui.radio(cur_disp == dm, dm.label()).clicked() {
                                 self.exec(EngineCommand::SetDisplayColorSpace(dm));
                                 self.sync_wayland_color_management();
                                 ui.close_menu();
@@ -2687,12 +2687,12 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             sp_changed = true;
                         }
                         egui::ComboBox::from_id_salt("viewing_light_combo")
-                            .selected_text(sp.viewing_light.label_de())
+                            .selected_text(sp.viewing_light.label())
                             .width(150.0)
                             .show_ui(ui, |ui| {
                                 for vl in ViewingLight::ALL {
                                     if ui
-                                        .selectable_value(&mut sp.viewing_light, vl, vl.label_de())
+                                        .selectable_value(&mut sp.viewing_light, vl, vl.label())
                                         .changed()
                                     {
                                         sp_changed = true;
@@ -3866,8 +3866,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                     );
 
                                     // Header label inside overview card
-                                    let layout_lbl =
-                                        self.session.doc.page_layout(pi).kind_label_de();
+                                    let layout_lbl = self.session.doc.page_layout(pi).kind_label();
                                     p.text(
                                         card_rect.left_top() + Vec2::new(10.0, 6.0),
                                         egui::Align2::LEFT_TOP,
@@ -5549,13 +5548,13 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
                 ui.label(RichText::new("Farbraum:").color(t.text_dim));
                 egui::ComboBox::from_id_salt("export_cs_combo")
-                    .selected_text(cur_exp.color_space.label_de())
+                    .selected_text(cur_exp.color_space.label())
                     .width(235.0)
                     .truncate()
                     .show_ui(ui, |ui| {
                         for cs in ExportColorSpace::ALL {
                             if ui
-                                .selectable_label(cur_exp.color_space == cs, cs.label_de())
+                                .selectable_label(cur_exp.color_space == cs, cs.label())
                                 .clicked()
                             {
                                 let mut next = cur_exp;
@@ -5568,13 +5567,13 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
                 ui.label(RichText::new("Dateiformat:").color(t.text_dim));
                 egui::ComboBox::from_id_salt("export_fmt_combo")
-                    .selected_text(cur_exp.format.label_de())
+                    .selected_text(cur_exp.format.label())
                     .width(235.0)
                     .truncate()
                     .show_ui(ui, |ui| {
                         for fmt in ExportFileFormat::ALL {
                             if ui
-                                .selectable_label(cur_exp.format == fmt, fmt.label_de())
+                                .selectable_label(cur_exp.format == fmt, fmt.label())
                                 .clicked()
                             {
                                 let mut next = cur_exp;
@@ -5953,7 +5952,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             .find(|s| s.code.eq_ignore_ascii_case(&cur_slot_key))
                             .map(|s| s.label.clone())
                     })
-                    .unwrap_or_else(|| src.label_de(bl).to_string());
+                    .unwrap_or_else(|| src.label(bl).to_string());
                 egui::ComboBox::from_id_salt("paper_src_combo")
                     .selected_text(truncate_combo_label(&slot_display, 28))
                     .width(240.0)
@@ -5976,7 +5975,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
                         if !has_ppd_slots {
                             for s in PaperSource::ALL {
-                                if ui.selectable_value(&mut src, s, s.label_de(bl)).changed() {
+                                if ui.selectable_value(&mut src, s, s.label(bl)).changed() {
                                     self.exec(EngineCommand::SetPaperSource {
                                         source: src,
                                         borderless: bl,
@@ -6010,7 +6009,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             .find(|r| r.code.eq_ignore_ascii_case(&cur_res_key))
                             .map(|r| r.label.clone())
                     })
-                    .unwrap_or_else(|| qual.label_de().to_string());
+                    .unwrap_or_else(|| qual.label().to_string());
                 egui::ComboBox::from_id_salt("quality_combo")
                     .selected_text(truncate_combo_label(&res_display, 28))
                     .width(240.0)
@@ -6043,7 +6042,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 {
                                     continue;
                                 }
-                                if ui.selectable_value(&mut qual, q, q.label_de()).changed() {
+                                if ui.selectable_value(&mut qual, q, q.label()).changed() {
                                     self.exec(EngineCommand::SetPrintQuality(qual));
                                 }
                             }
@@ -6124,7 +6123,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
     fn draw_layout_settings_section(&mut self, ui: &mut Ui) {
         let t = self.tokens;
-        let cur_mode_lbl = self.session.doc.layout.kind_label_de();
+        let cur_mode_lbl = self.session.doc.layout.kind_label();
 
         ui.horizontal(|ui| {
             ui.label(RichText::new("Layout-Typ:").color(t.text_dim));
@@ -6335,7 +6334,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             ] {
                                 let is_sel = std_spec.centering == c;
                                 if draw_centering_tile(ui, &t, c, is_sel)
-                                    .on_hover_text(c.label_de())
+                                    .on_hover_text(c.label())
                                     .clicked()
                                     && !is_sel
                                 {
@@ -6718,7 +6717,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
                         ui.label(RichText::new("Kanten-Effekt:").color(t.text_dim));
                         egui::ComboBox::from_id_salt("gw_effect_combo")
-                            .selected_text(gw.effect.label_de())
+                            .selected_text(gw.effect.label())
                             .width(245.0)
                             .show_ui(ui, |ui| {
                                 for eff in [
@@ -6730,7 +6729,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                     GalleryWrapEffect::WrapShaded { blur_percent: 40 },
                                 ] {
                                     if ui
-                                        .selectable_value(&mut gw.effect, eff, eff.label_de())
+                                        .selectable_value(&mut gw.effect, eff, eff.label())
                                         .changed()
                                     {
                                         changed = true;
@@ -6885,7 +6884,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
                         ui.label(RichText::new("Bildunterschrift:").color(t.text_dim));
                         egui::ComboBox::from_id_salt("tpl_caption_mode_combo")
-                            .selected_text(tpl_spec.caption_mode.label_de())
+                            .selected_text(tpl_spec.caption_mode.label())
                             .width(245.0)
                             .truncate()
                             .show_ui(ui, |ui| {
@@ -6894,7 +6893,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                         .selectable_value(
                                             &mut tpl_spec.caption_mode,
                                             cm,
-                                            cm.label_de(),
+                                            cm.label(),
                                         )
                                         .changed()
                                     {
@@ -7361,7 +7360,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 "Schwarzweiß (Advanced B&W im Drucker)"
                             }
                             ColorManagementMode::AdvancedBwPhoto => "Schwarzweiß (LumaPrint-Tonung)",
-                            _ => m.label_de(),
+                            _ => m.label(),
                         };
                         if ui.radio(is_sel, label).clicked() && !is_sel {
                             self.exec(EngineCommand::SetColorMode(m.clone()));
@@ -7596,12 +7595,12 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         let mut intent = self.session.doc.color.rendering_intent;
                         ui.label(RichText::new("Rendering Intent:").color(t.text_dim));
                         egui::ComboBox::from_id_salt("intent_combo")
-                            .selected_text(intent.label_de())
+                            .selected_text(intent.label())
                             .width(245.0)
                             .show_ui(ui, |ui| {
                                 for it in RenderingIntent::ALL {
                                     if ui
-                                        .selectable_value(&mut intent, it, it.label_de())
+                                        .selectable_value(&mut intent, it, it.label())
                                         .changed()
                                     {
                                         self.exec(EngineCommand::SetRenderingIntent(intent));
@@ -7674,11 +7673,11 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
                 ui.label(RichText::new("Druck-Schärfung:").color(t.text_dim));
                 egui::ComboBox::from_id_salt("output_sharp_combo")
-                    .selected_text(sharp.label_de())
+                    .selected_text(sharp.label())
                     .width(245.0)
                     .show_ui(ui, |ui| {
                         for s in OutputSharpening::ALL {
-                            if ui.selectable_value(&mut sharp, s, s.label_de()).changed() {
+                            if ui.selectable_value(&mut sharp, s, s.label()).changed() {
                                 self.exec(EngineCommand::SetOutputSharpening(sharp));
                             }
                         }
@@ -8427,14 +8426,14 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             ui.horizontal(|ui| {
                                 ui.label(RichText::new("Unterschrift:").color(t.text_dim));
                                 egui::ComboBox::from_id_salt("studio_caption_combo")
-                                    .selected_text(self.template_studio.caption_mode.label_de())
+                                    .selected_text(self.template_studio.caption_mode.label())
                                     .width(210.0)
                                     .show_ui(ui, |ui| {
                                         for cm in SlotCaptionMode::ALL {
                                             ui.selectable_value(
                                                 &mut self.template_studio.caption_mode,
                                                 cm,
-                                                cm.label_de(),
+                                                cm.label(),
                                             );
                                         }
                                     });

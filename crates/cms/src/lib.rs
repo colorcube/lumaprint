@@ -15,6 +15,7 @@
 )]
 
 use lumaprint_color::{ImageBuffer16, Rgb8, Rgb16};
+use lumaprint_i18n::tr;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -521,11 +522,11 @@ pub enum RenderingIntent {
     /// Wahrnehmung (`Perceptual`, `B2A0` / `A2B0`) — recommended for photos by EPL manual p. 21.
     #[default]
     Perceptual,
-    /// Relativ Farbmetrisch (`Relative Colorimetric`, `B2A1` / `A2B1`).
+    /// Relative colorimetric (`Relative Colorimetric`, `B2A1` / `A2B1`).
     RelativeColorimetric,
     /// Sättigung (`Saturation`, `B2A2` / `A2B2`).
     Saturation,
-    /// Absolut Farbmetrisch (`Absolute Colorimetric`, `B2A1` without media white shift).
+    /// Absolute colorimetric (`Absolute Colorimetric`, `B2A1` without media white shift).
     AbsoluteColorimetric,
 }
 
@@ -537,12 +538,12 @@ impl RenderingIntent {
         Self::AbsoluteColorimetric,
     ];
 
-    pub fn label_de(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
-            Self::Perceptual => "Wahrnehmung (Perzeptiv)",
-            Self::RelativeColorimetric => "Relativ Farbmetrisch",
-            Self::Saturation => "Sättigung",
-            Self::AbsoluteColorimetric => "Absolut Farbmetrisch",
+            Self::Perceptual => tr!("Perceptual"),
+            Self::RelativeColorimetric => tr!("Relative colorimetric"),
+            Self::Saturation => tr!("Saturation"),
+            Self::AbsoluteColorimetric => tr!("Absolute colorimetric"),
         }
     }
 
@@ -1258,11 +1259,11 @@ pub enum ViewingLight {
 impl ViewingLight {
     pub const ALL: [Self; 3] = [Self::D50, Self::D65, Self::GalleryWarm3200K];
 
-    pub fn label_de(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
-            Self::D50 => "D50 Normlicht (5000K)",
-            Self::D65 => "D65 Tageslicht (6500K)",
-            Self::GalleryWarm3200K => "Galerielicht Warm (3200K)",
+            Self::D50 => tr!("D50 standard light (5000K)"),
+            Self::D65 => tr!("D65 daylight (6500K)"),
+            Self::GalleryWarm3200K => tr!("Warm gallery light (3200K)"),
         }
     }
 

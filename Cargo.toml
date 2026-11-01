@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/i18n",
     "crates/geom",
     "crates/color",
     "crates/cms",
@@ -16,6 +17,7 @@ members = [
     "apps/lumaprint-cli",
 ]
 default-members = [
+    "crates/i18n",
     "crates/geom",
     "crates/color",
     "crates/cms",
@@ -40,6 +42,7 @@ rust-version = "1.85"
 
 [workspace.dependencies]
 # Internal workspace crates (L0 -> L6)
+lumaprint-i18n = { path = "crates/i18n" }
 lumaprint-geom = { path = "crates/geom" }
 lumaprint-color = { path = "crates/color" }
 lumaprint-cms = { path = "crates/cms" }

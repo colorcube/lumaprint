@@ -1187,7 +1187,7 @@ impl Session {
                 }
                 self.status_message = format!(
                     "Layout '{}' auf alle {} Bögen angewendet.",
-                    current_layout.kind_label_de(),
+                    current_layout.kind_label(),
                     self.doc.page_count()
                 );
             }

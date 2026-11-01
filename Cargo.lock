@@ -1293,6 +1293,7 @@ name = "lumaprint-cms"
 version = "0.1.0"
 dependencies = [
  "lumaprint-color",
+ "lumaprint-i18n",
  "rayon",
  "serde",
  "thiserror 2.0.21",
@@ -1337,6 +1338,7 @@ dependencies = [
  "lumaprint-codecs",
  "lumaprint-color",
  "lumaprint-geom",
+ "lumaprint-i18n",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -1368,6 +1370,10 @@ dependencies = [
  "serde",
  "thiserror 2.0.21",
 ]
+
+[[package]]
+name = "lumaprint-i18n"
+version = "0.1.0"
 
 [[package]]
 name = "lumaprint-ipp"

@@ -16,6 +16,7 @@ todo = "warn"
 
 [dependencies]
 lumaprint-color = { workspace = true }
+lumaprint-i18n = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
