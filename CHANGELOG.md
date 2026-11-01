@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### User interface
+- English user interface by default, German as second language. The language follows the system (`LANG`) and can be changed under Settings → Language; the choice is saved.
+- Multi-page exports are named `<name>_sheet<n>` (previously `_bogen<n>`).
+
 ## 0.1.0 – 2026-10-31 (beta)
 
 First public version.
