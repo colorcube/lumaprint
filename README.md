@@ -1,6 +1,6 @@
-# LumaPrint — Professional Fine-Art Print Layout & 16-Bit Color Studio
+# LumaPrint — Fine-Art Print Layout & 16-Bit Color Studio
 
-**LumaPrint** is a fine-art print layout, live softproofing, and 16-bit color management application for Linux, written in Rust. Inspired by **Epson Print Layout** and **TurboPrint Composer**, it combines a studio-style layout workflow with ICC color management (LittleCMS 2) and **CUPS / IPP** integration. `unsafe` code is forbidden in every crate except `lumaprint-cms`, which wraps the `liblcms2` C library in one private FFI module.
+**LumaPrint** is a fine-art print layout, live softproofing, and 16-bit color management application for Linux, written in Rust. Inspired by **Epson Print Layout** and **TurboPrint Composer**, it combines a studio-style layout workflow with ICC color management (LittleCMS 2) and **CUPS / IPP** integration. 
 
 > [!WARNING]
 > **Beta.** Developed and tested on Fedora (KDE Plasma, Wayland) with an Epson SureColor SC-P900 and the companion driver [`epson-p900-escpr-cups`](https://github.com/colorcube/epson-p900-escpr-cups). Verified so far with real prints: ICC color management (relative colorimetric + BPC) and Advanced B&W Photo on Epson Photo Paper Glossy, A4. The data sent to the printer was compared with Epson Print Layout captures (see below). Other printers, drivers and layout modes are implemented but less tested.
