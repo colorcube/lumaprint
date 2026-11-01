@@ -139,8 +139,13 @@ mod tests {
     fn tr_texts(src: &str) -> Vec<String> {
         let mut texts = Vec::new();
         let mut rest = src;
-        while let Some(pos) = rest.find("tr!(\"") {
-            rest = &rest[pos + 5..];
+        while let Some(pos) = rest.find("tr!(") {
+            // rustfmt may put the text on the next line: `tr!(\n    "…"`.
+            rest = rest[pos + 4..].trim_start();
+            let Some(after_quote) = rest.strip_prefix('"') else {
+                continue;
+            };
+            rest = after_quote;
             let mut text = String::new();
             let mut chars = rest.chars();
             while let Some(c) = chars.next() {
@@ -235,5 +240,13 @@ mod tests {
     #[test]
     fn line_continuations_are_joined() {
         assert_eq!(tr_texts("tr!(\"a \\\n      b\")"), vec!["a b".to_string()]);
+    }
+
+    #[test]
+    fn text_on_the_next_line_is_found() {
+        assert_eq!(
+            tr_texts("tr!(\n    \"a {n}\",\n    n = 1\n)"),
+            vec!["a {n}".to_string()]
+        );
     }
 }

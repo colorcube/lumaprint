@@ -21,6 +21,7 @@ use lumaprint_doc::{
 use lumaprint_geom::{
     BorderlessExpandLevel, MarginsMm, Orientation, RectMm, SizeMm, find_paper_size,
 };
+use lumaprint_i18n::tr;
 use serde::{Deserialize, Serialize};
 
 /// Solved placement of a single image slot on the page.
@@ -70,12 +71,17 @@ pub struct SolvedPageLayout {
     pub warnings: Vec<String>,
 }
 
+/// `true` for warnings that block printing (they start with "ERROR", in German "FEHLER").
+pub fn is_error_warning(warning: &str) -> bool {
+    warning.starts_with("ERROR") || warning.starts_with("FEHLER")
+}
+
 /// Builtin Epson Print Layout templates (derived from `AirAssetsTempleteJson` & EPL manual p. 32–35).
 pub fn builtin_templates() -> Vec<LayoutTemplate> {
     let mut list = vec![
         LayoutTemplate {
             id: "EPL_ThemeLayout1".into(),
-            name: "EPL Theme 1 – Klassisches Einzelbild".into(),
+            name: tr!("EPL Theme 1 – Classic single image").into(),
             normalized_slots: vec![[0.08, 0.06, 0.84, 0.88]],
             fixed_slots_mm: Vec::new(),
             cut_marks: false,
@@ -83,7 +89,7 @@ pub fn builtin_templates() -> Vec<LayoutTemplate> {
         },
         LayoutTemplate {
             id: "EPL_ThemeLayout4".into(),
-            name: "EPL Theme 4 – 1 Großes + 3 Kleine unten".into(),
+            name: tr!("EPL Theme 4 – 1 large + 3 small below").into(),
             normalized_slots: vec![
                 [0.135, 0.022, 0.730, 0.715],
                 [0.135, 0.750, 0.230, 0.228],
@@ -96,7 +102,7 @@ pub fn builtin_templates() -> Vec<LayoutTemplate> {
         },
         LayoutTemplate {
             id: "EPL_ThemeLayout5".into(),
-            name: "EPL Theme 5 – 1 Panorama oben + 4 Bilder unten".into(),
+            name: tr!("EPL Theme 5 – 1 panorama above + 4 images below").into(),
             normalized_slots: vec![
                 [0.060, 0.053, 0.880, 0.415],
                 [0.060, 0.524, 0.433, 0.204],
@@ -111,37 +117,37 @@ pub fn builtin_templates() -> Vec<LayoutTemplate> {
     ];
     list.push(build_grid_template(
         "EPL_Grid_1x2",
-        "2 Bilder (2 Zeilen × 1 Spalte)",
+        tr!("2 images (2 rows × 1 column)"),
         2,
         1,
     ));
     list.push(build_grid_template(
         "EPL_Grid_2x2",
-        "4 Bilder Raster (2 × 2)",
+        tr!("4-image grid (2 × 2)"),
         2,
         2,
     ));
     list.push(build_grid_template(
         "EPL_Grid_3x2",
-        "6 Bilder Raster (3 × 2)",
+        tr!("6-image grid (3 × 2)"),
         3,
         2,
     ));
     list.push(build_grid_template(
         "EPL_Grid_3x3",
-        "9 Bilder Kontaktbogen (3 × 3)",
+        tr!("9-image contact sheet (3 × 3)"),
         3,
         3,
     ));
     list.push(build_grid_template(
         "EPL_Grid_4x4",
-        "16 Bilder Kontaktbogen (4 × 4)",
+        tr!("16-image contact sheet (4 × 4)"),
         4,
         4,
     ));
     list.push(build_grid_template(
         "EPL_Grid_5x5",
-        "25 Bilder Kontaktbogen (5 × 5 Max)",
+        tr!("25-image contact sheet (5 × 5 max.)"),
         5,
         5,
     ));
@@ -196,9 +202,9 @@ pub fn resolve_paper_and_printable_area(
     if doc.printer.borderless {
         if let Some(spec) = paper_spec {
             if !spec.supports_borderless {
-                warnings.push(format!(
-                    "Randloser Druck wird für Papierformat '{}' nicht unterstützt.",
-                    spec.name
+                warnings.push(tr!(
+                    "Borderless printing is not supported for paper size '{paper}'.",
+                    paper = spec.name
                 ));
             }
             let exp = spec.borderless_expand_margins_mm(expand_level);
@@ -324,10 +330,10 @@ pub fn solve_page_layout_at(doc: &PrintJobDocument, page_index: usize) -> Solved
                     Some(paper_size_mm),
                 );
                 if ppi < 180.0 {
-                    warnings.push(format!(
-                            "Niedrige Bildauflösung: {:.0} ppi (empfohlen >= 240 ppi für Fine-Art-Druck).",
-                            ppi
-                        ));
+                    warnings.push(tr!(
+                        "Low image resolution: {ppi} ppi (>= 240 ppi recommended for fine art printing).",
+                        ppi = format!("{ppi:.0}")
+                    ));
                 }
                 let eff_slot_r = if !force_fill && !img.crop.fill_slot && std_spec.keep_aspect_ratio
                 {
@@ -430,12 +436,13 @@ pub fn solve_page_layout_at(doc: &PrintJobDocument, page_index: usize) -> Solved
             let paper_is_sufficient = paper_size_mm.width_mm + 0.1 >= req.width_mm
                 && paper_size_mm.height_mm + 0.1 >= req.height_mm;
             if !paper_is_sufficient {
-                warnings.push(format!(
-                    "FEHLER (Gallerie Wrap): Gewähltes Papier ({:.1} × {:.1} mm) ist kleiner als das erforderliche Format ({:.1} × {:.1} mm)!",
-                    paper_size_mm.width_mm,
-                    paper_size_mm.height_mm,
-                    req.width_mm,
-                    req.height_mm
+                warnings.push(tr!(
+                    "ERROR (Gallery Wrap): The selected paper ({paper}) is smaller than the required size ({required})!",
+                    paper = format!(
+                        "{:.1} × {:.1} mm",
+                        paper_size_mm.width_mm, paper_size_mm.height_mm
+                    ),
+                    required = format!("{:.1} × {:.1} mm", req.width_mm, req.height_mm)
                 ));
             }
 
@@ -540,7 +547,7 @@ pub fn solve_page_layout_at(doc: &PrintJobDocument, page_index: usize) -> Solved
                 .chain(all_templates.iter())
                 .find(|t| t.id == tpl_spec.template_id)
                 .cloned()
-                .unwrap_or_else(|| build_grid_template("Fallback_2x2", "2x2 Raster", 2, 2));
+                .unwrap_or_else(|| build_grid_template("Fallback_2x2", tr!("2x2 grid"), 2, 2));
 
             let cut_marks = tpl_spec.cut_marks || tpl.cut_marks;
             let caption_mode = if tpl_spec.caption_mode != SlotCaptionMode::None {
@@ -604,11 +611,11 @@ pub fn solve_page_layout_at(doc: &PrintJobDocument, page_index: usize) -> Solved
                     SlotCaptionMode::Filename => Some(
                         assigned_img
                             .map(|img| img.display_name.clone())
-                            .unwrap_or_else(|| format!("Slot #{}", idx + 1)),
+                            .unwrap_or_else(|| tr!("Slot #{number}", number = idx + 1)),
                     ),
                     SlotCaptionMode::NumberAndFilename => Some(match assigned_img {
                         Some(img) => format!("#{:02}  {}", idx + 1, img.display_name),
-                        None => format!("#{:02}  (leer)", idx + 1),
+                        None => format!("#{:02}  {}", idx + 1, tr!("(empty)")),
                     }),
                     SlotCaptionMode::DimensionsAndPpi => {
                         Some(match (assigned_img, effective_ppi) {
@@ -962,8 +969,9 @@ pub fn solve_auto_nested_slots_indexed(
 
     if slots.len() < indexed_images.len() {
         let skipped = indexed_images.len() - slots.len();
-        warnings.push(format!(
-            "{skipped} weiteres/weitere Bild(er) passen nicht mehr auf diesen Bogen."
+        warnings.push(tr!(
+            "{count} more image(s) no longer fit on this sheet.",
+            count = skipped
         ));
     }
 

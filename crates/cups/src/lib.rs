@@ -15,6 +15,7 @@
 )]
 
 use lumaprint_geom::{PAPER_SIZES, SizeMm, find_paper_size, pt_to_mm};
+use lumaprint_i18n::tr;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -32,8 +33,17 @@ pub enum CupsError {
     VirtualQueueCannotSpool(String),
     #[error("print file '{0}' does not exist")]
     MissingSpoolFile(String),
-    #[error("Drucker '{queue}' ist nicht erreichbar: {reason}")]
+    /// Shown to GUI users, so the message is translated (`reason` is translated where it is created).
+    #[error("{}", printer_unreachable_message(.queue, .reason))]
     PrinterUnreachable { queue: String, reason: String },
+}
+
+fn printer_unreachable_message(queue: &str, reason: &str) -> String {
+    tr!(
+        "Printer '{queue}' is not reachable: {reason}",
+        queue = queue,
+        reason = reason
+    )
 }
 
 /// Auto-detected printer driver family for disabling driver color correction ("Application Manages Colors").
@@ -60,31 +70,31 @@ impl DriverColorControl {
         )
     }
 
-    /// Concise German status badge for the Color Management panel.
-    pub const fn status_badge_de(self) -> &'static str {
+    /// Concise status badge for the Color Management panel (in the current UI language).
+    pub fn status_badge(self) -> &'static str {
         match self {
             Self::EpsonEscpr { .. } | Self::Gutenprint | Self::TurboPrint => {
-                "Treiber-Farbkorrektur deaktiviert"
+                tr!("Driver color correction disabled")
             }
-            Self::GenericCups => "Generischer CUPS-Treiber",
+            Self::GenericCups => tr!("Generic CUPS driver"),
         }
     }
 
-    /// Detailed German tooltip describing the exact CUPS flag sent to disable driver color correction.
-    pub const fn status_tooltip_de(self) -> &'static str {
+    /// Detailed tooltip describing the exact CUPS flag sent to disable driver color correction.
+    pub fn status_tooltip(self) -> &'static str {
         match self {
-            Self::EpsonEscpr { .. } => {
-                "Treiber-Farbkorrektur wird automatisch deaktiviert (EpsonColorMode=NoColorAdjustment)"
-            }
+            Self::EpsonEscpr { .. } => tr!(
+                "Driver color correction is disabled automatically (EpsonColorMode=NoColorAdjustment)"
+            ),
             Self::Gutenprint => {
-                "Treiber-Farbkorrektur wird automatisch deaktiviert (StpColorCorrection=None)"
+                tr!("Driver color correction is disabled automatically (StpColorCorrection=None)")
             }
             Self::TurboPrint => {
-                "Treiber-Farbkorrektur wird automatisch deaktiviert (zedoColorCorrection=0)"
+                tr!("Driver color correction is disabled automatically (zedoColorCorrection=0)")
             }
-            Self::GenericCups => {
-                "Generischer CUPS-Treiber (cm-calibration=true aktiv – bitte Treiberoptionen prüfen)"
-            }
+            Self::GenericCups => tr!(
+                "Generic CUPS driver (cm-calibration=true active – please check the driver options)"
+            ),
         }
     }
 }
@@ -323,7 +333,7 @@ impl PrinterCapabilities {
             },
             PrinterOptionChoice {
                 code: "PlainPaper".into(),
-                label: "Normalpapier (Plain Paper)".into(),
+                label: tr!("Plain paper").into(),
                 is_default: false,
             },
         ];
@@ -331,17 +341,17 @@ impl PrinterCapabilities {
         let input_slots = vec![
             PrinterOptionChoice {
                 code: "Rear".into(),
-                label: "Hinterer Einzug (Einzelblatt)".into(),
+                label: tr!("Rear feed (sheet)").into(),
                 is_default: true,
             },
             PrinterOptionChoice {
                 code: "FrontFineArt".into(),
-                label: "Vorderer Einzug (Fine Art / Dickes Papier)".into(),
+                label: tr!("Front feed (Fine Art / thick paper)").into(),
                 is_default: false,
             },
             PrinterOptionChoice {
                 code: "Roll".into(),
-                label: "Rollenpapier".into(),
+                label: tr!("Roll paper").into(),
                 is_default: false,
             },
         ];
@@ -349,7 +359,7 @@ impl PrinterCapabilities {
         let resolutions = vec![
             PrinterOptionChoice {
                 code: "720dpi".into(),
-                label: "Normal / Fein (720 dpi)".into(),
+                label: tr!("Normal / Fine (720 dpi)").into(),
                 is_default: false,
             },
             PrinterOptionChoice {
@@ -359,17 +369,17 @@ impl PrinterCapabilities {
             },
             PrinterOptionChoice {
                 code: "1440x1440dpi".into(),
-                label: "Hohe Qualität (1440 x 1440 dpi)".into(),
+                label: tr!("High quality (1440 x 1440 dpi)").into(),
                 is_default: true,
             },
             PrinterOptionChoice {
                 code: "2880x1440dpi".into(),
-                label: "Max. Qualität (2880 x 1440 dpi)".into(),
+                label: tr!("Max. quality (2880 x 1440 dpi)").into(),
                 is_default: false,
             },
             PrinterOptionChoice {
                 code: "5760x1440dpi".into(),
-                label: "Ultra-Qualität (5760 x 1440 dpi)".into(),
+                label: tr!("Ultra quality (5760 x 1440 dpi)").into(),
                 is_default: false,
             },
         ];
@@ -377,12 +387,12 @@ impl PrinterCapabilities {
         let color_models = vec![
             PrinterOptionChoice {
                 code: "RGB".into(),
-                label: "RGB Color (16-Bit)".into(),
+                label: tr!("RGB color (16-bit)").into(),
                 is_default: true,
             },
             PrinterOptionChoice {
                 code: "Gray".into(),
-                label: "Grayscale".into(),
+                label: tr!("Grayscale").into(),
                 is_default: false,
             },
         ];
@@ -480,10 +490,10 @@ impl SystemPrinter {
         }
         Self {
             queue_name: String::from(VIRTUAL_EXPORT_QUEUE),
-            display_name: String::from("Datei-Export / Virtueller Druckbogen (16-Bit TIFF / PNG)"),
+            display_name: tr!("File export / virtual print sheet (16-bit TIFF / PNG)").to_string(),
             device_uri: String::from("file:///export"),
             is_default: false,
-            state_message: String::from("Bereit für 16-Bit Druckbogen-Export"),
+            state_message: tr!("Ready for 16-bit print sheet export").to_string(),
             capabilities: caps,
         }
     }
@@ -666,7 +676,7 @@ pub fn parse_lpstat_output(lpstat_p_d: &str, lpstat_v: &str) -> Vec<SystemPrinte
                 queue_name: q_name,
                 device_uri: uri,
                 is_default: is_def,
-                state_message: String::from("Bereit"),
+                state_message: tr!("Ready").to_string(),
                 capabilities: PrinterCapabilities::standard_fine_art_defaults(),
             });
         }
@@ -1193,13 +1203,16 @@ pub fn verify_printer_reachable(
         {
             return Err(CupsError::PrinterUnreachable {
                 queue: q.to_string(),
-                reason: format!("Die CUPS-Druckerwarteschlange '{q}' existiert nicht."),
+                reason: tr!(
+                    "The CUPS printer queue '{queue}' does not exist.",
+                    queue = q
+                ),
             });
         }
         if combined_low.contains("disabled") || combined_low.contains("rejecting jobs") {
             return Err(CupsError::PrinterUnreachable {
                 queue: q.to_string(),
-                reason: String::from("Druckerwarteschlange ist in CUPS angehalten / deaktiviert."),
+                reason: tr!("The printer queue is paused / disabled in CUPS.").to_string(),
             });
         }
     }
@@ -1232,7 +1245,10 @@ pub fn verify_printer_reachable(
         if addrs.is_empty() {
             return Err(CupsError::PrinterUnreachable {
                 queue: q.to_string(),
-                reason: format!("Netzwerkadresse '{host}:{port}' konnte nicht aufgelöst werden."),
+                reason: tr!(
+                    "Network address '{address}' could not be resolved.",
+                    address = format!("{host}:{port}")
+                ),
             });
         }
         let connected = addrs
@@ -1241,8 +1257,9 @@ pub fn verify_printer_reachable(
         if !connected {
             return Err(CupsError::PrinterUnreachable {
                 queue: q.to_string(),
-                reason: format!(
-                    "Netzwerkdrucker unter '{host}:{port}' antwortet nicht (ausgeschaltet oder nicht im Netzwerk erreichbar)."
+                reason: tr!(
+                    "Network printer at '{address}' does not respond (switched off or not reachable on the network).",
+                    address = format!("{host}:{port}")
                 ),
             });
         }
@@ -1321,17 +1338,22 @@ pub fn submit_cups_job(req: &CupsSpoolRequest, file_path: &Path) -> Result<Strin
             }
             return Err(CupsError::PrinterUnreachable {
                 queue: req.queue_name.clone(),
-                reason: String::from(
-                    "Drucker ist ausgeschaltet oder nicht verbunden (Auftrag wurde aus der Warteschlange entfernt).",
-                ),
+                reason: tr!(
+                    "The printer is switched off or not connected (the job was removed from the queue)."
+                )
+                .to_string(),
             });
         }
     }
 
     Ok(if stdout.is_empty() {
-        format!("Druckauftrag an '{}' gesendet.", req.queue_name)
+        tr!("Print job sent to '{queue}'.", queue = req.queue_name)
     } else if let Some(jid) = job_id {
-        format!("Druckauftrag '{jid}' an '{}' übergeben.", req.queue_name)
+        tr!(
+            "Print job '{job}' handed over to '{queue}'.",
+            job = jid,
+            queue = req.queue_name
+        )
     } else {
         stdout
     })

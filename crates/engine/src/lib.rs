@@ -31,6 +31,7 @@ use lumaprint_doc::{
     SPOOL_DITHERING_OPTION, SizingCriterion, SourceImageEntry, TemplateLayoutSpec, find_media_type,
 };
 use lumaprint_geom::{MarginsMm, Orientation, RectMm, SizeMm};
+use lumaprint_i18n::tr;
 use lumaprint_ipp::{IppError, PrinterStatus, query_printer_status_ipp};
 use lumaprint_layout::{
     SolvedPageLayout, build_grid_template, count_fitting_sammel_items, orient_size_for_image,
@@ -164,7 +165,7 @@ pub fn scan_folder_for_images(folder: impl AsRef<Path>) -> Vec<String> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommandSpec {
     pub id: &'static str,
-    pub label_de: &'static str,
+    pub label: &'static str,
     pub category: &'static str,
 }
 
@@ -172,118 +173,118 @@ pub struct CommandSpec {
 pub const COMMAND_CATALOG: &[CommandSpec] = &[
     CommandSpec {
         id: "file.add_image",
-        label_de: "Bilddatei in den Bilder-Pool importieren",
-        category: "Datei",
+        label: "Import image file into the image pool",
+        category: "File",
     },
     CommandSpec {
         id: "file.add_demo_images",
-        label_de: "Demo-Kalibrierungsbilder erzeugen",
-        category: "Datei",
+        label: "Generate demo calibration images",
+        category: "File",
     },
     CommandSpec {
         id: "file.reset_defaults",
-        label_de: "Einstellungen initialisieren",
-        category: "Datei",
+        label: "Reset settings",
+        category: "File",
     },
     CommandSpec {
         id: "edit.undo",
-        label_de: "Rückgängig (Ctrl+Z)",
-        category: "Bearbeiten",
+        label: "Undo (Ctrl+Z)",
+        category: "Edit",
     },
     CommandSpec {
         id: "edit.redo",
-        label_de: "Wiederholen (Ctrl+Y)",
-        category: "Bearbeiten",
+        label: "Redo (Ctrl+Y)",
+        category: "Edit",
     },
     CommandSpec {
         id: "page.add",
-        label_de: "Neuen Druckbogen anlegen",
-        category: "Bogen",
+        label: "Add new print sheet",
+        category: "Sheet",
     },
     CommandSpec {
         id: "page.remove",
-        label_de: "Druckbogen entfernen (Bilder bleiben im Pool)",
-        category: "Bogen",
+        label: "Remove print sheet (images stay in the pool)",
+        category: "Sheet",
     },
     CommandSpec {
         id: "page.auto_distribute",
-        label_de: "Bilder aus dem Pool automatisch auf Bögen verteilen",
-        category: "Bogen",
+        label: "Distribute pool images across sheets automatically",
+        category: "Sheet",
     },
     CommandSpec {
         id: "printer.refresh_printers",
-        label_de: "Installierte Systemdrucker (CUPS) neu einlesen",
-        category: "Drucker",
+        label: "Rescan installed system printers (CUPS)",
+        category: "Printer",
     },
     CommandSpec {
         id: "printer.select_queue",
-        label_de: "Systemdrucker wählen",
-        category: "Drucker",
+        label: "Select system printer",
+        category: "Printer",
     },
     CommandSpec {
         id: "printer.set_media",
-        label_de: "Medientyp wählen",
-        category: "Drucker",
+        label: "Select media type",
+        category: "Printer",
     },
     CommandSpec {
         id: "printer.set_paper_size",
-        label_de: "Papierformat wählen",
-        category: "Drucker",
+        label: "Select paper size",
+        category: "Printer",
     },
     CommandSpec {
         id: "printer.set_paper_source",
-        label_de: "Papierzufuhr wählen",
-        category: "Drucker",
+        label: "Select paper source",
+        category: "Printer",
     },
     CommandSpec {
         id: "printer.set_borderless",
-        label_de: "Randlosen Druck umschalten",
-        category: "Drucker",
+        label: "Toggle borderless printing",
+        category: "Printer",
     },
     CommandSpec {
         id: "printer.set_quality",
-        label_de: "Druckqualität / Auflösung wählen",
-        category: "Drucker",
+        label: "Select print quality / resolution",
+        category: "Printer",
     },
     CommandSpec {
         id: "layout.set_mode",
-        label_de: "Layout-Typ wechseln (Standard, Panorama, Gallerie Wrap, Vorlage, Composer)",
+        label: "Change layout type (Standard, Panorama, Gallery Wrap, Template, Composer)",
         category: "Layout",
     },
     CommandSpec {
         id: "layout.apply_all_pages",
-        label_de: "Layout des aktuellen Bogens auf alle Bögen anwenden",
+        label: "Apply the current sheet's layout to all sheets",
         category: "Layout",
     },
     CommandSpec {
         id: "layout.set_margins",
-        label_de: "Seitenränder (Oben/Links/Unten/Rechts) setzen",
+        label: "Set margins (top/left/bottom/right)",
         category: "Layout",
     },
     CommandSpec {
         id: "layout.create_grid_template",
-        label_de: "Neue Raster-Vorlage (1..5 × 1..5) anlegen",
+        label: "Create grid template (1..5 × 1..5)",
         category: "Layout",
     },
     CommandSpec {
         id: "color.set_mode",
-        label_de: "Farbmodus wechseln (ICC, Advanced B&W, Drucker, Vibrant, Kalibrierung)",
-        category: "Farbe",
+        label: "Change color mode (ICC, Advanced B&W, printer, Vibrant, calibration)",
+        category: "Color",
     },
     CommandSpec {
         id: "color.set_abw_preset",
-        label_de: "ABW-Farbton (Neutral, Kühl, Warm, Sepia) wählen",
-        category: "Farbe",
+        label: "Select ABW tone (neutral, cool, warm, sepia)",
+        category: "Color",
     },
     CommandSpec {
         id: "preset.save",
-        label_de: "Voreinstellung speichern",
-        category: "Voreinstellung",
+        label: "Save preset",
+        category: "Preset",
     },
     CommandSpec {
         id: "preset.load",
-        label_de: "Voreinstellung laden",
-        category: "Voreinstellung",
+        label: "Load preset",
+        category: "Preset",
     },
 ];
 
@@ -495,7 +496,7 @@ impl Session {
             icc_search_dirs,
             system_printers,
             printer_status: PrinterStatus::default(),
-            status_message: String::from("LumaPrint bereit."),
+            status_message: tr!("LumaPrint ready.").to_string(),
         };
         session.discover_icc_profiles();
         session.discover_custom_media();
@@ -644,7 +645,7 @@ impl Session {
 
         self.doc.user_backup.presets = vec![
             PrintPreset {
-                name: "Baryta A3+ · Ultra-Qualität".into(),
+                name: tr!("Baryta A3+ · Ultra quality").into(),
                 printer: p1.printer,
                 layout: p1.layout,
                 color: p1.color,
@@ -836,7 +837,7 @@ impl Session {
                 if let Some(prev) = self.undo_stack.pop() {
                     self.redo_stack.push(self.doc.clone());
                     self.doc = prev;
-                    self.status_message = String::from("Rückgängig ausgeführt.");
+                    self.status_message = tr!("Undone.").to_string();
                 }
                 return Ok(());
             }
@@ -844,7 +845,7 @@ impl Session {
                 if let Some(next) = self.redo_stack.pop() {
                     self.undo_stack.push(self.doc.clone());
                     self.doc = next;
-                    self.status_message = String::from("Wiederholen ausgeführt.");
+                    self.status_message = tr!("Redone.").to_string();
                 }
                 return Ok(());
             }
@@ -867,9 +868,9 @@ impl Session {
                         self.doc.printer.printer_queue = dp.queue_name.clone();
                     }
                 }
-                self.status_message = format!(
-                    "{} Systemdrucker-/Export-Profil(e) geladen.",
-                    self.system_printers.len()
+                self.status_message = tr!(
+                    "{count} system printer/export profile(s) loaded.",
+                    count = self.system_printers.len()
                 );
                 return Ok(());
             }
@@ -888,8 +889,10 @@ impl Session {
         match cmd {
             EngineCommand::AddImageFile { path } => {
                 let (_id, fname) = self.import_single_image_into_pool(&path)?;
-                self.status_message =
-                    format!("Bild '{}' in den Bilder-Pool aufgenommen (16-Bit).", fname);
+                self.status_message = tr!(
+                    "Image '{name}' added to the image pool (16-bit).",
+                    name = fname
+                );
             }
             EngineCommand::ImportImageFiles { paths } => {
                 let mut count = 0usize;
@@ -898,7 +901,10 @@ impl Session {
                         count += 1;
                     }
                 }
-                self.status_message = format!("{count} Bild(er) in den Bilder-Pool importiert.");
+                self.status_message = tr!(
+                    "{count} image(s) imported into the image pool.",
+                    count = count
+                );
             }
             EngineCommand::ImportAndPlaceOnSheet { paths, target_slot } => {
                 self.doc.sync_active_page_to_list();
@@ -933,10 +939,10 @@ impl Session {
                     self.doc.active_slot_index = placed_slot;
                 }
                 self.doc.load_active_page_from_list();
-                self.status_message = format!(
-                    "{} Bild(er) importiert und auf Bogen platziert ({} Bogen/Bögen gesamt).",
-                    imported_ids.len(),
-                    self.doc.pages.len()
+                self.status_message = tr!(
+                    "{count} image(s) imported and placed on sheets ({pages} sheet(s) in total).",
+                    count = imported_ids.len(),
+                    pages = self.doc.pages.len()
                 );
                 return Ok(());
             }
@@ -959,11 +965,11 @@ impl Session {
                     .find(|(_, i)| i.id == image_id)
                 {
                     self.doc.active_image_index = idx;
-                    self.status_message = format!(
-                        "Bild '{}' auf Bogen {} (Bildstelle {}) platziert.",
-                        img.display_name,
-                        placed_page + 1,
-                        placed_slot + 1
+                    self.status_message = tr!(
+                        "Image '{name}' placed on sheet {page} (slot {slot}).",
+                        name = img.display_name,
+                        page = placed_page + 1,
+                        slot = placed_slot + 1
                     );
                 }
                 return Ok(());
@@ -989,7 +995,7 @@ impl Session {
                 if self.doc.active_image_index >= self.doc.images.len() {
                     self.doc.active_image_index = self.doc.images.len().saturating_sub(1);
                 }
-                self.status_message = String::from("Bild aus dem Bilder-Pool entfernt.");
+                self.status_message = tr!("Image removed from the image pool.").to_string();
             }
             EngineCommand::SelectActiveImage { index } => {
                 if index < self.doc.images.len() {
@@ -1007,8 +1013,7 @@ impl Session {
                     self.doc.printer.printer_queue = dp.queue_name.clone();
                 }
                 self.seed_starter_presets();
-                self.status_message =
-                    String::from("Alle Einstellungen auf Standardwerte initialisiert.");
+                self.status_message = tr!("All settings reset to defaults.").to_string();
             }
             EngineCommand::SelectPrinterQueue(queue) => {
                 if let Some(sp) = self
@@ -1022,7 +1027,7 @@ impl Session {
                     self.doc.printer.media_key = sp.capabilities.default_media_type();
                     self.doc.printer.input_slot_key = sp.capabilities.default_input_slot();
                     self.doc.printer.resolution_key = sp.capabilities.default_resolution();
-                    self.status_message = format!("Drucker '{}' ausgewählt.", sp.display_name);
+                    self.status_message = tr!("Printer '{name}' selected.", name = sp.display_name);
                 } else {
                     self.doc.printer.printer_queue = queue;
                 }
@@ -1055,15 +1060,17 @@ impl Session {
                         self.doc.color.rendering_intent = RenderingIntent::RelativeColorimetric;
                         self.doc.color.black_point_compensation = true;
                         self.apply_media_constraints();
-                        self.status_message = format!(
-                            "Custom-Medium '{}' gewählt (für Fremdpapier automatisch auf ICC-Papierprofil umgeschaltet).",
-                            cm.name
+                        self.status_message = tr!(
+                            "Custom media '{name}' selected (switched to ICC paper profile automatically for third-party paper).",
+                            name = cm.name
                         );
                     } else {
                         self.apply_media_constraints();
-                        self.status_message = format!(
-                            "Custom-Medium '{}' (Basis: {}, Slot: {}) gewählt.",
-                            cm.name, cm.base_media_key, cm.user_media_id
+                        self.status_message = tr!(
+                            "Custom media '{name}' (base: {base}, slot: {id}) selected.",
+                            name = cm.name,
+                            base = cm.base_media_key,
+                            id = cm.user_media_id
                         );
                     }
                 } else if let Some(media) = find_media_type(&key) {
@@ -1079,7 +1086,7 @@ impl Session {
                         self.ensure_icc_loaded(&ppd_icc);
                     }
                     self.apply_media_constraints();
-                    self.status_message = format!("Medium '{}' gewählt.", media.name);
+                    self.status_message = tr!("Media '{name}' selected.", name = media.name);
                 } else {
                     // Check if the active system printer supports this PPD media code
                     let allowed_by_ppd = self
@@ -1102,7 +1109,7 @@ impl Session {
                         self.ensure_icc_loaded(&ppd_icc);
                     }
                     self.doc.printer.media_key = key.clone();
-                    self.status_message = format!("Treiber-Medium '{key}' gewählt.");
+                    self.status_message = tr!("Driver media '{key}' selected.", key = key);
                 }
             }
             EngineCommand::SetPaperSizeKey(key) => {
@@ -1185,10 +1192,10 @@ impl Session {
                 for page in &mut self.doc.pages {
                     page.layout = current_layout.clone();
                 }
-                self.status_message = format!(
-                    "Layout '{}' auf alle {} Bögen angewendet.",
-                    current_layout.kind_label(),
-                    self.doc.page_count()
+                self.status_message = tr!(
+                    "Layout '{layout}' applied to all {count} sheets.",
+                    layout = current_layout.kind_label(),
+                    count = self.doc.page_count()
                 );
             }
             EngineCommand::SetOrientation(ori) => match &mut self.doc.layout {
@@ -1232,7 +1239,10 @@ impl Session {
                     .any(|(_, c)| *c == color)
                 {
                     let label = if name.trim().is_empty() {
-                        format!("Farbe #{:02X}{:02X}{:02X}", color.r, color.g, color.b)
+                        tr!(
+                            "Color {hex}",
+                            hex = format!("#{:02X}{:02X}{:02X}", color.r, color.g, color.b)
+                        )
                     } else {
                         name.trim().to_string()
                     };
@@ -1240,8 +1250,10 @@ impl Session {
                         .user_backup
                         .custom_frame_colors
                         .push((label.clone(), color));
-                    self.status_message =
-                        format!("Rahmenfarbe '{label}' zur Farbliste hinzugefügt.");
+                    self.status_message = tr!(
+                        "Frame color '{name}' added to the color list.",
+                        name = label
+                    );
                 }
             }
             EngineCommand::RemoveCustomFrameColor(color) => {
@@ -1251,9 +1263,9 @@ impl Session {
                     .custom_frame_colors
                     .retain(|(_, c)| *c != color);
                 if self.doc.user_backup.custom_frame_colors.len() < before {
-                    self.status_message = format!(
-                        "Eigene Rahmenfarbe #{:02X}{:02X}{:02X} aus der Farbliste gelöscht.",
-                        color.r, color.g, color.b
+                    self.status_message = tr!(
+                        "Custom frame color {hex} removed from the color list.",
+                        hex = format!("#{:02X}{:02X}{:02X}", color.r, color.g, color.b)
                     );
                 }
             }
@@ -1268,7 +1280,7 @@ impl Session {
             EngineCommand::CreateGridTemplate { name, rows, cols } => {
                 if name.trim().is_empty() {
                     return Err(EngineError::InvalidParam(
-                        "Vorlagenname darf nicht leer sein.".into(),
+                        tr!("Template name must not be empty.").into(),
                     ));
                 }
                 let id = format!(
@@ -1286,12 +1298,12 @@ impl Session {
             EngineCommand::SaveCustomTemplate(mut tpl) => {
                 if tpl.name.trim().is_empty() {
                     return Err(EngineError::InvalidParam(
-                        "Vorlagenname darf nicht leer sein.".into(),
+                        tr!("Template name must not be empty.").into(),
                     ));
                 }
                 if tpl.normalized_slots.is_empty() && tpl.fixed_slots_mm.is_empty() {
                     return Err(EngineError::InvalidParam(
-                        "Vorlage muss mindestens eine Bildstelle enthalten.".into(),
+                        tr!("A template must contain at least one slot.").into(),
                     ));
                 }
                 if tpl.id.trim().is_empty() {
@@ -1346,9 +1358,10 @@ impl Session {
                     self.doc.slot_assignments.resize(slot_count, None);
                 }
                 self.doc.sync_active_page_to_list();
-                self.status_message = format!(
-                    "Vorlage '{}' ({} Bildstellen) im Vorlagen-Studio gespeichert und aktiviert.",
-                    tpl_name, slot_count
+                self.status_message = tr!(
+                    "Template '{name}' ({count} slots) saved in the template studio and activated.",
+                    name = tpl_name,
+                    count = slot_count
                 );
             }
             EngineCommand::SetComposerSlotSize {
@@ -1402,9 +1415,10 @@ impl Session {
                         };
                     }
                     self.rebalance_sammel_pages();
-                    self.status_message = format!(
-                        "Bildmaße {:.1} × {:.1} mm auf alle Bilder des Sammelbogens angewendet.",
-                        clamped.width_mm, clamped.height_mm
+                    self.status_message = tr!(
+                        "Image size {width} × {height} mm applied to all images of the gang sheet.",
+                        width = format!("{:.1}", clamped.width_mm),
+                        height = format!("{:.1}", clamped.height_mm)
                     );
                 } else if let Some(page) = self.doc.pages.get_mut(pi) {
                     match &mut page.layout {
@@ -1438,12 +1452,12 @@ impl Session {
                                 {
                                     img.composer_size_mm = eff;
                                 }
-                                self.status_message = format!(
-                                    "Bildmaße auf {:.1} × {:.1} mm gesetzt (Bogen {}, Slot {}).",
-                                    eff.width_mm,
-                                    eff.height_mm,
-                                    pi + 1,
-                                    si + 1
+                                self.status_message = tr!(
+                                    "Image size set to {width} × {height} mm (sheet {page}, slot {slot}).",
+                                    width = format!("{:.1}", eff.width_mm),
+                                    height = format!("{:.1}", eff.height_mm),
+                                    page = pi + 1,
+                                    slot = si + 1
                                 );
                             }
                         }
@@ -1473,9 +1487,10 @@ impl Session {
                             if orient_to_image {
                                 std_spec.keep_aspect_ratio = false;
                             }
-                            self.status_message = format!(
-                                "Bildgröße auf {:.1} × {:.1} mm gesetzt.",
-                                eff.width_mm, eff.height_mm
+                            self.status_message = tr!(
+                                "Image size set to {width} × {height} mm.",
+                                width = format!("{:.1}", eff.width_mm),
+                                height = format!("{:.1}", eff.height_mm)
                             );
                         }
                         _ => {}
@@ -1548,18 +1563,18 @@ impl Session {
                         self.doc.images.iter().enumerate().find(|(_, i)| i.id == id)
                     {
                         self.doc.active_image_index = idx;
-                        self.status_message = format!(
-                            "Bild '{}' auf Bogen {} (Bildstelle {}) platziert.",
-                            img.display_name,
-                            self.doc.active_page_index + 1,
-                            self.doc.active_slot_index + 1
+                        self.status_message = tr!(
+                            "Image '{name}' placed on sheet {page} (slot {slot}).",
+                            name = img.display_name,
+                            page = self.doc.active_page_index + 1,
+                            slot = self.doc.active_slot_index + 1
                         );
                     }
                 } else {
-                    self.status_message = format!(
-                        "Bildstelle {} auf Bogen {} geleert.",
-                        slot_index + 1,
-                        page_index + 1
+                    self.status_message = tr!(
+                        "Slot {slot} on sheet {page} cleared.",
+                        slot = slot_index + 1,
+                        page = page_index + 1
                     );
                 }
                 return Ok(());
@@ -1665,7 +1680,7 @@ impl Session {
                 if let Some(id) = initial_image_id {
                     self.auto_orient_image_for_slot(id, new_pi, 0);
                 }
-                self.status_message = format!("Neuer Bogen {} angelegt.", self.doc.pages.len());
+                self.status_message = tr!("New sheet {page} added.", page = self.doc.pages.len());
                 return Ok(());
             }
             EngineCommand::DuplicatePage { page_index } => {
@@ -1681,7 +1696,7 @@ impl Session {
                     self.doc.pages.insert(insert_idx, dup);
                     self.doc.active_page_index = insert_idx;
                     self.doc.load_active_page_from_list();
-                    self.status_message = format!("Bogen {} dupliziert.", page_index + 1);
+                    self.status_message = tr!("Sheet {page} duplicated.", page = page_index + 1);
                 }
                 return Ok(());
             }
@@ -1694,16 +1709,16 @@ impl Session {
                     self.doc.active_page_index = 0;
                     self.doc.load_active_page_from_list();
                     self.status_message =
-                        String::from("Bogen 1 geleert (Bilder bleiben im Bilder-Pool).");
+                        tr!("Sheet 1 cleared (images stay in the image pool).").to_string();
                 } else if page_index < self.doc.pages.len() {
                     self.doc.pages.remove(page_index);
                     if self.doc.active_page_index >= self.doc.pages.len() {
                         self.doc.active_page_index = self.doc.pages.len() - 1;
                     }
                     self.doc.load_active_page_from_list();
-                    self.status_message = format!(
-                        "Bogen {} entfernt (Bilder bleiben frei im Bilder-Pool).",
-                        page_index + 1
+                    self.status_message = tr!(
+                        "Sheet {page} removed (images stay in the image pool).",
+                        page = page_index + 1
                     );
                 }
                 return Ok(());
@@ -1715,7 +1730,7 @@ impl Session {
                 }
                 self.doc.load_active_page_from_list();
                 self.status_message =
-                    format!("Alle Bildstellen auf Bogen {} geleert.", page_index + 1);
+                    tr!("All slots on sheet {page} cleared.", page = page_index + 1);
                 return Ok(());
             }
             EngineCommand::MovePage {
@@ -1729,10 +1744,10 @@ impl Session {
                     self.doc.pages.insert(to_index, page);
                     self.doc.active_page_index = to_index;
                     self.doc.load_active_page_from_list();
-                    self.status_message = format!(
-                        "Bogen von Position {} nach {} verschoben.",
-                        from_index + 1,
-                        to_index + 1
+                    self.status_message = tr!(
+                        "Sheet moved from position {from} to {to}.",
+                        from = from_index + 1,
+                        to = to_index + 1
                     );
                 }
                 return Ok(());
@@ -1776,9 +1791,9 @@ impl Session {
                     }
                 }
                 self.doc.load_active_page_from_list();
-                self.status_message = format!(
-                    "Bilder aus dem Pool auf {} Bogen/Bögen verteilt.",
-                    self.doc.pages.len()
+                self.status_message = tr!(
+                    "Pool images distributed across {count} sheet(s).",
+                    count = self.doc.pages.len()
                 );
                 return Ok(());
             }
@@ -1908,7 +1923,7 @@ impl Session {
                             cm.icc_profile_path = Some(path.clone());
                         }
                     }
-                    self.status_message = format!("ICC-Profil '{}' geladen.", path);
+                    self.status_message = tr!("ICC profile '{name}' loaded.", name = path);
                 }
             }
             EngineCommand::SetRenderingIntent(intent) => {
@@ -1940,9 +1955,10 @@ impl Session {
                     self.doc.color.auto_select_icc_for_media = true;
                     self.doc.color.rendering_intent = RenderingIntent::RelativeColorimetric;
                     self.doc.color.black_point_compensation = true;
-                    self.status_message = String::from(
-                        "Softproof aktiviert: Für farbverbindliche Vorschau automatisch auf ICC-Papierprofil umgeschaltet.",
-                    );
+                    self.status_message = tr!(
+                        "Soft proof enabled: switched to ICC paper profile automatically for a color-accurate preview."
+                    )
+                    .to_string();
                 }
             }
             EngineCommand::SetOutputSharpening(sh) => {
@@ -1965,7 +1981,7 @@ impl Session {
                 let clean = name.trim().to_string();
                 if clean.is_empty() {
                     return Err(EngineError::InvalidParam(
-                        "Voreinstellungsname darf nicht leer sein.".into(),
+                        tr!("Preset name must not be empty.").into(),
                     ));
                 }
                 if self
@@ -1984,7 +2000,7 @@ impl Session {
                     color: self.doc.color.clone(),
                 });
                 self.doc.active_preset_name = Some(clean.clone());
-                self.status_message = format!("Voreinstellung '{}' gespeichert.", clean);
+                self.status_message = tr!("Preset '{name}' saved.", name = clean);
             }
             EngineCommand::LoadPreset { name } => {
                 let Some(preset) = self
@@ -2001,7 +2017,7 @@ impl Session {
                 self.doc.layout = preset.layout;
                 self.doc.color = preset.color;
                 self.doc.active_preset_name = Some(preset.name.clone());
-                self.status_message = format!("Voreinstellung '{}' geladen.", preset.name);
+                self.status_message = tr!("Preset '{name}' loaded.", name = preset.name);
             }
             EngineCommand::DeletePreset { name } => {
                 self.doc
@@ -2375,7 +2391,7 @@ impl Session {
         self.doc.images.push(SourceImageEntry {
             id: id1,
             path: "calibration_16bit.tif".into(),
-            display_name: "16-Bit Kalibrierungs-Testchart.tif".into(),
+            display_name: tr!("16-bit calibration test chart.tif").into(),
             meta: chart.meta,
             crop: CropSpec::default(),
             composer_size_mm: SizeMm {
@@ -2456,7 +2472,7 @@ impl Session {
             composer_pos_mm: (15.0, 105.0),
         });
         self.doc.active_image_index = self.doc.images.len().saturating_sub(1);
-        self.status_message = String::from("2 Testbilder in den Bilder-Pool geladen.");
+        self.status_message = tr!("2 test images loaded into the image pool.").to_string();
         Ok(())
     }
 
@@ -2476,14 +2492,18 @@ impl Session {
         match query_printer_status_ipp(&uri, timeout_ms) {
             Ok(st) => {
                 self.printer_status = st;
-                self.status_message = format!(
-                    "IPP-Tintenstände von '{}' erfolgreich abgefragt.",
-                    self.doc.printer.printer_queue
+                self.status_message = tr!(
+                    "IPP ink levels of '{queue}' queried successfully.",
+                    queue = self.doc.printer.printer_queue
                 );
             }
             Err(e) => {
                 self.printer_status.online = false;
-                self.status_message = format!("IPP-Abfrage für '{}' fehlgeschlagen: {e}", uri);
+                self.status_message = tr!(
+                    "IPP query for '{uri}' failed: {reason}",
+                    uri = uri,
+                    reason = e
+                );
             }
         }
     }
@@ -2573,7 +2593,7 @@ impl Session {
                     .and_then(|s| s.to_str())
                     .unwrap_or("lumaprint_sheet");
                 let parent = p.parent().unwrap_or_else(|| Path::new("."));
-                parent.join(format!("{stem}_bogen{}.{ext}", pi + 1))
+                parent.join(format!("{stem}_sheet{}.{ext}", pi + 1))
             };
             match ext.as_str() {
                 "png" => save_png16(&buf, &target_path)?,
@@ -2770,10 +2790,10 @@ impl Session {
         if self.doc.color.mode == ColorManagementMode::UseIccProfile
             && self.active_icc_profile().is_none()
         {
-            return Err(EngineError::InvalidParam(format!(
-                "Für das Papier '{}' wurde kein ICC-Profil gefunden. Bitte ein Profil wählen \
-                 oder einen anderen Farbmodus verwenden.",
-                self.doc.printer.media_key
+            return Err(EngineError::InvalidParam(tr!(
+                "No ICC profile found for paper '{paper}'. Please select a profile \
+                 or use a different color mode.",
+                paper = self.doc.printer.media_key
             )));
         }
         Ok(())
@@ -2801,9 +2821,9 @@ impl Session {
             .iter()
             .any(|&pi| self.doc.page_slots(pi).iter().any(Option::is_some));
         if !has_placed_image {
-            return Err(EngineError::InvalidParam(String::from(
-                "Auf dem gewählten Druckbogen ist noch kein Bild platziert.",
-            )));
+            return Err(EngineError::InvalidParam(
+                tr!("No image has been placed on the selected print sheet yet.").to_string(),
+            ));
         }
 
         let known_uri = self
@@ -2852,12 +2872,16 @@ impl Session {
             req.extra_options
                 .insert(String::from("ppi"), dpi.max(72).to_string());
             if page_indices.len() > 1 {
-                req.job_title = format!("LumaPrint FineArt Sheet (Bogen {})", pi + 1);
+                req.job_title = format!("LumaPrint FineArt Sheet ({})", pi + 1);
             }
             last_msg = submit_cups_job(&req, tmp.path())?;
         }
         let summary = if page_indices.len() > 1 {
-            format!("{} Bögen gesendet — {last_msg}", page_indices.len())
+            tr!(
+                "{count} sheets sent — {message}",
+                count = page_indices.len(),
+                message = last_msg
+            )
         } else {
             last_msg
         };
@@ -2958,7 +2982,7 @@ mod tests {
         let err = session
             .ensure_icc_profile_for_print()
             .expect_err("ICC mode without profile must not print");
-        assert!(err.to_string().contains("kein ICC-Profil"), "{err}");
+        assert!(err.to_string().contains("No ICC profile"), "{err}");
 
         // Modes that do not need a paper profile are not affected.
         session.doc.color.mode = ColorManagementMode::PrinterManagesColor {
@@ -3481,7 +3505,7 @@ mod tests {
             .send_print_job_to_printer(72)
             .expect_err("empty sheet must be rejected before spooling");
         assert!(
-            empty_err.to_string().contains("kein Bild platziert"),
+            empty_err.to_string().contains("No image has been placed"),
             "unexpected error for empty sheet: {empty_err}"
         );
 

@@ -1306,6 +1306,7 @@ dependencies = [
  "image",
  "lumaprint-cms",
  "lumaprint-color",
+ "lumaprint-i18n",
  "serde",
  "tempfile",
  "thiserror 2.0.21",
@@ -1325,6 +1326,7 @@ name = "lumaprint-cups"
 version = "0.1.0"
 dependencies = [
  "lumaprint-geom",
+ "lumaprint-i18n",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -1354,6 +1356,7 @@ dependencies = [
  "lumaprint-cups",
  "lumaprint-doc",
  "lumaprint-geom",
+ "lumaprint-i18n",
  "lumaprint-ipp",
  "lumaprint-layout",
  "lumaprint-render",
@@ -1380,6 +1383,7 @@ name = "lumaprint-ipp"
 version = "0.1.0"
 dependencies = [
  "lumaprint-color",
+ "lumaprint-i18n",
  "serde",
  "thiserror 2.0.21",
 ]
@@ -1391,6 +1395,7 @@ dependencies = [
  "lumaprint-color",
  "lumaprint-doc",
  "lumaprint-geom",
+ "lumaprint-i18n",
  "serde",
  "thiserror 2.0.21",
 ]

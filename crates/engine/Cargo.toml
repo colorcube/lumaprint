@@ -20,6 +20,7 @@ lumaprint-layout = { workspace = true }
 lumaprint-render = { workspace = true }
 lumaprint-cups = { workspace = true }
 lumaprint-ipp = { workspace = true }
+lumaprint-i18n = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }

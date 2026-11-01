@@ -14,5 +14,6 @@ workspace = true
 lumaprint-geom = { workspace = true }
 lumaprint-color = { workspace = true }
 lumaprint-doc = { workspace = true }
+lumaprint-i18n = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }

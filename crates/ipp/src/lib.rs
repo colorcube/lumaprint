@@ -13,6 +13,7 @@
 )]
 
 use lumaprint_color::Rgb8;
+use lumaprint_i18n::tr;
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
@@ -64,7 +65,7 @@ impl PrinterStatus {
         Self {
             printer_uri: printer_uri.to_string(),
             online: false,
-            state_summary: String::from("Noch keine IPP-Tintenstände abgefragt"),
+            state_summary: tr!("No IPP ink levels queried yet").to_string(),
             channels: Vec::new(),
         }
     }
@@ -225,7 +226,7 @@ pub fn parse_ipp_marker_response(
         .map(|(idx, lvl)| InkChannelLevel {
             slot: (idx + 1) as u8,
             code: format!("C{}", idx + 1),
-            name: format!("Kanal {}", idx + 1),
+            name: tr!("Channel {number}", number = idx + 1),
             level_percent: lvl,
             swatch_rgb: Rgb8::new(90, 140, 200),
         })
@@ -234,7 +235,7 @@ pub fn parse_ipp_marker_response(
     Ok(PrinterStatus {
         printer_uri: printer_uri.to_string(),
         online: true,
-        state_summary: String::from("Online – IPP-Status empfangen"),
+        state_summary: tr!("Online – IPP status received").to_string(),
         channels,
     })
 }

@@ -12,5 +12,6 @@ workspace = true
 
 [dependencies]
 lumaprint-color = { workspace = true }
+lumaprint-i18n = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }

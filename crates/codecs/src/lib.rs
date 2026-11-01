@@ -13,6 +13,7 @@
 use image::{ColorType, DynamicImage, GenericImageView, ImageDecoder, ImageEncoder, ImageReader};
 use lumaprint_cms::{IccProfile, WorkingColorSpace};
 use lumaprint_color::{ImageBuffer16, Rgb16};
+use lumaprint_i18n::tr;
 use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 use std::path::Path;
@@ -255,7 +256,10 @@ fn classify_and_apply_icc_profile(
         Some(ws) => (ws, prof.description.clone()),
         None => (
             WorkingColorSpace::Srgb,
-            format!("{} (ignoriert, als sRGB behandelt)", prof.description),
+            tr!(
+                "{profile} (ignored, treated as sRGB)",
+                profile = prof.description
+            ),
         ),
     }
 }

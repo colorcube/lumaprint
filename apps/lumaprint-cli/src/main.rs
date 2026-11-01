@@ -31,7 +31,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(err) => {
-            eprintln!("Fehler: {err}");
+            eprintln!("Error: {err}");
             ExitCode::FAILURE
         }
     }
@@ -57,43 +57,41 @@ pub fn run_cli(args: &[String]) -> Result<String, EngineError> {
 fn cmd_help() -> String {
     let mut s = String::new();
     s.push_str("LumaPrint CLI — Headless Fine-Art Print Layout & Color Management\n\n");
-    s.push_str("VERWENDUNG:\n");
-    s.push_str("  lumaprint-cli info                   Architektur-, ICC- und Drucker-Übersicht\n");
+    s.push_str("USAGE:\n");
+    s.push_str("  lumaprint-cli info                   Architecture, ICC and printer overview\n");
+    s.push_str("  lumaprint-cli printers               List installed system printers (CUPS)\n");
+    s.push_str("  lumaprint-cli media                  List built-in fine art media types\n");
+    s.push_str("  lumaprint-cli papers                 List all supported paper sizes & margins\n");
+    s.push_str("  lumaprint-cli templates              List built-in templates (as in EPL)\n");
+    s.push_str("  lumaprint-cli presets                List built-in fine art presets\n");
+    s.push_str("  lumaprint-cli commands               List all registered engine commands\n");
     s.push_str(
-        "  lumaprint-cli printers               Installierte Systemdrucker (CUPS) auflisten\n",
+        "  lumaprint-cli status [--host <ip>]   Query generic IPP printer status & ink levels\n",
     );
     s.push_str(
-        "  lumaprint-cli media                  Integrierte Fine-Art Medientypen auflisten\n",
+        "  lumaprint-cli render [options]       Render a 16-bit page and save it as TIFF or PNG\n",
     );
-    s.push_str("  lumaprint-cli papers                 Alle unterstützten Papierformate & Ränder auflisten\n");
-    s.push_str("  lumaprint-cli templates              Integrierte Vorlagen (wie EPL) auflisten\n");
-    s.push_str("  lumaprint-cli presets                Integrierte Fine-Art Presets auflisten\n");
+    s.push_str("  lumaprint-cli print  [options]       Send a print job to CUPS or save it as 16-bit TIFF\n\n");
+    s.push_str("OPTIONS FOR 'render' / 'print':\n");
+    s.push_str("  --input <path>        Input image (PNG/TIFF/JPEG/PPM, repeatable; without: demo chart)\n");
+    s.push_str("  --output <path>       Output file (.tif, .png; 'print' without --output: spooling via CUPS/lp)\n");
+    s.push_str("  --printer <queue>     Target printer queue in CUPS (e.g. Epson_SC_P900)\n");
     s.push_str(
-        "  lumaprint-cli commands               Alle registrierten Engine-Befehle auflisten\n",
+        "  --media <key>         Media type key (e.g. VelvetFineArt, PremiumGlossy, Baryta)\n",
     );
-    s.push_str("  lumaprint-cli status [--host <ip>]   Generischen IPP-Druckerstatus & Tintenstand abfragen\n");
-    s.push_str("  lumaprint-cli render [Optionen]      16-Bit Seiten-Rendering als TIFF oder PNG speichern\n");
-    s.push_str("  lumaprint-cli print  [Optionen]      Druckauftrag an CUPS senden oder als 16-Bit TIFF speichern\n\n");
-    s.push_str("OPTIONEN FÜR 'render' / 'print':\n");
-    s.push_str("  --input <pfad>        Eingabebild (PNG/TIFF/JPEG/PPM, mehrfach möglich; ohne: Demo-Chart)\n");
-    s.push_str("  --output <pfad>       Ausgabedatei (.tif, .png; bei 'print' ohne --output: Spooling via CUPS/lp)\n");
-    s.push_str("  --printer <queue>     Ziel-Drucker-Queue in CUPS (z.B. Epson_SC_P900)\n");
-    s.push_str(
-        "  --media <key>         Medientyp-Key (z.B. VelvetFineArt, PremiumGlossy, Baryta)\n",
-    );
-    s.push_str("  --paper <key>         Papierformat-Key (z.B. A4, A3+, A2, 4x6)\n");
-    s.push_str("  --source <src>        Papierzufuhr (rear, front_fine_art, front_thick, roll)\n");
-    s.push_str("  --borderless          Randloser Druck aktivieren\n");
-    s.push_str("  --layout <mode>       Layout-Typ: standard | gallery_wrap | template | composer | test_strip\n");
-    s.push_str("  --color <mode>        Farbmodus: icc | abw | driver | none\n");
-    s.push_str("  --abw-tone <tone>     ABW-Farbton: neutral | cool | warm | sepia\n");
+    s.push_str("  --paper <key>         Paper size key (e.g. A4, A3+, A2, 4x6)\n");
+    s.push_str("  --source <src>        Paper source (rear, front_fine_art, front_thick, roll)\n");
+    s.push_str("  --borderless          Enable borderless printing\n");
+    s.push_str("  --layout <mode>       Layout type: standard | gallery_wrap | template | composer | test_strip\n");
+    s.push_str("  --color <mode>        Color mode: icc | abw | driver | none\n");
+    s.push_str("  --abw-tone <tone>     ABW tone: neutral | cool | warm | sepia\n");
     s.push_str(
         "  --intent <intent>     Rendering Intent: perceptual | relative | saturation | absolute\n",
     );
-    s.push_str("  --no-bpc              Tiefenkompensation (BPC) deaktivieren\n");
-    s.push_str("  --softproof           Softproof-Simulation beim Rendering aktivieren\n");
-    s.push_str("  --gamut-warning       Farbraumwarnung (Out-of-Gamut) im Softproof einblenden\n");
-    s.push_str("  --dpi <dpi>           Ziel-Auflösung (Standard: 150)\n");
+    s.push_str("  --no-bpc              Disable black point compensation (BPC)\n");
+    s.push_str("  --softproof           Enable soft proof simulation when rendering\n");
+    s.push_str("  --gamut-warning       Show the gamut warning (out of gamut) in the soft proof\n");
+    s.push_str("  --dpi <dpi>           Target resolution (default: 150)\n");
     s
 }
 
@@ -102,36 +100,36 @@ fn cmd_info() -> String {
     let mut s = String::new();
     s.push_str("LumaPrint Engine v0.1.0 (Fine-Art Print Layout & 16-Bit Color Management)\n");
     s.push_str(&format!(
-        "  Gefundene Systemdrucker  : {}\n",
+        "  System printers found    : {}\n",
         session.system_printers.len()
     ));
     s.push_str(&format!(
-        "  Medientypen in Datenbank : {}\n",
+        "  Media types in database  : {}\n",
         MEDIA_TYPES.len()
     ));
     s.push_str(&format!(
-        "  Papierformate            : {}\n",
+        "  Paper sizes              : {}\n",
         PAPER_SIZES.len()
     ));
     s.push_str(&format!(
-        "  Gefundene ICC-Profile    : {}\n",
+        "  ICC profiles found       : {}\n",
         session.icc_profiles.len()
     ));
     s.push_str(&format!(
-        "  Integrierte Vorlagen     : {}\n",
+        "  Built-in templates       : {}\n",
         builtin_templates().len()
     ));
     s.push_str(&format!(
-        "  Integrierte Presets      : {}\n",
+        "  Built-in presets         : {}\n",
         session.doc.user_backup.presets.len()
     ));
     s.push_str(&format!(
-        "  Registrierte Commands    : {}\n",
+        "  Registered commands      : {}\n",
         COMMAND_CATALOG.len()
     ));
     for p in &session.system_printers {
         s.push_str(&format!(
-            "    * Drucker: {} [Queue: {}, Status: {}]\n",
+            "    * Printer: {} [queue: {}, status: {}]\n",
             p.display_name, p.queue_name, p.state_message
         ));
     }
@@ -144,14 +142,14 @@ fn cmd_info() -> String {
 fn cmd_printers() -> String {
     let session = Session::new();
     let mut s = String::new();
-    s.push_str("Queue                  | Name                                 | Standard | Status                         | URI\n");
+    s.push_str("Queue                  | Name                                 | Default  | Status                         | URI\n");
     s.push_str("-----------------------+--------------------------------------+----------+--------------------------------+-------------------------\n");
     for p in &session.system_printers {
         s.push_str(&format!(
             "{:<22} | {:<36} | {:<8} | {:<30} | {}\n",
             p.queue_name,
             p.display_name,
-            if p.is_default { "Ja" } else { "Nein" },
+            if p.is_default { "yes" } else { "no" },
             p.state_message,
             p.device_uri
         ));
@@ -161,7 +159,7 @@ fn cmd_printers() -> String {
 
 fn cmd_media() -> String {
     let mut s = String::new();
-    s.push_str("Key                    | Name                                     | Schwarz | Zufuhr                        | Overcoat\n");
+    s.push_str("Key                    | Name                                     | Black   | Source                        | Overcoat\n");
     s.push_str("-----------------------+------------------------------------------+---------+-------------------------------+---------\n");
     for m in MEDIA_TYPES {
         s.push_str(&format!(
@@ -171,9 +169,9 @@ fn cmd_media() -> String {
             if m.uses_matte_black { "MK" } else { "PK" },
             m.default_feed.label(false),
             if m.supports_black_enhance_overcoat {
-                "Ja"
+                "yes"
             } else {
-                "Nein"
+                "no"
             }
         ));
     }
@@ -182,17 +180,17 @@ fn cmd_media() -> String {
 
 fn cmd_papers() -> String {
     let mut s = String::new();
-    s.push_str("Key         | Name                              | Breite (mm) | Höhe (mm) | Randlos möglich\n");
-    s.push_str("------------+-----------------------------------+-------------+-----------+----------------\n");
+    s.push_str("Key         | Name                              |  Width (mm) | Height (mm) | Borderless\n");
+    s.push_str("------------+-----------------------------------+-------------+-------------+-----------\n");
     for p in PAPER_SIZES {
         let sz = p.size_mm();
         s.push_str(&format!(
-            "{:<11} | {:<33} | {:>11.1} | {:>9.1} | {}\n",
+            "{:<11} | {:<33} | {:>11.1} | {:>11.1} | {}\n",
             p.key,
             p.name,
             sz.width_mm,
             sz.height_mm,
-            if p.supports_borderless { "Ja" } else { "Nein" }
+            if p.supports_borderless { "yes" } else { "no" }
         ));
     }
     s
@@ -202,7 +200,7 @@ fn cmd_templates() -> String {
     let mut s = String::new();
     for tpl in builtin_templates() {
         s.push_str(&format!(
-            "{:<22} | {:<36} | {} Slots\n",
+            "{:<22} | {:<36} | {} slots\n",
             tpl.id,
             tpl.name,
             tpl.normalized_slots.len()
@@ -228,7 +226,7 @@ fn cmd_commands() -> String {
     for c in COMMAND_CATALOG {
         s.push_str(&format!(
             "{:<30} | {:<14} | {}\n",
-            c.id, c.category, c.label_de
+            c.id, c.category, c.label
         ));
     }
     s
@@ -252,7 +250,7 @@ fn cmd_status(args: &[String]) -> String {
         query_printer_status_ipp(&h, 1500).unwrap_or_else(|e| {
             let mut st = session.printer_status.clone();
             st.printer_uri = h;
-            st.state_summary = format!("IPP nicht erreichbar ({e})");
+            st.state_summary = format!("IPP not reachable ({e})");
             st
         })
     } else {
@@ -262,13 +260,13 @@ fn cmd_status(args: &[String]) -> String {
 
     let mut s = String::new();
     s.push_str(&format!(
-        "Drucker: {}\nStatus : {}\n",
+        "Printer: {}\nStatus : {}\n",
         status.printer_uri, status.state_summary
     ));
     if status.channels.is_empty() {
-        s.push_str("Tintenstände (IPP marker-levels): Keine Kanäle vom Drucker gemeldet.\n");
+        s.push_str("Ink levels (IPP marker-levels): no channels reported by the printer.\n");
     } else {
-        s.push_str("Tintenstände (IPP marker-levels):\n");
+        s.push_str("Ink levels (IPP marker-levels):\n");
         for ch in &status.channels {
             let bars = (usize::from(ch.level_percent) / 5).min(20);
             let bar_str = "#".repeat(bars) + &"-".repeat(20 - bars);
@@ -295,7 +293,7 @@ fn configure_session_from_args(
             "--input" => {
                 let p = args
                     .get(i + 1)
-                    .ok_or_else(|| EngineError::InvalidParam("--input benötigt Pfad".into()))?;
+                    .ok_or_else(|| EngineError::InvalidParam("--input requires a path".into()))?;
                 session.execute(EngineCommand::AddImageFile { path: p.clone() })?;
                 has_inputs = true;
                 i += 1;
@@ -303,13 +301,13 @@ fn configure_session_from_args(
             "--output" => {
                 let p = args
                     .get(i + 1)
-                    .ok_or_else(|| EngineError::InvalidParam("--output benötigt Pfad".into()))?;
+                    .ok_or_else(|| EngineError::InvalidParam("--output requires a path".into()))?;
                 out_path = Some(PathBuf::from(p));
                 i += 1;
             }
             "--printer" => {
                 let q = args.get(i + 1).ok_or_else(|| {
-                    EngineError::InvalidParam("--printer benötigt Queue-Name".into())
+                    EngineError::InvalidParam("--printer requires a queue name".into())
                 })?;
                 session.execute(EngineCommand::SelectPrinterQueue(q.clone()))?;
                 i += 1;
@@ -317,7 +315,7 @@ fn configure_session_from_args(
             "--media" => {
                 let m = args
                     .get(i + 1)
-                    .ok_or_else(|| EngineError::InvalidParam("--media benötigt Key".into()))?;
+                    .ok_or_else(|| EngineError::InvalidParam("--media requires a key".into()))?;
                 let key = match m.as_str() {
                     "velvet_fine_art" => String::from("VelvetFineArt"),
                     "premium_glossy" => String::from("PremiumGlossy"),
@@ -330,14 +328,14 @@ fn configure_session_from_args(
             "--paper" => {
                 let p = args
                     .get(i + 1)
-                    .ok_or_else(|| EngineError::InvalidParam("--paper benötigt Key".into()))?;
+                    .ok_or_else(|| EngineError::InvalidParam("--paper requires a key".into()))?;
                 session.execute(EngineCommand::SetPaperSizeKey(p.clone()))?;
                 i += 1;
             }
             "--source" => {
                 let src_str = args
                     .get(i + 1)
-                    .ok_or_else(|| EngineError::InvalidParam("--source benötigt Wert".into()))?;
+                    .ok_or_else(|| EngineError::InvalidParam("--source requires a value".into()))?;
                 let source = match src_str.as_str() {
                     "front_fine_art" => PaperSource::FrontFineArt,
                     "front_thick" => PaperSource::FrontThick,
@@ -358,7 +356,7 @@ fn configure_session_from_args(
             "--layout" => {
                 let l_str = args
                     .get(i + 1)
-                    .ok_or_else(|| EngineError::InvalidParam("--layout benötigt Modus".into()))?;
+                    .ok_or_else(|| EngineError::InvalidParam("--layout requires a mode".into()))?;
                 match l_str.as_str() {
                     "gallery_wrap" => {
                         session.execute(EngineCommand::SetLayoutMode(LayoutMode::GalleryWrap(
@@ -392,7 +390,7 @@ fn configure_session_from_args(
             "--color" => {
                 let c_str = args
                     .get(i + 1)
-                    .ok_or_else(|| EngineError::InvalidParam("--color benötigt Modus".into()))?;
+                    .ok_or_else(|| EngineError::InvalidParam("--color requires a mode".into()))?;
                 let mode = match c_str.as_str() {
                     "abw" => ColorManagementMode::AdvancedBwPhoto,
                     "driver" => ColorManagementMode::PrinterManagesColor {
@@ -405,9 +403,9 @@ fn configure_session_from_args(
                 i += 1;
             }
             "--abw-tone" => {
-                let t_str = args
-                    .get(i + 1)
-                    .ok_or_else(|| EngineError::InvalidParam("--abw-tone benötigt Wert".into()))?;
+                let t_str = args.get(i + 1).ok_or_else(|| {
+                    EngineError::InvalidParam("--abw-tone requires a value".into())
+                })?;
                 let preset = match t_str.as_str() {
                     "cool" => AbwTonePreset::Cool,
                     "warm" => AbwTonePreset::Warm,
@@ -420,7 +418,7 @@ fn configure_session_from_args(
             "--intent" => {
                 let int_str = args
                     .get(i + 1)
-                    .ok_or_else(|| EngineError::InvalidParam("--intent benötigt Wert".into()))?;
+                    .ok_or_else(|| EngineError::InvalidParam("--intent requires a value".into()))?;
                 let intent = match int_str.as_str() {
                     "perceptual" => RenderingIntent::Perceptual,
                     "saturation" => RenderingIntent::Saturation,
@@ -447,9 +445,9 @@ fn configure_session_from_args(
                 session.execute(EngineCommand::SetSoftproof(sp))?;
             }
             "--quality" => {
-                let q_str = args
-                    .get(i + 1)
-                    .ok_or_else(|| EngineError::InvalidParam("--quality benötigt Wert".into()))?;
+                let q_str = args.get(i + 1).ok_or_else(|| {
+                    EngineError::InvalidParam("--quality requires a value".into())
+                })?;
                 let quality = match q_str.as_str() {
                     "standard" => PrintQuality::Normal720,
                     "max" => PrintQuality::MaxQuality2880x1440,
@@ -462,7 +460,7 @@ fn configure_session_from_args(
             "--dpi" => {
                 let d_str = args
                     .get(i + 1)
-                    .ok_or_else(|| EngineError::InvalidParam("--dpi benötigt Zahl".into()))?;
+                    .ok_or_else(|| EngineError::InvalidParam("--dpi requires a number".into()))?;
                 dpi = d_str
                     .parse::<u32>()
                     .map_err(|e| EngineError::InvalidParam(e.to_string()))?;
@@ -494,7 +492,7 @@ fn cmd_render(args: &[String]) -> Result<String, EngineError> {
     let out_path = out_path_opt.unwrap_or_else(|| PathBuf::from("/tmp/lumaprint_out.png"));
     session.export_print_file(&out_path, dpi)?;
     Ok(format!(
-        "Seite erfolgreich mit {} DPI gerendert nach: {}\n",
+        "Page rendered at {} DPI to: {}\n",
         dpi,
         out_path.display()
     ))
@@ -505,7 +503,7 @@ fn cmd_print(args: &[String]) -> Result<String, EngineError> {
     if let Some(out_path) = out_path_opt {
         session.export_print_file(&out_path, dpi)?;
         Ok(format!(
-            "16-Bit Druckbogen ({} DPI, Queue '{}') gespeichert nach: {}\n",
+            "16-bit print sheet ({} DPI, queue '{}') saved to: {}\n",
             dpi,
             session.doc.printer.printer_queue,
             out_path.display()
@@ -539,7 +537,7 @@ mod tests {
 
         let status = run_cli(&[String::from("status")]);
         assert!(status.is_ok());
-        assert!(status.unwrap_or_default().contains("Drucker:"));
+        assert!(status.unwrap_or_default().contains("Printer:"));
     }
 
     #[test]

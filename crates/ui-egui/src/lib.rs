@@ -7661,11 +7661,11 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                 ("⚠", t.warning)
                             };
                             ui.label(
-                                RichText::new(format!("{prefix} {}", drv_ctrl.status_badge_de()))
+                                RichText::new(format!("{prefix} {}", drv_ctrl.status_badge()))
                                     .small()
                                     .color(badge_col),
                             )
-                            .on_hover_text(drv_ctrl.status_tooltip_de());
+                            .on_hover_text(drv_ctrl.status_tooltip());
                         }
                         ui.end_row();
                     }
@@ -11855,7 +11855,7 @@ mod tests {
             app.render_ui(ctx);
         });
         assert!(
-            matches!(app.print_job_ui_state, PrintJobUiState::Error(ref msg) if msg.contains("kein Bild platziert")),
+            matches!(app.print_job_ui_state, PrintJobUiState::Error(ref msg) if msg.contains("No image has been placed")),
             "expected PrintJobUiState::Error on empty sheet, got {:?}",
             app.print_job_ui_state
         );
