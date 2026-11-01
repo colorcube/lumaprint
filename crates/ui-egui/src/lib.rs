@@ -2352,7 +2352,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 // A: Main Menu Bar: Datei | Ansicht | Bearbeiten | Einstellungen | Hilfe
                 egui::menu::bar(ui, |ui| {
                     ui.menu_button(tr!("File"), |ui| {
-                        if ui.button(tr!("➕ Add (images / folders)…")).clicked() {
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                        if ui.button(tr!("➕ Add images / folders…")).clicked() {
                             self.open_native_add_picker();
                             ui.close_menu();
                         }
@@ -2361,39 +2362,31 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             ui.close_menu();
                         }
                         ui.separator();
-                        if ui
-                            .button(tr!("🧪 Load test images into the pool"))
-                            .clicked()
-                        {
+                        if ui.button(tr!("🧪 Load test images")).clicked() {
                             self.exec(EngineCommand::AddDemoImages);
                             ui.close_menu();
                         }
-                        if ui
-                            .button(tr!("🪄 Distribute pool images onto sheets"))
-                            .clicked()
-                        {
+                        if ui.button(tr!("🪄 Distribute pool onto sheets")).clicked() {
                             self.exec(EngineCommand::AutoDistributePoolImages {
                                 only_unassigned: true,
                             });
                             ui.close_menu();
                         }
                         ui.separator();
-                        if ui
-                            .button(tr!("Reset settings (restore factory defaults)"))
-                            .clicked()
-                        {
+                        if ui.button(tr!("Reset all settings")).clicked() {
                             self.exec(EngineCommand::ResetToDefaults);
                             ui.close_menu();
                         }
                     });
 
                     ui.menu_button(tr!("View"), |ui| {
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                         let view_mode = self.session.doc.canvas_view_mode;
                         let page_cnt = self.session.doc.page_count();
                         if ui
                             .radio(
                                 view_mode == CanvasViewMode::SinglePage,
-                                tr!("▢ Single sheet view  (Ctrl+1)"),
+                                tr!("▢ Single sheet  (Ctrl+1)"),
                             )
                             .clicked()
                         {
@@ -2403,10 +2396,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         if ui
                             .radio(
                                 view_mode == CanvasViewMode::AllPagesOverview,
-                                tr!(
-                                    "⊞ All sheets overview ({count})  (Ctrl+2)",
-                                    count = page_cnt
-                                ),
+                                tr!("⊞ All sheets ({count})  (Ctrl+2)", count = page_cnt),
                             )
                             .clicked()
                         {
@@ -2423,7 +2413,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         let mut show_left = !self.session.doc.left_dock_collapsed
                             && self.session.doc.filmstrip_position != FilmstripPosition::Hidden;
                         if ui
-                            .checkbox(&mut show_left, tr!("Show left dock / pool  (F9)"))
+                            .checkbox(&mut show_left, tr!("Image pool  (F9)"))
                             .changed()
                         {
                             if show_left {
@@ -2440,7 +2430,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         let mut show_right = self.session.doc.show_settings_panel
                             && !self.session.doc.right_dock_collapsed;
                         if ui
-                            .checkbox(&mut show_right, tr!("Show print settings  (F10)"))
+                            .checkbox(&mut show_right, tr!("Print settings  (F10)"))
                             .changed()
                         {
                             self.session.doc.show_settings_panel = show_right;
@@ -2448,7 +2438,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
                         let mut show_bottom = !self.session.doc.bottom_dock_collapsed;
                         if ui
-                            .checkbox(&mut show_bottom, tr!("Show bottom dock / sheet list  (F8)"))
+                            .checkbox(&mut show_bottom, tr!("Sheet list  (F8)"))
                             .changed()
                         {
                             self.session.doc.bottom_dock_collapsed = !show_bottom;
@@ -2461,18 +2451,16 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         ui.separator();
                         let _ = ui.checkbox(
                             &mut self.session.doc.show_slot_guides,
-                            tr!("Show slot frames (dashed line)  (Ctrl+G)"),
+                            tr!("Slot frames  (Ctrl+G)"),
                         );
-                        let _ = ui.checkbox(
-                            &mut self.session.doc.show_rulers,
-                            tr!("Show rulers  (Ctrl+R)"),
-                        );
+                        let _ =
+                            ui.checkbox(&mut self.session.doc.show_rulers, tr!("Rulers  (Ctrl+R)"));
 
                         ui.separator();
                         let mut sp = self.session.doc.color.softproof;
                         let mut sp_changed = false;
                         if ui
-                            .checkbox(&mut sp.enabled, tr!("👁 Enable soft proof  (Ctrl+Shift+S)"))
+                            .checkbox(&mut sp.enabled, tr!("👁 Soft proof  (Ctrl+Shift+S)"))
                             .changed()
                         {
                             sp_changed = true;
@@ -2492,7 +2480,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         if ui
                             .checkbox(
                                 &mut sp.gamut_warning,
-                                tr!("⚠ Show gamut warning  (Ctrl+Shift+G)"),
+                                tr!("⚠ Gamut warning  (Ctrl+Shift+G)"),
                             )
                             .changed()
                         {
@@ -2503,9 +2491,6 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
 
                         ui.separator();
-                        ui.label(
-                            RichText::new(format!("Zoom ({:.0} %)", self.zoom * 100.0)).strong(),
-                        );
                         if ui.button(tr!("🔍+ Zoom in  (Ctrl++)")).clicked() {
                             self.zoom = (self.zoom + 0.15).min(2.5);
                             ui.close_menu();
@@ -2514,13 +2499,14 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             self.zoom = (self.zoom - 0.15).max(0.4);
                             ui.close_menu();
                         }
-                        if ui.button(tr!("🔍 Reset zoom to 100 %  (Ctrl+0)")).clicked() {
+                        if ui.button(tr!("🔍 Reset zoom  (Ctrl+0)")).clicked() {
                             self.zoom = 1.0;
                             ui.close_menu();
                         }
                     });
 
                     ui.menu_button(tr!("Edit"), |ui| {
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                         if ui
                             .add_enabled(
                                 self.session.can_undo(),
@@ -2542,18 +2528,18 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             ui.close_menu();
                         }
                         ui.separator();
-                        if ui.button(tr!("+ New empty sheet")).clicked() {
+                        if ui.button(tr!("New sheet")).clicked() {
                             self.exec(EngineCommand::AddPage {
                                 initial_image_id: None,
                             });
                             ui.close_menu();
                         }
-                        if ui.button(tr!("⧉ Duplicate current sheet")).clicked() {
+                        if ui.button(tr!("Duplicate sheet")).clicked() {
                             let pi = self.session.doc.active_page_index;
                             self.exec(EngineCommand::DuplicatePage { page_index: pi });
                             ui.close_menu();
                         }
-                        if ui.button(tr!("🧹 Clear current sheet")).clicked() {
+                        if ui.button(tr!("Clear sheet")).clicked() {
                             let pi = self.session.doc.active_page_index;
                             self.exec(EngineCommand::ClearPageSlots { page_index: pi });
                             ui.close_menu();
@@ -2561,6 +2547,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     });
 
                     ui.menu_button(tr!("Settings"), |ui| {
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                         ui.spacing_mut().item_spacing = Vec2::new(8.0, 5.0);
                         ui.menu_button(tr!("Appearance"), |ui| {
                             ui.spacing_mut().item_spacing = Vec2::new(8.0, 5.0);
@@ -2638,7 +2625,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             }
                         }
                         ui.separator();
-                        ui.label(RichText::new(tr!("Workspace background color")).strong());
+                        ui.label(RichText::new(tr!("Workspace background")).strong());
                         for tone in CanvasBackdropTone::ALL {
                             let lbl = match tone {
                                 CanvasBackdropTone::DarkGray => tr!("Dark gray (default)"),
@@ -2699,6 +2686,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     });
 
                     ui.menu_button(tr!("Help"), |ui| {
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                         if ui.button(tr!("ℹ About LumaPrint…")).clicked() {
                             self.show_about_modal = true;
                             ui.close_menu();
@@ -6494,7 +6482,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                         }
 
                         ui.label(RichText::new(tr!("Centering:")).color(t.text_dim));
-                        ui.horizontal(|ui| {
+                        // Vertical wrapper: a grid cell cannot take add_space directly; the gap keeps the
+                        // tiles from touching the size buttons below.
+                        ui.vertical(|ui| {
+                            ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 6.0;
                             for c in [
                                 CenteringMode::Center,
@@ -6539,6 +6530,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                                     changed = true;
                                 }
                             }
+                        });
+                            ui.add_space(6.0);
                         });
                         ui.end_row();
 
