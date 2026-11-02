@@ -18,3 +18,7 @@ nav = [
         { "Pro-Funktionen (Teststreifen, Softproof, Schärfung, IPP-Tintenstand)" = "user-guide/pro-features.md" },
     ] },
 ]
+
+[project.theme]
+logo = "assets/lumaprint.svg"
+favicon = "assets/lumaprint.svg"

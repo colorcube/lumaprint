@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>de.colorcube.lumaprint</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>LumaPrint</name>
+  <summary>Fine-art print layout, live softproofing and 16-bit color management</summary>
+  <summary xml:lang="de">Fine-Art-Drucklayout, Live-Softproof und 16-Bit-Farbmanagement</summary>
+  <developer id="de.colorcube">
+    <name>René Fritz</name>
+  </developer>
+  <description>
+    <p>
+      LumaPrint is a printer-independent 16-bit fine-art print layout, live softproofing, and ICC color management
+      studio for Linux and CUPS, inspired by Epson Print Layout and TurboPrint Composer.
+    </p>
+    <ul>
+      <li>16-bit color pipeline with LittleCMS 2, ICC paper profiles, and automatic prevention of double color management</li>
+      <li>Interactive softproof with paper white simulation, viewing light temperatures (D50, D65, 3200K), and gamut warning</li>
+      <li>Advanced Black and White (ABW) mode with 2D color toning wheel, midtone control, and tone curves</li>
+      <li>Five studio layout modes: Standard, Collection Sheet (auto-nesting composer), 2-Stage Bento/Free Template Studio, Gallery Wrap, and Panorama</li>
+      <li>Direct CUPS / IPP integration with custom media (.emx) support and live ink level monitoring</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">de.colorcube.lumaprint.desktop</launchable>
+  <url type="homepage">https://github.com/colorcube/lumaprint</url>
+  <url type="bugtracker">https://github.com/colorcube/lumaprint/issues</url>
+  <url type="vcs-browser">https://github.com/colorcube/lumaprint</url>
+  <categories>
+    <category>Graphics</category>
+    <category>Photography</category>
+    <category>2DGraphics</category>
+    <category>RasterGraphics</category>
+  </categories>
+  <keywords>
+    <keyword>printing</keyword>
+    <keyword>fine-art</keyword>
+    <keyword>color management</keyword>
+    <keyword>ICC</keyword>
+    <keyword>softproof</keyword>
+    <keyword>CUPS</keyword>
+    <keyword>Epson</keyword>
+  </keywords>
+  <provides>
+    <binary>lumaprint</binary>
+    <binary>lumaprint-cli</binary>
+  </provides>
+  <requires>
+    <display_length compare="ge">720</display_length>
+  </requires>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-11-01" type="development">
+      <description>
+        <p>First public beta release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/lumaprint.svg" width="112" alt="LumaPrint icon"></p>
+
 # LumaPrint Handbuch & Technische Referenz
 
 Willkommen im Handbuch von **LumaPrint** – dem professionellen, druckerunabhängigen Fine-Art-Druck-, Softproof- und Layout-Studio für Linux.

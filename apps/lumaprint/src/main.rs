@@ -69,6 +69,8 @@ fn main() -> ExitCode {
             .with_title(
                 "LumaPrint — Fine-Art Print Layout & Color Management (Epson SC-P900 / SC-P700)",
             )
+            .with_app_id("de.colorcube.lumaprint")
+            .with_icon(lumaprint_ui_egui::app_icon_data())
             .with_inner_size([1520.0, 960.0])
             .with_min_inner_size([1100.0, 720.0])
             .with_drag_and_drop(true),

@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Builds/links lumaprint and lumaprint-cli into ~/.local/bin and installs the desktop entry,
+# AppStream metainfo, and hicolor icons under the app ID (de.colorcube.lumaprint).
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+APP_ID="de.colorcube.lumaprint"
+
+LOCAL_BIN="${HOME}/.local/bin"
+APPS_DIR="${HOME}/.local/share/applications"
+METAINFO_DIR="${HOME}/.local/share/metainfo"
+ICON_ROOT="${HOME}/.local/share/icons/hicolor"
+
+if [[ "${1:-}" == "--uninstall" ]]; then
+    rm -f "${LOCAL_BIN}/lumaprint" "${LOCAL_BIN}/lumaprint-cli"
+    rm -f "${APPS_DIR}/${APP_ID}.desktop"
+    rm -f "${METAINFO_DIR}/${APP_ID}.metainfo.xml"
+    rm -f "${ICON_ROOT}/scalable/apps/${APP_ID}.svg"
+    rm -f "${ICON_ROOT}/128x128/apps/${APP_ID}.png"
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database "${APPS_DIR}" >/dev/null 2>&1 || true
+    fi
+    if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+        gtk-update-icon-cache -q -t "${ICON_ROOT}" || true
+    fi
+    echo "✓ Uninstalled LumaPrint desktop integration from ~/.local"
+    exit 0
+fi
+
+if [[ ! -x "${PROJECT_ROOT}/target/release/lumaprint" || ! -x "${PROJECT_ROOT}/target/release/lumaprint-cli" ]]; then
+    echo "Building release binaries (lumaprint, lumaprint-cli)..."
+    cargo build --release --manifest-path "${PROJECT_ROOT}/Cargo.toml" -p lumaprint -p lumaprint-cli
+fi
+
+mkdir -p "${LOCAL_BIN}" "${APPS_DIR}" "${METAINFO_DIR}"
+ln -sf "${PROJECT_ROOT}/target/release/lumaprint" "${LOCAL_BIN}/lumaprint"
+ln -sf "${PROJECT_ROOT}/target/release/lumaprint-cli" "${LOCAL_BIN}/lumaprint-cli"
+echo "✓ Linked lumaprint and lumaprint-cli into ${LOCAL_BIN}"
+
+install -m 644 "${PROJECT_ROOT}/share/applications/${APP_ID}.desktop" "${APPS_DIR}/"
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database "${APPS_DIR}" >/dev/null 2>&1 || true
+fi
+echo "✓ Installed desktop entry into ${APPS_DIR}"
+
+install -m 644 "${PROJECT_ROOT}/share/metainfo/${APP_ID}.metainfo.xml" "${METAINFO_DIR}/"
+echo "✓ Installed AppStream metainfo into ${METAINFO_DIR}"
+
+mkdir -p "${ICON_ROOT}/scalable/apps" "${ICON_ROOT}/128x128/apps"
+install -m 644 "${PROJECT_ROOT}/share/icons/hicolor/scalable/apps/${APP_ID}.svg" "${ICON_ROOT}/scalable/apps/"
+install -m 644 "${PROJECT_ROOT}/share/icons/hicolor/128x128/apps/${APP_ID}.png" "${ICON_ROOT}/128x128/apps/"
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -q -t "${ICON_ROOT}" || true
+fi
+echo "✓ Installed app icons (scalable, 128x128) into ${ICON_ROOT}"

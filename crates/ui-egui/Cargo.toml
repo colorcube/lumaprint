@@ -24,6 +24,7 @@ egui = { workspace = true }
 eframe = { workspace = true }
 winit = { workspace = true }
 serde = { workspace = true }
+png = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

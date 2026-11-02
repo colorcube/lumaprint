@@ -52,6 +52,29 @@ use winit::platform::wayland::{
     set_wayland_surface_color_space, wayland_color_management_status,
 };
 
+/// Embedded 128×128 RGBA application icon (`share/icons/hicolor/128x128/apps/de.colorcube.lumaprint.png`).
+pub const APP_ICON_PNG: &[u8] =
+    include_bytes!("../../../share/icons/hicolor/128x128/apps/de.colorcube.lumaprint.png");
+
+/// Decode the embedded application icon into [`egui::IconData`] for the window viewport.
+#[must_use]
+pub fn app_icon_data() -> egui::IconData {
+    let decoder = png::Decoder::new(std::io::Cursor::new(APP_ICON_PNG));
+    if let Ok(mut reader) = decoder.read_info() {
+        let buf_len = reader.output_buffer_size().unwrap_or(128 * 128 * 4);
+        let mut buf = vec![0_u8; buf_len];
+        if let Ok(info) = reader.next_frame(&mut buf) {
+            buf.truncate(info.buffer_size());
+            return egui::IconData {
+                rgba: buf,
+                width: info.width,
+                height: info.height,
+            };
+        }
+    }
+    egui::IconData::default()
+}
+
 /// `DragValue` with German decimal comma: shows `12,5` and accepts both `12,5` and `12.5`.
 fn de_drag<Num: egui::emath::Numeric>(value: &mut Num) -> egui::DragValue<'_> {
     egui::DragValue::new(value)
@@ -803,6 +826,7 @@ pub struct LumaPrintApp {
     /// Last state written to (or read from) the settings file.
     saved_settings: Option<PersistentSettings>,
     next_settings_check: f64,
+    app_icon_texture: Option<TextureHandle>,
 }
 
 impl Default for LumaPrintApp {
@@ -863,6 +887,7 @@ impl LumaPrintApp {
             saved_settings: None,
             pool_selected: false,
             next_settings_check: 0.0,
+            app_icon_texture: None,
         }
     }
 
@@ -8216,6 +8241,20 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
         // 4. "Über LumaPrint" Info-Dialog (Hilfe -> Über LumaPrint…)
         if self.show_about_modal {
+            let icon_tex = self
+                .app_icon_texture
+                .get_or_insert_with(|| {
+                    let icon = app_icon_data();
+                    let w = usize::try_from(icon.width).unwrap_or(128);
+                    let h = usize::try_from(icon.height).unwrap_or(128);
+                    let img = if icon.rgba.len() == w.saturating_mul(h).saturating_mul(4) && w > 0 {
+                        ColorImage::from_rgba_unmultiplied([w, h], &icon.rgba)
+                    } else {
+                        ColorImage::new([1, 1], Color32::TRANSPARENT)
+                    };
+                    ctx.load_texture("lumaprint_app_icon", img, TextureOptions::LINEAR)
+                })
+                .clone();
             let mut open = self.show_about_modal;
             egui::Window::new(tr!("ℹ About LumaPrint"))
                 .id(egui::Id::new("about_modal"))
@@ -8225,17 +8264,22 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 .default_width(420.0)
                 .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
                 .show(ctx, |ui| {
-                    ui.label(
-                        RichText::new("LumaPrint – Fine-Art Print & Layout Studio")
-                            .size(16.0)
-                            .strong()
-                            .color(self.tokens.accent),
-                    );
-                    ui.label(
-                        RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION")))
-                            .small()
-                            .color(self.tokens.text_dim),
-                    );
+                    ui.horizontal(|ui| {
+                        ui.image((icon_tex.id(), Vec2::splat(48.0)));
+                        ui.vertical(|ui| {
+                            ui.label(
+                                RichText::new("LumaPrint – Fine-Art Print & Layout Studio")
+                                    .size(16.0)
+                                    .strong()
+                                    .color(self.tokens.accent),
+                            );
+                            ui.label(
+                                RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION")))
+                                    .small()
+                                    .color(self.tokens.text_dim),
+                            );
+                        });
+                    });
                     ui.add_space(8.0);
                     ui.label(tr!(
                         "LumaPrint is a vendor-independent 16-bit fine-art layout, soft proof \
@@ -12115,5 +12159,42 @@ BackgroundNormal=61,174,233
         assert!((uncropped.norm_x - 0.0).abs() < 1e-6);
         assert!((uncropped.norm_w - 1.0).abs() < 1e-6);
         assert!((rect_uncropped.width_mm - 120.0).abs() < 1e-6);
+
+        // 11. Embedded 128x128 RGBA application icon + desktop & AppStream metainfo validation
+        let icon = app_icon_data();
+        assert_eq!(icon.width, 128);
+        assert_eq!(icon.height, 128);
+        assert_eq!(icon.rgba.len(), 128 * 128 * 4);
+
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let desktop_file = root.join("share/applications/de.colorcube.lumaprint.desktop");
+        let metainfo_file = root.join("share/metainfo/de.colorcube.lumaprint.metainfo.xml");
+        let svg_icon = root.join("share/icons/hicolor/scalable/apps/de.colorcube.lumaprint.svg");
+        assert!(desktop_file.is_file());
+        assert!(metainfo_file.is_file());
+        assert!(svg_icon.is_file());
+        if let Ok(out) = std::process::Command::new("desktop-file-validate")
+            .arg(&desktop_file)
+            .output()
+        {
+            assert!(
+                out.status.success(),
+                "desktop-file-validate failed: {}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        if let Ok(out) = std::process::Command::new("appstreamcli")
+            .args(["validate", "--no-net"])
+            .arg(&metainfo_file)
+            .output()
+        {
+            assert!(
+                out.status.success(),
+                "appstreamcli validate failed: {}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
     }
 }

@@ -1,0 +1,18 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=LumaPrint
+GenericName=Fine-Art Print Studio
+GenericName[de]=Fine-Art-Druckstudio
+Comment=Fine-art print layout, live softproofing and 16-bit color management for CUPS
+Comment[de]=Fine-Art-Drucklayout, Live-Softproof und 16-Bit-Farbmanagement für CUPS
+Exec=lumaprint %F
+TryExec=lumaprint
+Icon=de.colorcube.lumaprint
+Terminal=false
+Categories=Graphics;Photography;2DGraphics;RasterGraphics;
+MimeType=image/tiff;image/png;image/jpeg;image/x-portable-pixmap;
+Keywords=print;printing;fine-art;color management;ICC;softproof;CUPS;Epson;ABW;
+Keywords[de]=Drucken;Fine-Art;Farbmanagement;ICC;Softproof;CUPS;Epson;Foto;
+StartupNotify=true
+StartupWMClass=de.colorcube.lumaprint

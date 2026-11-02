@@ -1,3 +1,5 @@
+<p align="center"><img src="share/icons/hicolor/scalable/apps/de.colorcube.lumaprint.svg" width="112" alt="LumaPrint icon"></p>
+
 # LumaPrint — Fine-Art Print Layout & 16-Bit Color Studio
 
 **LumaPrint** is a fine-art print layout, live softproofing, and 16-bit color management application for Linux, written in Rust. Inspired by **Epson Print Layout** and **TurboPrint Composer**, it combines a studio-style layout workflow with ICC color management (LittleCMS 2) and **CUPS / IPP** integration. 
@@ -26,12 +28,19 @@ sudo dnf install gcc pkgconf-pkg-config lcms2-devel wayland-devel libxkbcommon-d
 sudo pacman -S base-devel pkgconf lcms2 wayland libxkbcommon mesa libcups
 ```
 
-### 2. Launch the Desktop Studio (`lumaprint`)
+### 2. Launch or Install the Desktop Studio (`lumaprint`)
 
-Clone or open the workspace and start the hardware-accelerated desktop GUI:
+Clone or open the workspace and start the hardware-accelerated desktop GUI directly:
 
 ```bash
 cargo run --release -p lumaprint
+```
+
+Or build and install `lumaprint` and `lumaprint-cli` into `~/.local/bin` along with the desktop entry, AppStream metadata, and icons (`~/.local/share`):
+
+```bash
+./bin/install-desktop              # builds --release and installs into ~/.local/{bin,share}
+./bin/install-desktop --uninstall  # removes the installed files
 ```
 
 ### 3. Your First Fine-Art Print in 4 Steps
@@ -39,7 +48,7 @@ cargo run --release -p lumaprint
 1. **Add Images to the Pool:** Click **`➕ Hinzufügen`** in the **Image Pool** dock (or drag & drop image files/folders directly from your file manager into the window).
 2. **Place Images on Sheets:** Drag an image from the Pool onto the dashed slot on **Sheet 1**, or click **`🪄 Auf Bögen verteilen`** to automatically distribute all unplaced images across one or more print sheets.
 3. **Select Printer, Paper & Color Mode:**
-   - In the right **Print (`🖨 Druck`)** dock, choose your **CUPS printer queue**, **Media Type** (including custom media imported from the Linux Epson Media Installer), **Paper Size**, and **Paper Feed**.
+   - In the right **Print (`🖨 Druck`)** dock, choose your **CUPS printer queue**, **Media Type** (including custom media imported from [`ep-media-installer` (`epmi`)](https://github.com/colorcube/ep-media-installer)), **Paper Size**, and **Paper Feed**.
    - Under **Color Management**, stay in **`Normal`** view for automatic, foolproof operation:
      - **`Farbverbindlich (ICC-Papierprofil)`**: LumaPrint transforms the 16-bit image using the paper's ICC profile (*Relative Colorimetric + Black Point Compensation*) and instructs the CUPS driver to disable internal color adjustment (`NoColorAdjustment`).
      - **`Drucker-Automatik`**: Sends the image in *Adobe RGB (1998)* and lets the printer driver perform color conversion (automatically switches to ICC mode if you select third-party custom media or enable Softproof).

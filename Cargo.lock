@@ -1428,6 +1428,7 @@ dependencies = [
  "lumaprint-i18n",
  "lumaprint-layout",
  "lumaprint-render",
+ "png",
  "serde",
  "tempfile",
  "winit",
