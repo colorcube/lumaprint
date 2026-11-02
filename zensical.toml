@@ -1,24 +1,110 @@
 [project]
-site_name = "LumaPrint Handbuch — Fine-Art Print Layout & Color Management"
-site_description = "Benutzerhandbuch & Architektur-Dokumentation für LumaPrint (Epson SureColor SC-P900 / SC-P700)"
-site_author = "LumaPrint Team"
-docs_dir = "docs"
-site_dir = "site"
-language = "de"
+site_name = "LumaPrint – User Guide"
+site_description = "Fine-Art Print Layout, Live Softproofing, and 16-Bit Color Studio for Linux"
+site_author = "LumaPrint Contributors"
+site_url = "https://colorcube.github.io/lumaprint/manual/"
+repo_url = "https://github.com/colorcube/lumaprint"
+copyright = "Copyright &copy; 2026 LumaPrint Contributors – GPL-3.0-or-later"
+docs_dir = "docs/manual/en"
+site_dir = "site/manual"
 
 nav = [
-    { "Übersicht & Schnellstart" = "index.md" },
-    { "Architektur (L0–L6)" = "architecture.md" },
-    { "Benutzerhandbuch" = [
-        { "Hauptfenster & Bedienung" = "user-guide/main-window.md" },
-        { "Drucker, Medien & Zufuhr" = "user-guide/printer-and-media.md" },
-        { "Layout-Modi (Standard, Panorama, Gallery Wrap, Vorlage, Composer)" = "user-guide/layout-modes.md" },
-        { "Grundlagen: Farbräume & Farbprofile beim Drucken" = "user-guide/color-spaces-explained.md" },
-        { "Farbmanagement, ICC & Advanced B&W (ABW)" = "user-guide/color-and-abw.md" },
-        { "Pro-Funktionen (Teststreifen, Softproof, Schärfung, IPP-Tintenstand)" = "user-guide/pro-features.md" },
-    ] },
+  { "Overview" = "README.md" },
+  { "1. Main Window & Basic Operation" = "main-window.md" },
+  { "2. Printer, Media & Paper Feed" = "printer-and-media.md" },
+  { "3. Layout Modes & Template Studio" = "layout-modes.md" },
+  { "4. Color Spaces & ICC Profiles" = "color-spaces-explained.md" },
+  { "5. Color Management, Soft Proof & ABW" = "color-and-abw.md" },
+  { "6. Pro Features" = "pro-features.md" },
 ]
 
+extra_css = ["stylesheets/extra.css"]
+
 [project.theme]
-logo = "assets/lumaprint.svg"
-favicon = "assets/lumaprint.svg"
+logo = "images/lumaprint.svg"
+favicon = "images/lumaprint.svg"
+language = "en"
+font = false
+features = [
+  "announce.dismiss",
+  "content.code.annotate",
+  "content.code.copy",
+  "content.code.select",
+  "content.footnote.tooltips",
+  "content.tabs.link",
+  "content.tooltips",
+  "navigation.footer",
+  "navigation.path",
+  "navigation.top",
+  "navigation.tracking",
+  "search.highlight",
+  "toc.follow",
+]
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme)"
+primary = "blue-grey"
+accent = "teal"
+toggle.icon = "lucide/sun-moon"
+toggle.name = "Switch to light mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+primary = "blue-grey"
+accent = "teal"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+primary = "blue-grey"
+accent = "teal"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to system preference"
+
+[project.plugins.offline]
+enabled = true
+
+[project.plugins.glightbox]
+enabled = true
+
+[project.plugins.gh-admonitions]
+enabled = true
+
+[project.extra]
+homepage = "index.html"
+polyfills = [
+  { path = "js/iframe-worker-shim.js", type = "text/javascript", async = false, defer = false },
+]
+
+[project.markdown_extensions]
+abbr = {}
+admonition = {}
+attr_list = {}
+def_list = {}
+footnotes = {}
+md_in_html = {}
+toc.permalink = true
+pymdownx.arithmatex.generic = true
+pymdownx.betterem = {}
+pymdownx.caret = {}
+pymdownx.details = {}
+pymdownx.emoji.emoji_generator = "zensical.extensions.emoji.to_svg"
+pymdownx.emoji.emoji_index = "zensical.extensions.emoji.twemoji"
+pymdownx.highlight.anchor_linenums = true
+pymdownx.highlight.line_spans = "__span"
+pymdownx.highlight.pygments_lang_class = true
+pymdownx.inlinehilite = {}
+pymdownx.keys = {}
+pymdownx.magiclink = {}
+pymdownx.mark = {}
+pymdownx.smartsymbols = {}
+pymdownx.superfences.custom_fences = [
+  { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" },
+]
+pymdownx.tabbed.alternate_style = true
+pymdownx.tabbed.combine_header_slug = true
+pymdownx.tasklist.custom_checkbox = true
+pymdownx.tilde = {}

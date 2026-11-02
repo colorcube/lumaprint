@@ -127,9 +127,9 @@ Liegt Ihr Foto beispielsweise im großen **`ProPhoto RGB`**- oder **`Adobe RGB`*
 
 ---
 
-## 5. Was speichert der „Epson Media Installer“ im Drucker?
+## 5. Was speichert der „EP Media Installer (epmi)“ im Drucker?
 
-Mit Werkzeugen wie dem *Epson Media Installer* lassen sich Konfigurationsdateien (`.emy` / `.emx`) für Papiere von Drittanbietern herunterladen und im Drucker registrieren. Auch hier ist die Aufgabenverteilung klar getrennt:
+Mit Werkzeugen wie dem *EP Media Installer (epmi)* lassen sich Konfigurationsdateien (`.emy` / `.emx`) für Papiere von Drittanbietern herunterladen und im Drucker registrieren. Auch hier ist die Aufgabenverteilung klar getrennt:
 
 1. **Was im Drucker selbst gespeichert wird:**
    Der Drucker speichert in seinen Benutzer-Speicherplätzen (`Slot 1..10`) **ausschließlich die mechanischen und physikalischen Papierparameter**: Papiername für das Display, Walzenabstand, Papierdicke in Millimetern, Vorschubkorrektur, Trocknungszeit und die Zuordnung zum internen Basis-Medium. **Der Drucker selbst speichert und verarbeitet keine `.icc`-Farbprofile.**

@@ -13,9 +13,14 @@ LumaPrint is **printer-independent** and works out of the box with any printer i
 
 ## Quickstart
 
-### 1. Prerequisites (Linux)
+### 1. Supported Systems & Prerequisites (Linux)
 
-Make sure you have a recent Rust toolchain (`>= 1.85`, Edition 2024), `pkg-config`, LittleCMS 2 (`liblcms2-dev`), and standard Wayland/X11/OpenGL development headers installed:
+- **Distributions:** Developed and tested on Fedora 43/44 (KDE Plasma 6); works on Debian 13+, Ubuntu 24.04+, Arch Linux, openSUSE Tumbleweed, and other modern Linux distributions.
+- **Display Server (`lumaprint` GUI):** **Wayland** (recommended: native wide-gamut `wp_color_manager_v1` support under KDE Plasma 6 / KWin `>= 6.2` and native Wayland file drag-and-drop) and **X11**. `lumaprint-cli` runs headless without a display server.
+- **CUPS:** `>= 2.3` (`lp`, `lpstat`, `lpoptions`, `ipptool`).
+- **Rust Toolchain:** `>= 1.85` (Rust 2024 Edition).
+
+Install `pkg-config`, LittleCMS 2 (`liblcms2`), and standard Wayland/X11/OpenGL development headers:
 
 ```bash
 # Debian / Ubuntu / Linux Mint
@@ -45,17 +50,19 @@ Or build and install `lumaprint` and `lumaprint-cli` into `~/.local/bin` along w
 
 ### 3. Your First Fine-Art Print in 4 Steps
 
-1. **Add Images to the Pool:** Click **`➕ Hinzufügen`** in the **Image Pool** dock (or drag & drop image files/folders directly from your file manager into the window).
-2. **Place Images on Sheets:** Drag an image from the Pool onto the dashed slot on **Sheet 1**, or click **`🪄 Auf Bögen verteilen`** to automatically distribute all unplaced images across one or more print sheets.
+*(The UI defaults to English and automatically switches to German on German systems; switchable anytime under **Settings → Language**.)*
+
+1. **Add Images to the Pool:** Click **`➕ Add`** (`➕ Hinzufügen`) in the **Image Pool** dock (or drag & drop image files/folders directly from your file manager into the window).
+2. **Place Images on Sheets:** Drag an image from the Pool onto the dashed slot on **Sheet 1**, or click **`🪄 Distribute to Sheets`** (`🪄 Auf Bögen verteilen`) to automatically distribute all unplaced images across one or more print sheets.
 3. **Select Printer, Paper & Color Mode:**
-   - In the right **Print (`🖨 Druck`)** dock, choose your **CUPS printer queue**, **Media Type** (including custom media imported from [`ep-media-installer` (`epmi`)](https://github.com/colorcube/ep-media-installer)), **Paper Size**, and **Paper Feed**.
+   - In the right **Print (`🖨 Print`)** dock, choose your **CUPS printer queue**, **Media Type** (including custom media imported from [`ep-media-installer` (`epmi`)](https://github.com/colorcube/ep-media-installer)), **Paper Size**, and **Paper Feed**.
    - Under **Color Management**, stay in **`Normal`** view for automatic, foolproof operation:
-     - **`Farbverbindlich (ICC-Papierprofil)`**: LumaPrint transforms the 16-bit image using the paper's ICC profile (*Relative Colorimetric + Black Point Compensation*) and instructs the CUPS driver to disable internal color adjustment (`NoColorAdjustment`).
-     - **`Drucker-Automatik`**: Sends the image in *Adobe RGB (1998)* and lets the printer driver perform color conversion (automatically switches to ICC mode if you select third-party custom media or enable Softproof).
-   - Switch to **`Erweitert`** (Advanced) if you need **Advanced B&W Photo (`ABW`)**, manual ICC profile selection, custom rendering intents, or raw **Calibration (`No Color Management`)** targets.
+     - **`Color-Managed (ICC Paper Profile)`** (`Farbverbindlich (ICC-Papierprofil)`): LumaPrint transforms the 16-bit image using the paper's ICC profile (*Relative Colorimetric + Black Point Compensation*) and instructs the CUPS driver to disable internal color adjustment (`NoColorAdjustment`).
+     - **`Printer Auto`** (`Drucker-Automatik`): Sends the image in *Adobe RGB (1998)* and lets the printer driver perform color conversion (automatically switches to ICC mode if you select third-party custom media or enable Softproof).
+   - Switch to **`Advanced`** (`Erweitert`) if you need **Advanced B&W Photo (`ABW`)**, manual ICC profile selection, custom rendering intents, or raw **Calibration (`No Color Management`)** targets.
 4. **Softproof, Print, or Export:**
    - Toggle **`👁 Softproof`** (with optional **Paper White simulation**, viewing light `D50` / `D65` / `3200K`, and **`⚠ Gamut Warning`**) in the top toolbar to preview how the print will look on your specific paper.
-   - In the sticky footer at the bottom right, choose **`[ 🖨 Drucken ]`** to verify printer reachability and spool at native 720 DPI to CUPS, or switch to **`[ 💾 Export ]`** to export 16-bit TIFF/PNG sheets (`300` / `360` / `720` / `1440 dpi`).
+   - In the sticky footer at the bottom right, choose **`[ 🖨 Print ]`** to verify printer reachability and spool at native 720 DPI to CUPS, or switch to **`[ 💾 Export ]`** to export 16-bit TIFF/PNG sheets (`300` / `360` / `720` / `1440 dpi`).
 
 ### 4. Headless CLI Quickstart (`lumaprint-cli`)
 
@@ -91,21 +98,33 @@ cargo run -p lumaprint-cli -- status --host 192.168.178.50
 
 ---
 
+## Companion Projects & Version Compatibility
+
+While **LumaPrint** works with any CUPS printer (Gutenprint, TurboPrint, vendor PPDs, IPP Everywhere), it forms a complete Fine-Art printing suite on Linux together with two companion Rust projects for Epson SureColor printers:
+
+| Project | Version | Compatible With | Role |
+| :--- | :--- | :--- | :--- |
+| **`LumaPrint` (this repository)** | `0.1.x` | Any CUPS queue<br>`epson-p900-escpr-cups >= 0.3.0`<br>`ep-media-installer >= 0.1.0` | Printer-independent 16-bit Fine-Art print layout, live softproofing, and Advanced B&W studio |
+| **[`epson-p900-escpr-cups`](https://github.com/colorcube/epson-p900-escpr-cups)** | `0.3.x` | `LumaPrint >= 0.1.0`<br>`ep-media-installer >= 0.1.0`<br>Any CUPS client | Native Rust CUPS filter (`rastertop900escpr`), dynamic PPD generator, and privileged helper for Epson SureColor SC-P900 / SC-P700 |
+| **[`ep-media-installer` (`epmi`)](https://github.com/colorcube/ep-media-installer)** | `0.1.x` | `epson-p900-escpr-cups >= 0.3.0`<br>`LumaPrint >= 0.1.0` | CLI & GUI (`epmi-gui`) for managing the printer's 30 NVRAM custom media slots via SNMP, `.emx` / cloud media, and system-wide ICC profiles |
+
+---
+
 ## Key Features
 
 ### Multi-Page Image Pool & Sheet Workflow
-- **Non-Destructive Image Pool:** Load individual 8-bit/16-bit TIFF, PNG, JPEG, or PPM files or entire directories into the Pool without cluttering your active sheet. Usage badges (`○ Nicht platziert`, `● Platziert (B1)`, `● 2× (B1, B3)`) track where each image is placed.
-- **Multi-Sheet Navigator & Light-Table (`⊞ Alle Bögen`):** Work on a single sheet in detail (`▢ Einzelbogen`) or switch to the multi-sheet light-table overview (`Ctrl+2`) to drag & drop images across slots and sheets.
+- **Non-Destructive Image Pool:** Load individual 8-bit/16-bit TIFF, PNG, JPEG, or PPM files or entire directories into the Pool without cluttering your active sheet. Usage badges (`○ Unplaced`, `● Placed (S1)`, `● 2× (S1, S3)`) track where each image is placed.
+- **Multi-Sheet Navigator & Light-Table (`⊞ All Sheets`):** Work on a single sheet in detail (`▢ Single Sheet`) or switch to the multi-sheet light-table overview (`Ctrl+2`) to drag & drop images across slots and sheets.
 - **Freely Configurable Docks:** Drag & drop the **Image Pool** and **Sheet List** docks by their tab headers to dock them on the left, right (tabbed), bottom inside the canvas, or full-width across the bottom; collapse any edge with `F8` / `F9` / `F10`.
 
 ### 5 Studio Layout Modes & 2-Stage Template Studio
-- **Standard (`Einzelbild`):** Size by **Margins (`Ränder`)** or exact **Image Size (`Bildgröße`)** with proportional aspect-ratio locking, one-click centering, custom frame borders (`mm` + custom color palette), and borderless printing (*Auto-Expand Min/Mid/Max* vs. *Retain Size*).
-- **Collection Sheet (`Sammelbogen` / Free Composer):** Place up to 25 images of arbitrary physical sizes (`9×13`, `10×15`, `13×18`, or custom `mm`) on a sheet with automatic 2D bin-packing and multi-sheet overflow balancing.
-- **Template (`Vorlage`) & 2-Stage Template Studio:**
-  - **Stage 1 (Grid & Bento Wizard):** Configure an $N \times M$ grid with exact outer margins and gutters, then select adjacent cells on the canvas to merge (`🔗 Verbinden`) or split (`✂ Trennen`) into custom Bento layouts.
+- **Standard (`Single Image`):** Size by **Margins** or exact **Image Size** with proportional aspect-ratio locking, one-click centering, custom frame borders (`mm` + custom color palette), and borderless printing (*Auto-Expand Min/Mid/Max* vs. *Retain Size*).
+- **Collection Sheet (`Free Composer`):** Place up to 25 images of arbitrary physical sizes (`9×13`, `10×15`, `13×18`, or custom `mm`) on a sheet with automatic 2D bin-packing and multi-sheet overflow balancing.
+- **Template & 2-Stage Template Studio:**
+  - **Stage 1 (Grid & Bento Wizard):** Configure an $N \times M$ grid with exact outer margins and gutters, then select adjacent cells on the canvas to merge (`🔗 Merge`) or split (`✂ Split`) into custom Bento layouts.
   - **Stage 2 (Free Slot Editor):** Unlock free positioning and 8-handle resizing with magnetic alignment snapping and exact millimeter input (`X`, `Y`, `Width`, `Height`).
   - Supports **corner crop marks** and **automatic slot captions** (`#01`, filename, dimensions).
-- **Gallery Wrap (`Leinwand-Keilrahmen`):** Calculates required paper dimensions, frame depth, back-wrap margin, corner cut marks, and 6 edge-wrap modes (*None, Solid Color, Mirror, Mirror with Soft Shadow/Blur, Extend Image, Extend Image with Soft Shadow/Blur*).
+- **Gallery Wrap:** Calculates required paper dimensions, frame depth, back-wrap margin, corner cut marks, and 6 edge-wrap modes (*None, Solid Color, Mirror, Mirror with Soft Shadow/Blur, Extend Image, Extend Image with Soft Shadow/Blur*).
 - **Panorama:** Roll-paper and banner printing with automatic length calculation.
 
 ### 16-Bit Color Management (`liblcms2`), Wayland Wide-Gamut & Advanced B&W (`ABW`)
@@ -123,7 +142,7 @@ cargo run -p lumaprint-cli -- status --host 192.168.178.50
 ### Generic System Printer (`CUPS`) & `IPP` Integration
 - **Automatic Queue & PPD Discovery (`lumaprint-cups`):** Reads installed queues (`lpstat`), supported paper sizes, media types, input slots, resolutions, and `*cupsICCProfile` rules directly from `/etc/cups/ppd/<queue>.ppd` and `lpoptions`.
 - **Automatic Double-Color-Management Protection:** Detects the driver family (`epson-p900-escpr-cups` / Epson, `Gutenprint`, `TurboPrint`, generic CUPS) and passes the exact flags (`EpsonColorMode=NoColorAdjustment`, `StpColorCorrection=None`, `zedoColorCorrection=0`, `cm-calibration=true`) when LumaPrint manages color.
-- **Custom Media Integration:** Reads the system paper database that [ep-media-installer](https://github.com/colorcube/ep-media-installer) installs (*Für das System installieren*: `/etc/epson-p900-escpr-cups/custom_media.json`, ICC profiles in `/usr/local/share/color/icc/epson-p900-custom/`; development override `$EPSON_P900_CUSTOM_MEDIA_JSON`) and passes `UserMediaID`, `PrintDuty`, `DryingTime`, `BottomEdgePriority`, and `RubbingReduction` to CUPS.
+- **Custom Media Integration:** Reads the system paper database that [`ep-media-installer`](https://github.com/colorcube/ep-media-installer) installs (*“Install for this computer”*: `/etc/epson-p900-escpr-cups/custom_media.json`, ICC profiles in `/usr/local/share/color/icc/epson-p900-custom/`; development override `$EPSON_P900_CUSTOM_MEDIA_JSON`) and passes `UserMediaID`, `PrintDuty`, `DryingTime`, `BottomEdgePriority`, and `RubbingReduction` to CUPS.
 - **Pre-Flight Reachability & Post-Spool Verification:** Verifies that the target CUPS queue is enabled and network printers (`ipp://`, `ipps://`, `socket://`, `http://`, `lpd://`) are reachable via TCP before rendering, and cancels stuck jobs immediately if the CUPS backend reports the printer offline.
 - **Generic IPP Status (`lumaprint-ipp`):** Queries live printer state and ink/toner marker levels (`marker-names`, `marker-levels`, `marker-colors`) over IPP (`RFC 8011`).
 
@@ -135,6 +154,7 @@ LumaPrint enforces a strict, dependency-acyclic layered architecture where the c
 
 | Layer | Crate | Responsibility |
 | :--- | :--- | :--- |
+| **L0** | [`crates/i18n`](crates/i18n) | Bilingual UI localization (`English` / `Deutsch`) |
 | **L0** | [`crates/geom`](crates/geom) | Physical units (`mm`, `inch`, `pt`, `px` at DPI), paper size catalog, aspect-ratio fitting, and layout geometry |
 | **L1** | [`crates/color`](crates/color) | 16-bit buffers (`ImageBuffer16`), 16→8-bit conversion, and Advanced B&W (`ABW`) synthesis |
 | **L1.5** | [`crates/cms`](crates/cms) | ICC v2/v4 profile parsing, LittleCMS 2 (`liblcms2`) 16-bit transforms, softproofing, paper-white adaptation, and gamut checking |
@@ -161,20 +181,26 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-## Documentation
+## Documentation & Troubleshooting
 
-User guides, color management deep-dives, and architecture notes (prepared for **Zensical**) are located in [`docs/`](docs/index.md):
+User guides, color management deep-dives, and architecture notes (prepared for **Zensical** via [`zensical.toml`](zensical.toml) and [`zensical.de.toml`](zensical.de.toml)) are located in [`docs/`](docs/README.md):
 
-- [Documentation Overview](docs/index.md)
-- [Main Window](docs/user-guide/main-window.md)
-- [Printer & Media](docs/user-guide/printer-and-media.md)
-- [How Color Spaces & ICC Profiles Work in Fine-Art Printing](docs/user-guide/color-spaces-explained.md)
-- [Color Management & Advanced B&W (`ABW`)](docs/user-guide/color-and-abw.md)
-- [Layout Modes & 2-Stage Template Studio](docs/user-guide/layout-modes.md)
-- [Pro Features](docs/user-guide/pro-features.md)
-- [Layered Architecture (`L0–L6`)](docs/architecture.md)
+- **English Manual & Technical Reference ([`docs/README.md`](docs/README.md)):**
+  - [User Guide Overview (`docs/manual/en/`)](docs/manual/en/README.md)
+  - [1. Main Window & Basic Operation](docs/manual/en/main-window.md)
+  - [2. Printer, Media & Paper Feed](docs/manual/en/printer-and-media.md)
+  - [3. Layout Modes & 2-Stage Template Studio](docs/manual/en/layout-modes.md)
+  - [4. How Color Spaces & ICC Profiles Work in Fine-Art Printing](docs/manual/en/color-spaces-explained.md)
+  - [5. Color Management, Soft Proof & Advanced B&W (`ABW`)](docs/manual/en/color-and-abw.md)
+  - [6. Pro Features](docs/manual/en/pro-features.md)
+  - [Layered Architecture (`L0–L6`)](docs/architecture.md)
+- **Deutsches Benutzerhandbuch ([`docs/README.de.md`](docs/README.de.md)):**
+  - [Kapitelübersicht (`docs/manual/de/`)](docs/manual/de/README.md)
 
-The user guide is currently written in German.
+### Quick Troubleshooting
+- **Inspecting CUPS filter logs:** Enable verbose logging with `sudo cupsctl --debug-logging` and watch `sudo journalctl -u cups -f` (or `/var/log/cups/error_log`).
+- **Custom media from `ep-media-installer` do not appear:** Click **“Install for this computer”** in `epmi-gui` (or run `epmi install-system`) so `/etc/epson-p900-escpr-cups/custom_media.json` and the queue PPDs are updated, then click **`🔄`** next to the printer selector in LumaPrint.
+- **SELinux (Fedora / RHEL):** Check for denials with `sudo ausearch -m avc -ts recent` and restore contexts via `sudo restorecon -RFv /etc/epson-p900-escpr-cups /usr/local/share/color/icc/epson-p900-custom`.
 
 ## Third-Party Code
 

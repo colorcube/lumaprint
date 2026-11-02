@@ -1,0 +1,66 @@
+:root,
+body[data-md-color-scheme] {
+  --md-text-font-family: Georgia, "Liberation Serif", "Nimbus Roman", "DejaVu Serif", "Times New Roman", serif;
+  --md-code-font-family: "JetBrains Mono", "Liberation Mono", "DejaVu Sans Mono", Consolas, monospace;
+}
+
+/* Ruhige, unaufdringliche Schiefer-/Stahlblau-Farbpalette (Light Mode) */
+body[data-md-color-scheme="default"][data-md-color-primary] {
+  --md-primary-fg-color: #37474f;
+  --md-primary-fg-color--light: #546e7a;
+  --md-primary-fg-color--dark: #263238;
+  --md-typeset-a-color: #2b5b84;
+  --md-accent-fg-color: #1e4b75;
+  --md-accent-fg-color--transparent: rgba(43, 91, 132, 0.1);
+}
+
+/* Ruhige, unaufdringliche Schiefer-/Stahlblau-Farbpalette (Dark Mode) */
+body[data-md-color-scheme="slate"][data-md-color-primary] {
+  --md-primary-fg-color: #78909c;
+  --md-primary-fg-color--light: #90a4ae;
+  --md-primary-fg-color--dark: #546e7a;
+  --md-typeset-a-color: #7aa6cc;
+  --md-accent-fg-color: #9bc2e6;
+  --md-accent-fg-color--transparent: rgba(122, 166, 204, 0.12);
+}
+
+/* Dezente, unbunte Hinweisboxen (Admonitions) im Light Mode */
+body[data-md-color-scheme="default"] .md-typeset .admonition,
+body[data-md-color-scheme="default"] .md-typeset details {
+  background-color: #f3f5f6;
+  border-left: 3px solid #607d8b;
+  color: #263238;
+}
+
+body[data-md-color-scheme="default"] .md-typeset .admonition-title::before,
+body[data-md-color-scheme="default"] .md-typeset summary::before {
+  background-color: #546e7a;
+}
+
+body[data-md-color-scheme="default"] .md-typeset .admonition-title,
+body[data-md-color-scheme="default"] .md-typeset summary {
+  color: #37474f;
+}
+
+/* Dezente, unbunte Hinweisboxen (Admonitions) im Dark Mode */
+body[data-md-color-scheme="slate"] .md-typeset .admonition,
+body[data-md-color-scheme="slate"] .md-typeset details {
+  background-color: rgba(144, 164, 174, 0.08);
+  border-left: 3px solid #78909c;
+}
+
+body[data-md-color-scheme="slate"] .md-typeset .admonition-title::before,
+body[data-md-color-scheme="slate"] .md-typeset summary::before {
+  background-color: #90a4ae;
+}
+
+body[data-md-color-scheme="slate"] .md-typeset .admonition-title,
+body[data-md-color-scheme="slate"] .md-typeset summary {
+  color: #cfd8dc;
+}
+
+/* Angenehme Zeilenhöhe und Schriftgröße für Serifenschrift */
+.md-typeset {
+  font-size: 0.82rem;
+  line-height: 1.65;
+}
