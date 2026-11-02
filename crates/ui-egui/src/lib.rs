@@ -827,6 +827,8 @@ pub struct LumaPrintApp {
     saved_settings: Option<PersistentSettings>,
     next_settings_check: f64,
     app_icon_texture: Option<TextureHandle>,
+    forced_dock_open: Option<&'static [&'static str]>,
+    screenshot_step: Option<u8>,
 }
 
 impl Default for LumaPrintApp {
@@ -888,6 +890,8 @@ impl LumaPrintApp {
             pool_selected: false,
             next_settings_check: 0.0,
             app_icon_texture: None,
+            forced_dock_open: None,
+            screenshot_step: None,
         }
     }
 
@@ -5842,13 +5846,16 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         let t = self.tokens;
         ui.add_space(4.0);
         // Stable id, so the open state survives a language switch or a changing title.
-        egui::CollapsingHeader::new(RichText::new(title).strong().color(t.text))
+        let mut header = egui::CollapsingHeader::new(RichText::new(title).strong().color(t.text))
             .id_salt(("dock_section", id_salt))
-            .default_open(default_open)
-            .show_unindented(ui, |ui| {
-                ui.add_space(8.0);
-                add_body(self, ui);
-            });
+            .default_open(default_open);
+        if let Some(open_list) = self.forced_dock_open {
+            header = header.open(Some(open_list.contains(&id_salt)));
+        }
+        header.show_unindented(ui, |ui| {
+            ui.add_space(8.0);
+            add_body(self, ui);
+        });
         if with_separator {
             ui.add_space(10.0);
             ui.separator();
@@ -9762,6 +9769,232 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             }
         }
     }
+
+    /// Starts the automated documentation screenshot sequence (`--generate-screenshots`).
+    pub fn enable_screenshot_mode(&mut self) {
+        self.set_ui_language(Some(lumaprint_i18n::Language::English));
+        self.screenshot_step = Some(0);
+    }
+
+    fn configure_screenshot_scene(&mut self, idx: u8) {
+        let lang = if idx < 5 {
+            lumaprint_i18n::Language::English
+        } else {
+            lumaprint_i18n::Language::German
+        };
+        let scene = idx % 5;
+
+        if scene == 0 {
+            self.set_ui_language(Some(lang));
+            self.session = Session::new();
+            let _ = self.session.execute(EngineCommand::AddDemoImages);
+            let _ = self.session.populate_demo_for_screenshots();
+            let _ = self
+                .session
+                .execute(EngineCommand::SetPaperSizeKey("A3+".into()));
+            let _ = self
+                .session
+                .execute(EngineCommand::SetMediaKey("VelvetFineArt".into()));
+            let std_spec = StandardLayoutSpec {
+                orientation: Orientation::Landscape,
+                ..Default::default()
+            };
+            let _ = self
+                .session
+                .execute(EngineCommand::SetLayoutMode(LayoutMode::Standard(std_spec)));
+            let _ = self.session.execute(EngineCommand::PlacePoolImageOnSheet {
+                image_id: 2,
+                page_index: 0,
+                slot_index: Some(0),
+            });
+            let _ = self.session.execute(EngineCommand::AddPage {
+                initial_image_id: Some(3),
+            });
+            let _ = self
+                .session
+                .execute(EngineCommand::SelectPage { page_index: 0 });
+            self.session.doc.show_rulers = true;
+            self.session.doc.show_slot_guides = true;
+            self.page_texture = None;
+            self.page_thumb_textures.clear();
+            self.thumbnail_textures.clear();
+            self.forced_dock_open = Some(&["printer", "layout", "color"]);
+            self.dirty_preview = true;
+        } else if scene == 1 {
+            let tpl = TemplateLayoutSpec {
+                orientation: Orientation::Landscape,
+                template_id: String::from("EPL_ThemeLayout4"),
+                cut_marks: true,
+                caption_mode: SlotCaptionMode::NumberAndFilename,
+                ..Default::default()
+            };
+            let _ = self
+                .session
+                .execute(EngineCommand::SetLayoutMode(LayoutMode::Template(tpl)));
+            for (slot_index, image_id) in [(0, 2), (1, 3), (2, 1), (3, 2)] {
+                let _ = self.session.execute(EngineCommand::AssignImageToPageSlot {
+                    page_index: 0,
+                    slot_index,
+                    image_id: Some(image_id),
+                });
+            }
+            self.forced_dock_open = Some(&["layout"]);
+            self.dirty_preview = true;
+        } else if scene == 2 {
+            let gw = GalleryWrapSpec {
+                canvas_size_mm: SizeMm {
+                    width_mm: 240.0,
+                    height_mm: 180.0,
+                },
+                thickness_mm: 25.0,
+                back_extension_mm: 6.0,
+                cut_marks: true,
+                effect: GalleryWrapEffect::MirrorShaded { blur_percent: 35 },
+            };
+            let _ = self
+                .session
+                .execute(EngineCommand::SetLayoutMode(LayoutMode::GalleryWrap(gw)));
+            let _ = self.session.execute(EngineCommand::AssignImageToPageSlot {
+                page_index: 0,
+                slot_index: 0,
+                image_id: Some(3),
+            });
+            self.forced_dock_open = Some(&["layout"]);
+            self.dirty_preview = true;
+        } else if scene == 3 {
+            let std_spec = StandardLayoutSpec {
+                orientation: Orientation::Landscape,
+                ..Default::default()
+            };
+            let _ = self
+                .session
+                .execute(EngineCommand::SetLayoutMode(LayoutMode::Standard(std_spec)));
+            let _ = self.session.execute(EngineCommand::AssignImageToPageSlot {
+                page_index: 0,
+                slot_index: 0,
+                image_id: Some(2),
+            });
+            let _ = self
+                .session
+                .execute(EngineCommand::SetColorAdvancedMode(true));
+            let _ = self.session.execute(EngineCommand::SetColorMode(
+                ColorManagementMode::UseIccProfile,
+            ));
+            let _ = self.session.execute(EngineCommand::SetOutputSharpening(
+                OutputSharpening::Standard,
+            ));
+            let mut sp = self.session.doc.color.softproof;
+            sp.enabled = true;
+            sp.simulate_paper_white = true;
+            sp.gamut_warning = false;
+            let _ = self.session.execute(EngineCommand::SetSoftproof(sp));
+            self.forced_dock_open = Some(&["color", "ink"]);
+            self.dirty_preview = true;
+        } else if scene == 4 {
+            let mut sp = self.session.doc.color.softproof;
+            sp.enabled = false;
+            let _ = self.session.execute(EngineCommand::SetSoftproof(sp));
+            let _ = self
+                .session
+                .execute(EngineCommand::SetColorAdvancedMode(true));
+            let _ = self.session.execute(EngineCommand::SetColorMode(
+                ColorManagementMode::AdvancedBwPhoto,
+            ));
+            let mut abw = self.session.doc.color.abw.clone();
+            abw.apply_preset(AbwTonePreset::Warm);
+            abw.contrast = 6;
+            abw.shadow_toning = 4;
+            let _ = self.session.execute(EngineCommand::SetAbwSettings(abw));
+            self.forced_dock_open = Some(&["color"]);
+            self.dirty_preview = true;
+        }
+    }
+
+    fn handle_screenshot_step(&mut self, ctx: &Context) {
+        let Some(step) = self.screenshot_step else {
+            return;
+        };
+        let idx = step / 4;
+        let sub = step % 4;
+        if idx >= 10 {
+            self.screenshot_step = None;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+
+        let shot = ctx.input(|i| {
+            i.events.iter().find_map(|ev| {
+                if let egui::Event::Screenshot { image, .. } = ev {
+                    Some(std::sync::Arc::clone(image))
+                } else {
+                    None
+                }
+            })
+        });
+
+        match sub {
+            0 => {
+                self.configure_screenshot_scene(idx);
+                self.screenshot_step = Some(step + 1);
+                ctx.request_repaint();
+            }
+            1 => {
+                self.screenshot_step = Some(step + 1);
+                ctx.request_repaint();
+            }
+            2 => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+                self.screenshot_step = Some(step + 1);
+                ctx.request_repaint();
+            }
+            _ => {
+                if let Some(img) = shot {
+                    let lang_dir = if idx < 5 { "en" } else { "de" };
+                    let filename = match idx % 5 {
+                        0 => "ui_overview_standard.png",
+                        1 => "ui_layout_template.png",
+                        2 => "ui_layout_gallery_wrap.png",
+                        3 => "ui_color_softproof.png",
+                        _ => "ui_color_abw.png",
+                    };
+                    let path = format!("docs/manual/{lang_dir}/images/{filename}");
+                    save_color_image_png(&img, Path::new(&path));
+                    let next_idx = idx + 1;
+                    if next_idx >= 10 {
+                        self.screenshot_step = None;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    } else {
+                        self.screenshot_step = Some(next_idx * 4);
+                        ctx.request_repaint();
+                    }
+                } else {
+                    ctx.request_repaint();
+                }
+            }
+        }
+    }
+}
+
+fn save_color_image_png(img: &ColorImage, path: &Path) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let Ok(file) = std::fs::File::create(path) else {
+        return;
+    };
+    let w = img.size[0] as u32;
+    let h = img.size[1] as u32;
+    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), w, h);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let Ok(mut writer) = encoder.write_header() else {
+        return;
+    };
+    let mut bytes = Vec::with_capacity(img.pixels.len() * 4);
+    for px in &img.pixels {
+        bytes.extend_from_slice(&px.to_array());
+    }
+    let _ = writer.write_image_data(&bytes);
 }
 
 impl eframe::App for LumaPrintApp {
@@ -9769,6 +10002,7 @@ impl eframe::App for LumaPrintApp {
         self.render_ui(ctx);
         let now = ctx.input(|i| i.time);
         self.autosave_settings(now, false);
+        self.handle_screenshot_step(ctx);
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {

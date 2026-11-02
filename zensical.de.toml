@@ -10,12 +10,13 @@ site_dir = "site/handbuch"
 
 nav = [
   { "Überblick" = "README.md" },
-  { "1. Hauptbildschirm & Grundbedienung" = "main-window.md" },
-  { "2. Drucker, Medien & Zufuhr" = "printer-and-media.md" },
-  { "3. Layout-Modi & Vorlagen-Studio" = "layout-modes.md" },
-  { "4. Farbräume & Farbprofile" = "color-spaces-explained.md" },
-  { "5. Farbmanagement, Softproof & ABW" = "color-and-abw.md" },
-  { "6. Profi-Zusatzfunktionen" = "pro-features.md" },
+  { "1. Schnellstart & Workflow" = "1-schnellstart-und-workflow.md" },
+  { "2. Hauptfenster, Bilder-Pool & Docks" = "2-hauptfenster-und-bedienung.md" },
+  { "3. Layout-Modi & Vorlagen-Studio" = "3-layout-modi-und-vorlagen.md" },
+  { "4. Drucker, Medien & Papierzufuhr" = "4-drucker-medien-und-zufuhr.md" },
+  { "5. Farbmanagement, Softproof & ABW" = "5-farbmanagement-softproof-und-abw.md" },
+  { "6. Farbräume & ICC-Profile erklärt" = "6-farbraeume-und-profile-erklaert.md" },
+  { "7. Profi-Funktionen, Export & IPP" = "7-pro-funktionen-und-ipp.md" },
 ]
 
 extra_css = ["stylesheets/extra.css"]

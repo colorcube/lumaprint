@@ -1,10 +1,10 @@
-# Color Management, Soft Proof & Advanced B&W Photo (ABW)
+# 5. Color Management, Soft Proof & Advanced B&W
 
 Under **3. Color settings** (cf. EPL User Guide pp. 29–31), **LumaPrint** operates with end-to-end 16-bit precision and preserves the original source color space of every imported image (`sRGB`, `Adobe RGB`, `Display P3`, `ProPhoto RGB`).
 
 > [!TIP]
 > **Background on Color Spaces & ICC Profiles:**
-> For an accessible explanation of how source color spaces, ICC paper profiles, third-party papers, and printer-internal color management work together, see the fundamentals chapter **[How Color Spaces and Color Profiles Work in Printing](color-spaces-explained.md)**.
+> For an accessible explanation of how source color spaces, ICC paper profiles, third-party papers, and printer-internal color management work together, see the fundamentals chapter **[How Color Spaces and Color Profiles Work in Printing](6-color-spaces-explained.md)**.
 
 ---
 
@@ -65,6 +65,8 @@ Convenience mode for genuine manufacturer papers where color tuning is handled b
 
 ## 4. Interactive Soft Proof & Monitor Color Management
 
+![LumaPrint – ICC Color Management & Live Softproof](images/ui_color_softproof.png)
+
 - **Soft Proof View (`👁 Soft proof` in Top Toolbar):** Simulates the selected paper ICC profile live in the sheet canvas — including the reduced black density on matte papers and **paper white simulation** (`Paper white`, `Ctrl+Shift+W`).
 - **Viewing Light Temperature:** Switchable between:
   - `D50 standard light (5000K)` — print shop / ISO viewing booth standard
@@ -76,6 +78,8 @@ Convenience mode for genuine manufacturer papers where color tuning is handled b
 ---
 
 ## 5. Black & White (Advanced B&W Photo — `Advanced` View)
+
+![LumaPrint – Advanced B&W Photo Mode](images/ui_color_abw.png)
 
 Converts color or grayscale images into neutral or finely toned black-and-white prints utilizing the 3 black/gray inks (`PK`/`MK`, `LK` Gray, `LLK` Light Gray):
 - **Who Computes the Toning?**

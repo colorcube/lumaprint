@@ -1,4 +1,4 @@
-# Drucker-, Medien- & Hardware-Einstellungen
+# 4. Drucker, Medien & Papierzufuhr
 
 Im Abschnitt **Druckereinstellungen** (vgl. EPL-Handbuch S. 23–24, 38–42) steuert **LumaPrint** alle Hardware-Parameter des **Epson SureColor SC-P900 & SC-P700**.
 

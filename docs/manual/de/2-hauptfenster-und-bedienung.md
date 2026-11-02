@@ -1,6 +1,8 @@
-# Hauptbildschirm & Grundbedienung
+# 2. Hauptfenster, Bilder-Pool & Docks
 
 Der Hauptbildschirm von **LumaPrint** orientiert sich direkt am klaren Workflow von **Epson Print Layout** (vgl. EPL-Handbuch S. 15–17, 45).
+
+![LumaPrint – Hauptfenster, Bilder-Pool & Docks](images/ui_overview_standard.png)
 
 ## Aufbau des Hauptbildschirms
 

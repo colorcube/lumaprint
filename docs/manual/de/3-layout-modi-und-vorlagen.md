@@ -1,4 +1,4 @@
-# Layout-Modi: Standard, Panorama, Gallerie Wrap & Vorlagen
+# 3. Layout-Modi & Vorlagen-Studio
 
 Unter **Layout-Einstellungen** (vgl. EPL-Handbuch S. 25–28, 32–35, 43–44) bietet **LumaPrint** alle vier klassischen Modi aus Epson Print Layout sowie den erweiterten **Freien Composer-Modus**.
 
@@ -24,6 +24,8 @@ Unter **Layout-Einstellungen** (vgl. EPL-Handbuch S. 25–28, 32–35, 43–44) 
 
 ## 3. Gallerie Wrap (Leinwand-Keilrahmen, S. 26–27)
 
+![LumaPrint – Galerie Wrap Layout](images/ui_layout_gallery_wrap.png)
+
 Für den Druck auf Canvas-Medien, die anschließend auf einen Holz-Keilrahmen gespannt werden:
 - **Leinwandgröße:** Stirnfläche des Keilrahmens (`Breite × Höhe`).
 - **Dicke:** Rahmentiefe (z.B. `18 mm`, `20 mm`, `38 mm` oder benutzerdefiniert).
@@ -41,6 +43,8 @@ Für den Druck auf Canvas-Medien, die anschließend auf einen Holz-Keilrahmen ge
   6. *Wrap Bild (Schattierungen):* Zieht das Bild über die Seitenkanten und zeichnet den umgeschlagenen Rand weich.
 
 ## 4. Vorlage (Multi-Bild-Templates & Vorlagen-Editor, S. 28, 32–35)
+
+![LumaPrint – Vorlagen-Layout](images/ui_layout_template.png)
 
 - Enthält alle originalen Layout-Vorlagen aus Epson Print Layout (`AirAssetsTempleteJson`).
 - **Vorlagen-Editor:** Erstellt eigene Raster-Vorlagen mit **1 bis 5 Zeilen** und **1 bis 5 Spalten**, anpassbaren Slot-Größen, *Hintergrundfarbe* und der Option *Bilder ganz anzeigen* (Fit vs. Fill).

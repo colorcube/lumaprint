@@ -9,6 +9,8 @@
 
 LumaPrint is **printer-independent** and works out of the box with any printer installed in CUPS (such as the custom Epson SureColor SC-P900 `epson-p900-escpr-cups` driver, Gutenprint, vendor PPDs, or IPP Everywhere queues), while automatically preventing double color management between the application and the printer driver.
 
+![LumaPrint – Fine-Art Print Layout & 16-Bit Color Studio](docs/manual/en/images/ui_overview_standard.png)
+
 ---
 
 ## Quickstart
@@ -187,15 +189,23 @@ User guides, color management deep-dives, and architecture notes (prepared for *
 
 - **English Manual & Technical Reference ([`docs/README.md`](docs/README.md)):**
   - [User Guide Overview (`docs/manual/en/`)](docs/manual/en/README.md)
-  - [1. Main Window & Basic Operation](docs/manual/en/main-window.md)
-  - [2. Printer, Media & Paper Feed](docs/manual/en/printer-and-media.md)
-  - [3. Layout Modes & 2-Stage Template Studio](docs/manual/en/layout-modes.md)
-  - [4. How Color Spaces & ICC Profiles Work in Fine-Art Printing](docs/manual/en/color-spaces-explained.md)
-  - [5. Color Management, Soft Proof & Advanced B&W (`ABW`)](docs/manual/en/color-and-abw.md)
-  - [6. Pro Features](docs/manual/en/pro-features.md)
+  - [1. Quickstart & Typical Workflow](docs/manual/en/1-quickstart-and-workflow.md)
+  - [2. Main Window, Image Pool & Docks](docs/manual/en/2-main-window-and-docks.md)
+  - [3. Layout Modes & Template Studio](docs/manual/en/3-layout-modes-and-templates.md)
+  - [4. Printer, Media & Paper Feed](docs/manual/en/4-printer-media-and-cups.md)
+  - [5. Color Management, Soft Proof & Advanced B&W](docs/manual/en/5-color-management-and-abw.md)
+  - [6. Fundamentals: Color Spaces & ICC Profiles Explained](docs/manual/en/6-color-spaces-explained.md)
+  - [7. Pro Features, 16-Bit Export & IPP Ink Levels](docs/manual/en/7-pro-features-and-ipp.md)
   - [Layered Architecture (`L0–L6`)](docs/architecture.md)
 - **Deutsches Benutzerhandbuch ([`docs/README.de.md`](docs/README.de.md)):**
   - [Kapitelübersicht (`docs/manual/de/`)](docs/manual/de/README.md)
+  - [1. Schnellstart & Typischer Workflow](docs/manual/de/1-schnellstart-und-workflow.md)
+  - [2. Hauptfenster, Bilder-Pool & Docks](docs/manual/de/2-hauptfenster-und-bedienung.md)
+  - [3. Layout-Modi & Vorlagen-Studio](docs/manual/de/3-layout-modi-und-vorlagen.md)
+  - [4. Drucker, Medien & Papierzufuhr](docs/manual/de/4-drucker-medien-und-zufuhr.md)
+  - [5. Farbmanagement, Softproof & Advanced B&W](docs/manual/de/5-farbmanagement-softproof-und-abw.md)
+  - [6. Grundlagen: Farbräume & ICC-Profile erklärt](docs/manual/de/6-farbraeume-und-profile-erklaert.md)
+  - [7. Profi-Funktionen, 16-Bit-Export & IPP-Tintenstand](docs/manual/de/7-pro-funktionen-und-ipp.md)
 
 ### Quick Troubleshooting
 - **Inspecting CUPS filter logs:** Enable verbose logging with `sudo cupsctl --debug-logging` and watch `sudo journalctl -u cups -f` (or `/var/log/cups/error_log`).

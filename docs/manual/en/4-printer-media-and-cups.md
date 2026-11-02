@@ -1,4 +1,4 @@
-# Printer, Media & Hardware Settings
+# 4. Printer, Media & Paper Feed
 
 In the **1. Printer settings** section (cf. EPL User Guide pp. 23–24, 38–42), **LumaPrint** controls all hardware parameters of the **Epson SureColor SC-P900 & SC-P700** as well as generic CUPS printers.
 

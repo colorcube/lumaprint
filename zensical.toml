@@ -10,12 +10,13 @@ site_dir = "site/manual"
 
 nav = [
   { "Overview" = "README.md" },
-  { "1. Main Window & Basic Operation" = "main-window.md" },
-  { "2. Printer, Media & Paper Feed" = "printer-and-media.md" },
-  { "3. Layout Modes & Template Studio" = "layout-modes.md" },
-  { "4. Color Spaces & ICC Profiles" = "color-spaces-explained.md" },
-  { "5. Color Management, Soft Proof & ABW" = "color-and-abw.md" },
-  { "6. Pro Features" = "pro-features.md" },
+  { "1. Quickstart & Workflow" = "1-quickstart-and-workflow.md" },
+  { "2. Main Window & Docks" = "2-main-window-and-docks.md" },
+  { "3. Layout Modes & Templates" = "3-layout-modes-and-templates.md" },
+  { "4. Printer, Media & Paper Feed" = "4-printer-media-and-cups.md" },
+  { "5. Color Management, Soft Proof & ABW" = "5-color-management-and-abw.md" },
+  { "6. Color Spaces & ICC Profiles" = "6-color-spaces-explained.md" },
+  { "7. Pro Features, Export & IPP" = "7-pro-features-and-ipp.md" },
 ]
 
 extra_css = ["stylesheets/extra.css"]

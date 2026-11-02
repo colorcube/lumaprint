@@ -863,4 +863,8 @@ pub(crate) static DE: &[(&str, &str)] = &[
     ("Duplicate sheet", "Bogen duplizieren"),
     ("Clear sheet", "Bogen leeren"),
     ("Workspace background", "Hintergrund des Arbeitsbereichs"),
+    (
+        "Epson SC-P900 ready (10 UltraChrome PRO10 channels)",
+        "Epson SC-P900 bereit (10 UltraChrome PRO10 Kanäle)",
+    ),
 ];

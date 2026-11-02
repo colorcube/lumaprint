@@ -53,6 +53,8 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
+    let generate_screenshots = args.iter().any(|a| a == "--generate-screenshots");
+
     // Collect any image file paths passed on the command line
     let image_paths: Vec<String> = args
         .iter()
@@ -62,7 +64,9 @@ fn main() -> ExitCode {
         .collect();
 
     // Language before the first frame (and before the session builds its startup texts).
-    LumaPrintApp::init_language();
+    if !generate_screenshots {
+        LumaPrintApp::init_language();
+    }
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -83,11 +87,15 @@ fn main() -> ExitCode {
         Box::new(move |cc| {
             LumaPrintApp::apply_fine_art_theme(&cc.egui_ctx);
             let mut app = LumaPrintApp::new();
-            app.enable_settings_persistence();
-            for path in &image_paths {
-                let _ = app
-                    .session
-                    .execute(EngineCommand::AddImageFile { path: path.clone() });
+            if generate_screenshots {
+                app.enable_screenshot_mode();
+            } else {
+                app.enable_settings_persistence();
+                for path in &image_paths {
+                    let _ = app
+                        .session
+                        .execute(EngineCommand::AddImageFile { path: path.clone() });
+                }
             }
             Ok(Box::new(app))
         }),

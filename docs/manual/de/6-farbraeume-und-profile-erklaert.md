@@ -1,4 +1,4 @@
-# Grundlagen: Wie Farbräume und Farbprofile beim Drucken funktionieren
+# 6. Grundlagen: Farbräume & ICC-Profile erklärt
 
 Beim Fine-Art- und Fotodruck treffen zwei völlig unterschiedliche Farbwelten aufeinander: Ihr digitales Foto arbeitet mit **additiven Lichtfarben** (Rot, Grün, Blau auf einem selbstleuchtenden Monitor), während der Drucker **subtraktive Pigmenttinten** (beim Epson SureColor SC-P900 zehn verschiedene Tintenkanäle) auf Papier aufträgt, das Umgebungslicht reflektiert.
 
@@ -149,4 +149,4 @@ Mit Werkzeugen wie dem *EP Media Installer (epmi)* lassen sich Konfigurationsdat
 
 ---
 
-*Weiterführende Informationen zur konkreten Bedienung der Schalter in LumaPrint finden Sie im Kapitel **[Farbmanagement, Softproof & Advanced B&W Photo (ABW)](color-and-abw.md)**.*
+*Weiterführende Informationen zur konkreten Bedienung der Schalter in LumaPrint finden Sie im Kapitel **[5. Farbmanagement, Softproof & Advanced B&W](5-farbmanagement-softproof-und-abw.md)**.*

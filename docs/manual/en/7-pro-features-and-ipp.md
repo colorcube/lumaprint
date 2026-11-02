@@ -1,4 +1,4 @@
-# Pro Features (Gang Sheet Composer, Auto Nesting, Test Strip)
+# 7. Pro Features, 16-Bit Export & IPP Ink Levels
 
 Beyond the feature set of Epson Print Layout, **LumaPrint** provides five specialized tools for professional fine-art printing workflows (inspired by *TurboPrint Composer*, *Qimage One*, and *Lightroom Print*).
 

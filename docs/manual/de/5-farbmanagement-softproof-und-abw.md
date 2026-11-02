@@ -1,10 +1,10 @@
-# Farbmanagement, Softproof & Advanced B&W Photo (ABW)
+# 5. Farbmanagement, Softproof & Advanced B&W
 
 Unter **3. Farbeinstellungen** (vgl. EPL-Handbuch S. 29–31) arbeitet **LumaPrint** durchgängig mit 16-Bit-Präzision und erhält beim Import den originalen Quellfarbraum jedes Bildes (`sRGB`, `Adobe RGB`, `Display P3`, `ProPhoto RGB`).
 
 > [!TIP]
 > **Hintergrundwissen zu Farbräumen & ICC-Profilen:**
-> Eine leicht verständliche Erklärung, wie Quellfarbräume, ICC-Papierprofile, Fremdpapiere und die druckerinterne Farbverwaltung zusammenspielen, finden Sie im Grundlagen-Kapitel **[Wie Farbräume und Farbprofile beim Drucken funktionieren](color-spaces-explained.md)**.
+> Eine leicht verständliche Erklärung, wie Quellfarbräume, ICC-Papierprofile, Fremdpapiere und die druckerinterne Farbverwaltung zusammenspielen, finden Sie im Grundlagen-Kapitel **[6. Grundlagen: Farbräume & ICC-Profile erklärt](6-farbraeume-und-profile-erklaert.md)**.
 
 ---
 
@@ -65,6 +65,8 @@ Komfort-Modus für originale Hersteller-Papiere, bei dem die Farbabstimmung durc
 
 ## 4. Interaktiver Softproof & Monitor-Farbmanagement
 
+![LumaPrint – ICC-Farbmanagement & Live-Softproof](images/ui_color_softproof.png)
+
 - **Softproof-Ansicht (Obere Leiste):** Simuliert das gewählte Papier-ICC-Profil live im Bearbeitungsbereich – inklusive des reduzierten Schwarzwerts auf matten Papieren und der **Papierweiß-Färbung**.
 - **Betrachtungs-Lichttemperatur:** Umschaltbar zwischen:
   - `D50 (5000K)` – Druckerei-/Normlicht
@@ -76,6 +78,8 @@ Komfort-Modus für originale Hersteller-Papiere, bei dem die Farbabstimmung durc
 ---
 
 ## 5. Schwarzweiß (Advanced B&W Photo — Ansicht `Erweitert`)
+
+![LumaPrint – Advanced B&W Photo Modus](images/ui_color_abw.png)
 
 Konvertiert Farb- oder Graustufenbilder in neutrale oder fein getonte Schwarzweiß-Prints unter Ausnutzung der 3 Schwarztinten (`PK`/`MK`, `LK` Gray, `LLK` Light Gray):
 - **Wer rechnet?**

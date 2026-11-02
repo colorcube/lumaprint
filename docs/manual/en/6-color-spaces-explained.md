@@ -1,4 +1,4 @@
-# Fundamentals: How Color Spaces and Color Profiles Work in Printing
+# 6. Fundamentals: Color Spaces & ICC Profiles Explained
 
 In fine-art and photo printing, two fundamentally different color worlds meet: your digital photograph uses **additive light colors** (Red, Green, Blue on a self-luminous monitor), whereas the printer deposits **subtractive pigment inks** (ten distinct ink channels on the Epson SureColor SC-P900) onto paper that reflects ambient light.
 
@@ -149,4 +149,4 @@ With tools such as [`ep-media-installer` (`epmi`)](https://github.com/colorcube/
 
 ---
 
-*For detailed instructions on operating the color controls in LumaPrint, see **[Color Management, Soft Proof & Advanced B&W Photo (ABW)](color-and-abw.md)**.*
+*For detailed instructions on operating the color controls in LumaPrint, see **[Color Management, Soft Proof & Advanced B&W Photo (ABW)](5-color-management-and-abw.md)**.*

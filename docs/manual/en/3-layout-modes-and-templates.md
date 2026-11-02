@@ -1,4 +1,4 @@
-# Layout Modes: Standard, Panorama, Gallery Wrap & Templates
+# 3. Layout Modes & Template Studio
 
 Under **2. Sheet layout** (cf. EPL User Guide pp. 25–28, 32–35, 43–44), **LumaPrint** offers all four classic layout modes from Epson Print Layout as well as the extended **Gang sheet (auto nesting)** composer mode.
 
@@ -25,6 +25,9 @@ Under **2. Sheet layout** (cf. EPL User Guide pp. 25–28, 32–35, 43–44), **
 ## 3. Gallery Wrap (Canvas Stretcher Frame, pp. 26–27)
 
 Designed for printing on canvas media that will subsequently be stretched onto a wooden stretcher frame:
+
+![LumaPrint – Gallery Wrap Layout](images/ui_layout_gallery_wrap.png)
+
 - **Canvas (W × H):** Front face dimensions of the stretcher frame (`Width × Height`).
 - **Stretcher depth:** Frame thickness (e.g., `18 mm`, `20 mm`, `38 mm`, or custom).
 - **+ back (Back-Side Wrap Extension):** Additional margin (`0.0 .. 12.7 mm`) folded around the back of the stretcher bar for stapling.
@@ -41,6 +44,8 @@ Designed for printing on canvas media that will subsequently be stretched onto a
   6. *Wrap image (shading / blur):* Extends the image over the side edges and softens the wrapped border.
 
 ## 4. Template (Multi-Image Templates & Template Studio, pp. 28, 32–35)
+
+![LumaPrint – Template Multi-Image Layout](images/ui_layout_template.png)
 
 - Includes all original layout templates from Epson Print Layout (`AirAssetsTempleteJson`) as well as multi-image grids.
 - **📐 Template studio (new…):** Two-step template editor:

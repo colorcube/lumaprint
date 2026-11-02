@@ -1,6 +1,8 @@
-# Main Window & Basic Operation
+# 2. Main Window, Image Pool & Docks
 
 The main window of **LumaPrint** is modeled directly after the clear workflow of **Epson Print Layout** (cf. EPL User Guide pp. 15–17, 45).
+
+![LumaPrint – Main Window, Image Pool & Docks](images/ui_overview_standard.png)
 
 ## Main Window Layout
 

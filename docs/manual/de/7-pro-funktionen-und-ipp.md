@@ -1,4 +1,4 @@
-# Profi-Zusatzfunktionen (Composer, Auto-Nesting, Probestreifen)
+# 7. Profi-Funktionen, 16-Bit-Export & IPP-Tintenstand
 
 Über den Funktionsumfang von Epson Print Layout hinaus bietet **LumaPrint** fünf spezialisierte Werkzeuge für den professionellen Fine-Art-Alltag (inspiriert von *TurboPrint Composer*, *Qimage One* und *Lightroom Print*).
 

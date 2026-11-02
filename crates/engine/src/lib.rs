@@ -32,7 +32,7 @@ use lumaprint_doc::{
 };
 use lumaprint_geom::{MarginsMm, Orientation, RectMm, SizeMm};
 use lumaprint_i18n::tr;
-use lumaprint_ipp::{IppError, PrinterStatus, query_printer_status_ipp};
+use lumaprint_ipp::{InkChannelLevel, IppError, PrinterStatus, query_printer_status_ipp};
 use lumaprint_layout::{
     SolvedPageLayout, build_grid_template, count_fitting_sammel_items, orient_size_for_image,
     slots_capacity_for_layout, solve_page_layout, solve_page_layout_at,
@@ -2506,6 +2506,153 @@ impl Session {
                 );
             }
         }
+    }
+
+    /// Populates a third synthetic 16-bit image and 10-channel SC-P900 IPP ink levels for documentation screenshots.
+    pub fn populate_demo_for_screenshots(&mut self) -> Result<(), EngineError> {
+        let w = 1440u32;
+        let h = 960u32;
+        let mut sunset = ImageBuffer16::new_solid(w, h, Rgb16::WHITE).map_err(RenderError::from)?;
+        for y in 0..h {
+            let yf = (y as f32) / (h as f32);
+            for x in 0..w {
+                let xf = (x as f32) / (w as f32);
+                let horizon = 0.58 + 0.015 * (xf * 4.5).sin();
+                let (r, g, b) = if yf < horizon {
+                    let t = (yf / horizon).clamp(0.0, 1.0);
+                    let sun_dx = xf - 0.62;
+                    let sun_dy = (yf - 0.44) * 1.4;
+                    let sun_glow = (-(sun_dx * sun_dx + sun_dy * sun_dy) * 18.0).exp();
+                    let r_val = 22000.0 + t * 38000.0 + sun_glow * 12000.0;
+                    let g_val = 14000.0 + t * 24000.0 + sun_glow * 16000.0;
+                    let b_val = 34000.0 - t * 18000.0 + sun_glow * 6000.0;
+                    (r_val, g_val, b_val)
+                } else {
+                    let t = ((yf - horizon) / (1.0 - horizon)).clamp(0.0, 1.0);
+                    let wave = ((yf * 95.0 + xf * 12.0).sin()) * 0.5 + 0.5;
+                    let refl = (-((xf - 0.62).powi(2)) * 28.0).exp() * (1.0 - t * 0.6);
+                    let r_val = 12000.0 + (1.0 - t) * 14000.0 + refl * (18000.0 + wave * 9000.0);
+                    let g_val = 11000.0 + (1.0 - t) * 9000.0 + refl * (12000.0 + wave * 6000.0);
+                    let b_val = 21000.0 - t * 8000.0 + refl * 5000.0;
+                    (r_val, g_val, b_val)
+                };
+                sunset.set_pixel(
+                    x,
+                    y,
+                    Rgb16::new(
+                        r.clamp(0.0, 65535.0) as u16,
+                        g.clamp(0.0, 65535.0) as u16,
+                        b.clamp(0.0, 65535.0) as u16,
+                    ),
+                );
+            }
+        }
+        let id3 = self.next_image_id;
+        self.next_image_id += 1;
+        self.image_buffers
+            .insert(id3, (sunset, WorkingColorSpace::ProPhotoRgb));
+        self.doc.images.push(SourceImageEntry {
+            id: id3,
+            path: "coastal_golden_hour_16bit.tif".into(),
+            display_name: "Coastal Golden Hour (16-Bit ProPhoto).tif".into(),
+            meta: lumaprint_codecs::ImageMetadata {
+                width: 6000,
+                height: 4000,
+                bit_depth_per_channel: 16,
+                color_space: WorkingColorSpace::ProPhotoRgb,
+                icc_profile_name: "ProPhoto RGB".into(),
+                dpi_x: Some(360.0),
+                dpi_y: Some(360.0),
+                camera_model: Some("Fine-Art Medium Format".into()),
+                exposure_info: Some("f/11 · 1/60s · ISO 64".into()),
+            },
+            crop: CropSpec::default(),
+            composer_size_mm: SizeMm {
+                width_mm: 120.0,
+                height_mm: 80.0,
+            },
+            composer_pos_mm: (145.0, 15.0),
+        });
+
+        let channels = vec![
+            InkChannelLevel {
+                slot: 1,
+                code: "PK".into(),
+                name: "Photo Black".into(),
+                level_percent: 84,
+                swatch_rgb: Rgb8::new(28, 28, 32),
+            },
+            InkChannelLevel {
+                slot: 2,
+                code: "MK".into(),
+                name: "Matte Black".into(),
+                level_percent: 91,
+                swatch_rgb: Rgb8::new(48, 48, 52),
+            },
+            InkChannelLevel {
+                slot: 3,
+                code: "GY".into(),
+                name: "Gray".into(),
+                level_percent: 76,
+                swatch_rgb: Rgb8::new(112, 115, 120),
+            },
+            InkChannelLevel {
+                slot: 4,
+                code: "LGY".into(),
+                name: "Light Gray".into(),
+                level_percent: 82,
+                swatch_rgb: Rgb8::new(172, 175, 180),
+            },
+            InkChannelLevel {
+                slot: 5,
+                code: "C".into(),
+                name: "Cyan".into(),
+                level_percent: 68,
+                swatch_rgb: Rgb8::new(0, 155, 214),
+            },
+            InkChannelLevel {
+                slot: 6,
+                code: "LC".into(),
+                name: "Light Cyan".into(),
+                level_percent: 79,
+                swatch_rgb: Rgb8::new(115, 206, 238),
+            },
+            InkChannelLevel {
+                slot: 7,
+                code: "VM".into(),
+                name: "Vivid Magenta".into(),
+                level_percent: 73,
+                swatch_rgb: Rgb8::new(212, 32, 126),
+            },
+            InkChannelLevel {
+                slot: 8,
+                code: "VLM".into(),
+                name: "Vivid Light Magenta".into(),
+                level_percent: 88,
+                swatch_rgb: Rgb8::new(240, 142, 190),
+            },
+            InkChannelLevel {
+                slot: 9,
+                code: "Y".into(),
+                name: "Yellow".into(),
+                level_percent: 64,
+                swatch_rgb: Rgb8::new(242, 208, 28),
+            },
+            InkChannelLevel {
+                slot: 10,
+                code: "V".into(),
+                name: "Violet".into(),
+                level_percent: 95,
+                swatch_rgb: Rgb8::new(108, 66, 178),
+            },
+        ];
+        self.printer_status = PrinterStatus {
+            printer_uri: "ipp://192.168.178.45:631/ipp/print".into(),
+            online: true,
+            state_summary: tr!("Epson SC-P900 ready (10 UltraChrome PRO10 channels)").into(),
+            channels,
+        };
+        Ok(())
     }
 
     /// Solves the current page geometry without rasterizing pixels.
