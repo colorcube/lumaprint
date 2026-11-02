@@ -1,6 +1,6 @@
 <p align="center"><img src="share/icons/hicolor/scalable/apps/de.colorcube.lumaprint.svg" width="112" alt="LumaPrint icon"></p>
 
-# LumaPrint — Fine-Art Print Layout & 16-Bit Color Studio
+# LumaPrint — Fine-Art Print Layout Color Studio
 
 **LumaPrint** is a fine-art print layout, live softproofing, and 16-bit color management application for Linux, written in Rust. Inspired by **Epson Print Layout** and **TurboPrint Composer**, it combines a studio-style layout workflow with ICC color management (LittleCMS 2) and **CUPS / IPP** integration. 
 
