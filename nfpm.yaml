@@ -1,0 +1,103 @@
+# nfpm configuration for lumaprint (.deb & .rpm)
+# Build binaries & manuals first:
+#   cargo build --release --workspace --locked
+#   zensical build --clean
+#   zensical build --clean -f zensical.de.toml
+# Package:
+#   VERSION=0.1.0 nfpm package --packager deb --target dist/
+#   VERSION=0.1.0 nfpm package --packager rpm --target dist/
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+name: "lumaprint"
+arch: "amd64"
+platform: "linux"
+version: "${VERSION}"
+section: "graphics"
+priority: "optional"
+maintainer: "René Fritz <rf@colorcube.de>"
+description: |
+  LumaPrint — Printer-Independent 16-Bit Fine-Art Print Layout, Live ICC
+  Softproofing, and Advanced B&W Photo Studio for Linux (CUPS & IPP).
+vendor: "colorcube"
+homepage: "https://github.com/colorcube/lumaprint"
+license: "GPL-3.0-or-later"
+
+overrides:
+  deb:
+    depends:
+      - libc6
+      - liblcms2-2
+      - libgl1
+      - libwayland-client0 | libx11-6
+      - libxkbcommon0
+    recommends:
+      - cups-client
+      - epson-p900-escpr-cups (>= 0.3.0)
+      - ep-media-installer (>= 0.1.0)
+  rpm:
+    depends:
+      - lcms2
+      - mesa-libGL
+      - libxkbcommon
+    recommends:
+      - cups-client
+      - epson-p900-escpr-cups >= 0.3.0
+      - ep-media-installer >= 0.1.0
+
+contents:
+  - src: ./target/release/lumaprint
+    dst: /usr/bin/lumaprint
+    file_info:
+      mode: 0755
+
+  - src: ./target/release/lumaprint-cli
+    dst: /usr/bin/lumaprint-cli
+    file_info:
+      mode: 0755
+
+  - src: ./share/applications/de.colorcube.lumaprint.desktop
+    dst: /usr/share/applications/de.colorcube.lumaprint.desktop
+    file_info:
+      mode: 0644
+
+  - src: ./share/metainfo/de.colorcube.lumaprint.metainfo.xml
+    dst: /usr/share/metainfo/de.colorcube.lumaprint.metainfo.xml
+    file_info:
+      mode: 0644
+
+  - src: ./share/icons/hicolor/scalable/apps/de.colorcube.lumaprint.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/de.colorcube.lumaprint.svg
+    file_info:
+      mode: 0644
+
+  - src: ./share/icons/hicolor/128x128/apps/de.colorcube.lumaprint.png
+    dst: /usr/share/icons/hicolor/128x128/apps/de.colorcube.lumaprint.png
+    file_info:
+      mode: 0644
+
+  - src: ./site/manual
+    dst: /usr/share/doc/lumaprint/manual
+    type: tree
+
+  - src: ./site/handbuch
+    dst: /usr/share/doc/lumaprint/handbuch
+    type: tree
+
+  - src: ./README.md
+    dst: /usr/share/doc/lumaprint/README.md
+    file_info:
+      mode: 0644
+
+  - src: ./CHANGELOG.md
+    dst: /usr/share/doc/lumaprint/CHANGELOG.md
+    file_info:
+      mode: 0644
+
+  - src: ./LICENSE
+    dst: /usr/share/doc/lumaprint/LICENSE
+    file_info:
+      mode: 0644
+
+scripts:
+  postinstall: ./packaging/postinstall.sh
+  postremove: ./packaging/postinstall.sh

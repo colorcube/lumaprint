@@ -37,15 +37,22 @@ sudo pacman -S base-devel pkgconf lcms2 wayland libxkbcommon mesa libcups
 
 ### 2. Launch or Install the Desktop Studio (`lumaprint`)
 
-Clone or open the workspace and start the hardware-accelerated desktop GUI directly:
+Install the `.deb` (Debian/Ubuntu) or `.rpm` (Fedora/openSUSE) package from [GitHub Releases](https://github.com/colorcube/lumaprint/releases) (includes `lumaprint`, `lumaprint-cli`, desktop entry, icons, and the offline English & German HTML manuals):
+
+```bash
+# Fedora / openSUSE (.rpm):
+sudo dnf install ./lumaprint-*.x86_64.rpm
+
+# Debian / Ubuntu (.deb):
+sudo apt install ./lumaprint_*_amd64.deb
+```
+
+Or build and start directly from a source checkout:
 
 ```bash
 cargo run --release -p lumaprint
-```
 
-Or build and install `lumaprint` and `lumaprint-cli` into `~/.local/bin` along with the desktop entry, AppStream metadata, and icons (`~/.local/share`):
-
-```bash
+# Or install into ~/.local/bin and ~/.local/share for the current user:
 ./bin/install-desktop              # builds --release and installs into ~/.local/{bin,share}
 ./bin/install-desktop --uninstall  # removes the installed files
 ```

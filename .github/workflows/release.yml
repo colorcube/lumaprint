@@ -1,0 +1,95 @@
+# Builds release binaries, offline HTML manuals (EN/DE), .deb, .rpm, and portable .tar.gz archives on v* tags (or manual dispatch).
+name: Release & Packages
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: Build .deb & .rpm (x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config liblcms2-dev libwayland-dev libxkbcommon-dev libgl1-mesa-dev cups-client
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Python & Zensical for offline manuals
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build offline HTML manuals (English & German)
+        run: |
+          pip install zensical
+          zensical build --clean
+          zensical build --clean -f zensical.de.toml
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+          fi
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Build release binaries
+        run: cargo build --release --workspace --locked
+
+      - name: Run unit tests
+        run: cargo test --release --workspace --locked
+
+      - name: Install nFPM
+        uses: goreleaser/nfpm-action@v2
+
+      - name: Build .deb, .rpm, and portable archive
+        run: |
+          chmod +x packaging/postinstall.sh
+          mkdir -p dist
+          nfpm package --config nfpm.yaml --packager deb --target "dist/lumaprint_${VERSION}_amd64.deb"
+          nfpm package --config nfpm.yaml --packager rpm --target "dist/lumaprint-${VERSION}-1.x86_64.rpm"
+          STAGE="lumaprint-${VERSION}-linux-x86_64"
+          mkdir -p "dist/${STAGE}/bin" "dist/${STAGE}/share/doc/lumaprint"
+          cp target/release/lumaprint target/release/lumaprint-cli "dist/${STAGE}/bin/"
+          cp -r share/applications share/metainfo share/icons "dist/${STAGE}/share/"
+          cp -r site/manual "dist/${STAGE}/share/doc/lumaprint/manual"
+          cp -r site/handbuch "dist/${STAGE}/share/doc/lumaprint/handbuch"
+          cp README.md CHANGELOG.md LICENSE "dist/${STAGE}/"
+          tar -C dist -czf "dist/${STAGE}.tar.gz" "${STAGE}"
+          rm -rf "dist/${STAGE}"
+          (cd dist && sha256sum *.deb *.rpm *.tar.gz > SHA256SUMS)
+          ls -lh dist/
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lumaprint-${{ steps.version.outputs.version }}-packages
+          path: |
+            dist/*.deb
+            dist/*.rpm
+            dist/*.tar.gz
+            dist/SHA256SUMS
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/*.deb
+            dist/*.rpm
+            dist/*.tar.gz
+            dist/SHA256SUMS
