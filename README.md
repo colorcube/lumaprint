@@ -11,6 +11,10 @@ LumaPrint is **printer-independent** and works out of the box with any printer i
 
 ![LumaPrint – Fine-Art Print Layout & 16-Bit Color Studio](docs/manual/en/images/ui_overview_standard.png)
 
+## Documentation & User Manual
+
+- **Online Manual:** **[English User Guide](https://colorcube.github.io/lumaprint/manual/)** | **[Deutsches Benutzerhandbuch](https://colorcube.github.io/lumaprint/handbuch/)**
+
 ---
 
 ## Quickstart
@@ -192,27 +196,25 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## Documentation & Troubleshooting
 
-User guides, color management deep-dives, and architecture notes (prepared for **Zensical** via [`zensical.toml`](zensical.toml) and [`zensical.de.toml`](zensical.de.toml)) are located in [`docs/`](docs/README.md):
-
-- **English Manual & Technical Reference ([`docs/README.md`](docs/README.md)):**
-  - [User Guide Overview (`docs/manual/en/`)](docs/manual/en/README.md)
-  - [1. Quickstart & Typical Workflow](docs/manual/en/1-quickstart-and-workflow.md)
-  - [2. Main Window, Image Pool & Docks](docs/manual/en/2-main-window-and-docks.md)
-  - [3. Layout Modes & Template Studio](docs/manual/en/3-layout-modes-and-templates.md)
-  - [4. Printer, Media & Paper Feed](docs/manual/en/4-printer-media-and-cups.md)
-  - [5. Color Management, Soft Proof & Advanced B&W](docs/manual/en/5-color-management-and-abw.md)
-  - [6. Fundamentals: Color Spaces & ICC Profiles Explained](docs/manual/en/6-color-spaces-explained.md)
-  - [7. Pro Features, 16-Bit Export & IPP Ink Levels](docs/manual/en/7-pro-features-and-ipp.md)
+- **English Online Manual ([`colorcube.github.io/lumaprint/manual`](https://colorcube.github.io/lumaprint/manual/)):**
+  - [User Guide Overview](https://colorcube.github.io/lumaprint/manual/)
+  - [1. Quickstart & Typical Workflow](https://colorcube.github.io/lumaprint/manual/1-quickstart-and-workflow/)
+  - [2. Main Window, Image Pool & Docks](https://colorcube.github.io/lumaprint/manual/2-main-window-and-docks/)
+  - [3. Layout Modes & Template Studio](https://colorcube.github.io/lumaprint/manual/3-layout-modes-and-templates/)
+  - [4. Printer, Media & Paper Feed](https://colorcube.github.io/lumaprint/manual/4-printer-media-and-cups/)
+  - [5. Color Management, Soft Proof & Advanced B&W](https://colorcube.github.io/lumaprint/manual/5-color-management-and-abw/)
+  - [6. Fundamentals: Color Spaces & ICC Profiles Explained](https://colorcube.github.io/lumaprint/manual/6-color-spaces-explained/)
+  - [7. Pro Features, 16-Bit Export & IPP Ink Levels](https://colorcube.github.io/lumaprint/manual/7-pro-features-and-ipp/)
   - [Layered Architecture (`L0–L6`)](docs/architecture.md)
-- **Deutsches Benutzerhandbuch ([`docs/README.de.md`](docs/README.de.md)):**
-  - [Kapitelübersicht (`docs/manual/de/`)](docs/manual/de/README.md)
-  - [1. Schnellstart & Typischer Workflow](docs/manual/de/1-schnellstart-und-workflow.md)
-  - [2. Hauptfenster, Bilder-Pool & Docks](docs/manual/de/2-hauptfenster-und-bedienung.md)
-  - [3. Layout-Modi & Vorlagen-Studio](docs/manual/de/3-layout-modi-und-vorlagen.md)
-  - [4. Drucker, Medien & Papierzufuhr](docs/manual/de/4-drucker-medien-und-zufuhr.md)
-  - [5. Farbmanagement, Softproof & Advanced B&W](docs/manual/de/5-farbmanagement-softproof-und-abw.md)
-  - [6. Grundlagen: Farbräume & ICC-Profile erklärt](docs/manual/de/6-farbraeume-und-profile-erklaert.md)
-  - [7. Profi-Funktionen, 16-Bit-Export & IPP-Tintenstand](docs/manual/de/7-pro-funktionen-und-ipp.md)
+- **Deutsches Online-Benutzerhandbuch ([`colorcube.github.io/lumaprint/handbuch`](https://colorcube.github.io/lumaprint/handbuch/)):**
+  - [Kapitelübersicht](https://colorcube.github.io/lumaprint/handbuch/)
+  - [1. Schnellstart & Typischer Workflow](https://colorcube.github.io/lumaprint/handbuch/1-schnellstart-und-workflow/)
+  - [2. Hauptfenster, Bilder-Pool & Docks](https://colorcube.github.io/lumaprint/handbuch/2-hauptfenster-und-bedienung/)
+  - [3. Layout-Modi & Vorlagen-Studio](https://colorcube.github.io/lumaprint/handbuch/3-layout-modi-und-vorlagen/)
+  - [4. Drucker, Medien & Papierzufuhr](https://colorcube.github.io/lumaprint/handbuch/4-drucker-medien-und-zufuhr/)
+  - [5. Farbmanagement, Softproof & Advanced B&W](https://colorcube.github.io/lumaprint/handbuch/5-farbmanagement-softproof-und-abw/)
+  - [6. Grundlagen: Farbräume & ICC-Profile erklärt](https://colorcube.github.io/lumaprint/handbuch/6-farbraeume-und-profile-erklaert/)
+  - [7. Profi-Funktionen, 16-Bit-Export & IPP-Tintenstand](https://colorcube.github.io/lumaprint/handbuch/7-pro-funktionen-und-ipp/)
 
 ### Quick Troubleshooting
 - **Inspecting CUPS filter logs:** Enable verbose logging with `sudo cupsctl --debug-logging` and watch `sudo journalctl -u cups -f` (or `/var/log/cups/error_log`).
