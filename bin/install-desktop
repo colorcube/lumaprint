@@ -11,6 +11,7 @@ LOCAL_BIN="${HOME}/.local/bin"
 APPS_DIR="${HOME}/.local/share/applications"
 METAINFO_DIR="${HOME}/.local/share/metainfo"
 ICON_ROOT="${HOME}/.local/share/icons/hicolor"
+DOC_DIR="${HOME}/.local/share/doc/lumaprint"
 
 if [[ "${1:-}" == "--uninstall" ]]; then
     rm -f "${LOCAL_BIN}/lumaprint" "${LOCAL_BIN}/lumaprint-cli"
@@ -18,6 +19,7 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     rm -f "${METAINFO_DIR}/${APP_ID}.metainfo.xml"
     rm -f "${ICON_ROOT}/scalable/apps/${APP_ID}.svg"
     rm -f "${ICON_ROOT}/128x128/apps/${APP_ID}.png"
+    rm -rf "${DOC_DIR}"
     if command -v update-desktop-database >/dev/null 2>&1; then
         update-desktop-database "${APPS_DIR}" >/dev/null 2>&1 || true
     fi
@@ -54,3 +56,12 @@ if command -v gtk-update-icon-cache >/dev/null 2>&1; then
     gtk-update-icon-cache -q -t "${ICON_ROOT}" || true
 fi
 echo "✓ Installed app icons (scalable, 128x128) into ${ICON_ROOT}"
+
+for sub in manual handbuch; do
+    if [[ -f "${PROJECT_ROOT}/site/${sub}/index.html" ]]; then
+        rm -rf "${DOC_DIR}/${sub}"
+        mkdir -p "${DOC_DIR}"
+        cp -r "${PROJECT_ROOT}/site/${sub}" "${DOC_DIR}/${sub}"
+        echo "✓ Installed offline HTML manual (${sub}) into ${DOC_DIR}/${sub}"
+    fi
+done

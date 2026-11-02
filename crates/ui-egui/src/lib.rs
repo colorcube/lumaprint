@@ -1324,6 +1324,7 @@ impl LumaPrintApp {
         let mut toggle_paper_white = false;
         let mut toggle_gamut_warning = false;
         let mut delete_pressed = false;
+        let mut open_help = false;
         let mut pasted_paths: Vec<std::path::PathBuf> = Vec::new();
 
         ctx.input(|i| {
@@ -1339,8 +1340,11 @@ impl LumaPrintApp {
                 }
             }
 
-            // Function-key dock toggles (F8 = Bottom Dock, F9 = Left Dock / Pool, F10 = Right Setup Dock)
+            // Function-key dock toggles (F1 = User Guide, F8 = Bottom Dock, F9 = Left Dock / Pool, F10 = Right Setup Dock)
             if !i.modifiers.any() {
+                if i.key_pressed(egui::Key::F1) {
+                    open_help = true;
+                }
                 if i.key_pressed(egui::Key::Delete) {
                     delete_pressed = true;
                 }
@@ -1424,6 +1428,9 @@ impl LumaPrintApp {
             self.process_os_dropped_paths(pasted_paths, pos);
         }
 
+        if open_help {
+            self.open_user_guide();
+        }
         if delete_pressed {
             self.delete_selected_image();
         }
@@ -2716,6 +2723,11 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
 
                     ui.menu_button(tr!("Help"), |ui| {
                         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                        if ui.button(tr!("📖 User guide  (F1)")).clicked() {
+                            self.open_user_guide();
+                            ui.close_menu();
+                        }
+                        ui.separator();
                         if ui.button(tr!("ℹ About LumaPrint…")).clicked() {
                             self.show_about_modal = true;
                             ui.close_menu();
@@ -8303,13 +8315,27 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(tr!("📖 Documentation:")).strong());
-                        ui.label(
-                            RichText::new(tr!("User manual (link coming soon)"))
-                                .color(self.tokens.text_dim),
-                        );
+                        if ui.button(tr!("📖 Open user guide  (F1)")).clicked() {
+                            self.open_user_guide();
+                        }
                     });
                 });
             self.show_about_modal = open;
+        }
+    }
+
+    fn open_user_guide(&mut self) {
+        let target = resolve_user_guide_target(lumaprint_i18n::language());
+        match std::process::Command::new("xdg-open").arg(&target).spawn() {
+            Ok(_) => {
+                self.session.status_message = tr!("Opened user guide: {target}", target = target);
+            }
+            Err(_) => {
+                self.session.status_message = tr!(
+                    "Could not open browser (xdg-open): {target}",
+                    target = target
+                );
+            }
         }
     }
 
@@ -9973,6 +9999,65 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             }
         }
     }
+}
+
+const ONLINE_MANUAL_URL_EN: &str = "https://colorcube.github.io/lumaprint/manual/";
+const ONLINE_MANUAL_URL_DE: &str = "https://colorcube.github.io/lumaprint/handbuch/";
+
+/// Resolves the local offline HTML user guide (`index.html`) matching `lang` if found under `roots`,
+/// otherwise falls back to the online manual URL (`https://colorcube.github.io/lumaprint/manual/` or `/handbuch/`).
+fn resolve_user_guide_target_in_roots(
+    lang: lumaprint_i18n::Language,
+    roots: &[std::path::PathBuf],
+) -> String {
+    let subdirs: &[&str] = match lang {
+        lumaprint_i18n::Language::German => &["handbuch", "manual"],
+        lumaprint_i18n::Language::English => &["manual"],
+    };
+    for sub in subdirs {
+        let rel_site = format!("site/{sub}/index.html");
+        let rel_direct = format!("{sub}/index.html");
+        for root in roots {
+            for rel in [&rel_site, &rel_direct] {
+                let candidate = root.join(rel);
+                if candidate.is_file() {
+                    let abs = std::fs::canonicalize(&candidate).unwrap_or(candidate);
+                    return format!("file://{}", abs.display());
+                }
+            }
+        }
+    }
+    match lang {
+        lumaprint_i18n::Language::German => String::from(ONLINE_MANUAL_URL_DE),
+        lumaprint_i18n::Language::English => String::from(ONLINE_MANUAL_URL_EN),
+    }
+}
+
+fn resolve_user_guide_target(lang: lumaprint_i18n::Language) -> String {
+    let mut roots = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        roots.push(cwd);
+    }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(exe_dir) = exe.parent()
+    {
+        roots.push(exe_dir.join("../.."));
+        roots.push(exe_dir.join("../share/doc/lumaprint"));
+    }
+    roots.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."));
+    if let Ok(xdg_data) = std::env::var("XDG_DATA_HOME")
+        && !xdg_data.is_empty()
+    {
+        roots.push(std::path::PathBuf::from(xdg_data).join("doc/lumaprint"));
+    }
+    if let Ok(home) = std::env::var("HOME")
+        && !home.is_empty()
+    {
+        roots.push(std::path::PathBuf::from(home).join(".local/share/doc/lumaprint"));
+    }
+    roots.push(std::path::PathBuf::from("/usr/local/share/doc/lumaprint"));
+    roots.push(std::path::PathBuf::from("/usr/share/doc/lumaprint"));
+    resolve_user_guide_target_in_roots(lang, &roots)
 }
 
 fn save_color_image_png(img: &ColorImage, path: &Path) {
@@ -12429,6 +12514,42 @@ BackgroundNormal=61,174,233
                 String::from_utf8_lossy(&out.stdout),
                 String::from_utf8_lossy(&out.stderr)
             );
+        }
+
+        // 12. User guide URL resolution (local site/ HTML vs. online fallback)
+        if let Ok(tmp) = tempfile::tempdir() {
+            let roots = vec![tmp.path().to_path_buf()];
+            assert_eq!(
+                resolve_user_guide_target_in_roots(lumaprint_i18n::Language::English, &roots),
+                ONLINE_MANUAL_URL_EN
+            );
+            assert_eq!(
+                resolve_user_guide_target_in_roots(lumaprint_i18n::Language::German, &roots),
+                ONLINE_MANUAL_URL_DE
+            );
+
+            let local_en = tmp.path().join("site/manual/index.html");
+            let local_de = tmp.path().join("site/handbuch/index.html");
+            if let Some(p) = local_en.parent() {
+                let _ = std::fs::create_dir_all(p);
+            }
+            let _ = std::fs::write(&local_en, "<html></html>");
+            let res_en =
+                resolve_user_guide_target_in_roots(lumaprint_i18n::Language::English, &roots);
+            assert!(res_en.starts_with("file://") && res_en.ends_with("/site/manual/index.html"));
+
+            // German falls back to local English HTML if only site/manual exists
+            let res_de_fallback =
+                resolve_user_guide_target_in_roots(lumaprint_i18n::Language::German, &roots);
+            assert!(res_de_fallback.ends_with("/site/manual/index.html"));
+
+            if let Some(p) = local_de.parent() {
+                let _ = std::fs::create_dir_all(p);
+            }
+            let _ = std::fs::write(&local_de, "<html></html>");
+            let res_de =
+                resolve_user_guide_target_in_roots(lumaprint_i18n::Language::German, &roots);
+            assert!(res_de.starts_with("file://") && res_de.ends_with("/site/handbuch/index.html"));
         }
     }
 }

@@ -867,4 +867,17 @@ pub(crate) static DE: &[(&str, &str)] = &[
         "Epson SC-P900 ready (10 UltraChrome PRO10 channels)",
         "Epson SC-P900 bereit (10 UltraChrome PRO10 Kanäle)",
     ),
+    ("📖 User guide  (F1)", "📖 Benutzerhandbuch  (F1)"),
+    (
+        "📖 Open user guide  (F1)",
+        "📖 Benutzerhandbuch öffnen  (F1)",
+    ),
+    (
+        "Opened user guide: {target}",
+        "Benutzerhandbuch geöffnet: {target}",
+    ),
+    (
+        "Could not open browser (xdg-open): {target}",
+        "Browser konnte nicht geöffnet werden (xdg-open): {target}",
+    ),
 ];
