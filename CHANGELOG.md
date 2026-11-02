@@ -2,8 +2,10 @@
 
 ## Unreleased
 
-### User interface
+### User interface & desktop integration
 - English user interface by default, German as second language. The language follows the system (`LANG`) and can be changed under Settings → Language; the choice is saved.
+- Application icon, Wayland/X11 desktop entry (`share/applications/de.colorcube.lumaprint.desktop`), AppStream metainfo (`share/metainfo/de.colorcube.lumaprint.metainfo.xml`), and `./bin/install-desktop` (`--uninstall`) installer.
+- Bilingual user guide and technical documentation in English (`docs/manual/en/`, `docs/architecture.md`) and German (`docs/manual/de/`) with Zensical configurations (`zensical.toml`, `zensical.de.toml`).
 - Multi-page exports are named `<name>_sheet<n>` (previously `_bogen<n>`).
 
 ## 0.1.0 – 2026-10-31 (beta)

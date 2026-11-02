@@ -1,0 +1,56 @@
+name: Bug Report
+description: Report a layout, color management, softproofing, or CUPS printing issue in LumaPrint
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting an issue! Please fill in the details below so we can reproduce and diagnose the problem.
+  - type: input
+    id: distro
+    attributes:
+      label: Linux Distribution, Desktop Environment & Display Server
+      description: "e.g. Fedora 44 (KDE Plasma 6, Wayland), Debian 13 (GNOME, Wayland), Ubuntu 24.04 (X11)"
+      placeholder: "Fedora 44, KDE Plasma 6 (Wayland)"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: LumaPrint Version / Git Commit
+      description: "Output of `git rev-parse --short HEAD` or release tag (e.g. `v0.1.0`)"
+      placeholder: "v0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: printer_driver
+    attributes:
+      label: Printer Model & CUPS Driver
+      description: "e.g. Epson SureColor SC-P900 with `epson-p900-escpr-cups 0.3.0`, Gutenprint, TurboPrint, IPP Everywhere"
+      placeholder: "Epson SC-P900 (epson-p900-escpr-cups 0.3.0)"
+    validations:
+      required: true
+  - type: input
+    id: print_settings
+    attributes:
+      label: Paper, Layout Mode & Color Settings
+      description: "Which Media Type, Paper Size, Layout Mode, and Color Mode (ICC / Printer Auto / ABW) were used?"
+      placeholder: "VelvetFineArt, A4, Standard layout, ICC Paper Profile (Relative Colorimetric + BPC)"
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: "Describe the steps to reproduce, what you expected, and what actually happened."
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Terminal / CUPS Log Output
+      description: "If related to printing or CUPS discovery, paste relevant output from `cargo run -p lumaprint-cli -- printers` or `/var/log/cups/error_log`:"
+      render: shell
+    validations:
+      required: false
