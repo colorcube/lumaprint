@@ -112,7 +112,7 @@ mod lcms2 {
         ) -> *mut CmsToneCurve;
         fn cmsFreeToneCurve(curve: *mut CmsToneCurve);
 
-        fn cmsGetProfileInfoUTF8(
+        fn cmsGetProfileInfoASCII(
             h_profile: CmsHProfile,
             info: c_uint,
             language_code: *const c_char,
@@ -225,7 +225,7 @@ mod lcms2 {
             unsafe {
                 let lang = b"en\0";
                 let country = b"US\0";
-                let needed = cmsGetProfileInfoUTF8(
+                let needed = cmsGetProfileInfoASCII(
                     self.0,
                     CMS_INFO_DESCRIPTION,
                     lang.as_ptr().cast(),
@@ -237,7 +237,7 @@ mod lcms2 {
                     return None;
                 }
                 let mut buf = vec![0u8; needed as usize];
-                let written = cmsGetProfileInfoUTF8(
+                let written = cmsGetProfileInfoASCII(
                     self.0,
                     CMS_INFO_DESCRIPTION,
                     lang.as_ptr().cast(),
