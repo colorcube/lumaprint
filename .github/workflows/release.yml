@@ -13,7 +13,7 @@ permissions:
 jobs:
   package:
     name: Build .deb & .rpm (x86_64)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
 
@@ -53,7 +53,9 @@ jobs:
         run: cargo test --release --workspace --locked
 
       - name: Install nFPM
-        uses: goreleaser/nfpm-action@v2
+        run: |
+          curl -fsSL https://github.com/goreleaser/nfpm/releases/download/v2.41.1/nfpm_2.41.1_amd64.deb -o /tmp/nfpm.deb
+          sudo dpkg -i /tmp/nfpm.deb
 
       - name: Build .deb, .rpm, and portable archive
         run: |
