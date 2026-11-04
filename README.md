@@ -11,9 +11,9 @@ LumaPrint is **printer-independent** and works out of the box with any printer i
 
 ![LumaPrint – Fine-Art Print Layout & 16-Bit Color Studio](docs/manual/en/images/ui_overview_standard.png)
 
-## Documentation & User Manual
+## Documentation
 
-- **Online Manual:** **[English User Guide](https://colorcube.github.io/lumaprint/manual/)** | **[Deutsches Benutzerhandbuch](https://colorcube.github.io/lumaprint/handbuch/)**
+Online manual: **[English](https://colorcube.github.io/lumaprint/manual/)** | **[Deutsch](https://colorcube.github.io/lumaprint/handbuch/)**
 
 ---
 
@@ -194,29 +194,8 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-## Documentation & Troubleshooting
+## Troubleshooting
 
-- **English Online Manual ([`colorcube.github.io/lumaprint/manual`](https://colorcube.github.io/lumaprint/manual/)):**
-  - [User Guide Overview](https://colorcube.github.io/lumaprint/manual/)
-  - [1. Quickstart & Typical Workflow](https://colorcube.github.io/lumaprint/manual/1-quickstart-and-workflow/)
-  - [2. Main Window, Image Pool & Docks](https://colorcube.github.io/lumaprint/manual/2-main-window-and-docks/)
-  - [3. Layout Modes & Template Studio](https://colorcube.github.io/lumaprint/manual/3-layout-modes-and-templates/)
-  - [4. Printer, Media & Paper Feed](https://colorcube.github.io/lumaprint/manual/4-printer-media-and-cups/)
-  - [5. Color Management, Soft Proof & Advanced B&W](https://colorcube.github.io/lumaprint/manual/5-color-management-and-abw/)
-  - [6. Fundamentals: Color Spaces & ICC Profiles Explained](https://colorcube.github.io/lumaprint/manual/6-color-spaces-explained/)
-  - [7. Pro Features, 16-Bit Export & IPP Ink Levels](https://colorcube.github.io/lumaprint/manual/7-pro-features-and-ipp/)
-  - [Layered Architecture (`L0–L6`)](docs/architecture.md)
-- **Deutsches Online-Benutzerhandbuch ([`colorcube.github.io/lumaprint/handbuch`](https://colorcube.github.io/lumaprint/handbuch/)):**
-  - [Kapitelübersicht](https://colorcube.github.io/lumaprint/handbuch/)
-  - [1. Schnellstart & Typischer Workflow](https://colorcube.github.io/lumaprint/handbuch/1-schnellstart-und-workflow/)
-  - [2. Hauptfenster, Bilder-Pool & Docks](https://colorcube.github.io/lumaprint/handbuch/2-hauptfenster-und-bedienung/)
-  - [3. Layout-Modi & Vorlagen-Studio](https://colorcube.github.io/lumaprint/handbuch/3-layout-modi-und-vorlagen/)
-  - [4. Drucker, Medien & Papierzufuhr](https://colorcube.github.io/lumaprint/handbuch/4-drucker-medien-und-zufuhr/)
-  - [5. Farbmanagement, Softproof & Advanced B&W](https://colorcube.github.io/lumaprint/handbuch/5-farbmanagement-softproof-und-abw/)
-  - [6. Grundlagen: Farbräume & ICC-Profile erklärt](https://colorcube.github.io/lumaprint/handbuch/6-farbraeume-und-profile-erklaert/)
-  - [7. Profi-Funktionen, 16-Bit-Export & IPP-Tintenstand](https://colorcube.github.io/lumaprint/handbuch/7-pro-funktionen-und-ipp/)
-
-### Quick Troubleshooting
 - **Inspecting CUPS filter logs:** Enable verbose logging with `sudo cupsctl --debug-logging` and watch `sudo journalctl -u cups -f` (or `/var/log/cups/error_log`).
 - **Custom media from `ep-media-installer` do not appear:** Click **“Install for this computer”** in `epmi-gui` (or run `epmi install-system`) so `/etc/epson-p900-escpr-cups/custom_media.json` and the queue PPDs are updated, then click **`🔄`** next to the printer selector in LumaPrint.
 - **SELinux (Fedora / RHEL):** Check for denials with `sudo ausearch -m avc -ts recent` and restore contexts via `sudo restorecon -RFv /etc/epson-p900-escpr-cups /usr/local/share/color/icc/epson-p900-custom`.
