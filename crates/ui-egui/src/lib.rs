@@ -18,7 +18,7 @@ use egui::{
 };
 use lumaprint_cms::{RenderingIntent, ViewingLight, WorkingColorSpace};
 use lumaprint_color::{
-    ABW_WHEEL_RANGE, AbwHighlightShift, AbwMidtone, AbwTonePreset, ImageBuffer16, Rgb8,
+    ABW_WHEEL_RANGE, AbwHighlightShift, AbwMidtone, AbwTonePreset, ImageBuffer16, Rgb8, Rgb16,
 };
 use lumaprint_doc::{
     CanvasBackdropTone, CanvasViewMode, CenteringMode, ColorManagementMode, CropSpec,
@@ -48,7 +48,7 @@ pub use theme::{
 };
 #[cfg(target_os = "linux")]
 use winit::platform::wayland::{
-    WaylandDetectedGamut, WaylandSurfaceColorSpace, resolve_surface_color_space,
+    WaylandDetectedGamut, WaylandSurfaceColorSpace,
     set_wayland_surface_color_space, wayland_color_management_status,
 };
 
@@ -1932,8 +1932,14 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             if self.thumbnail_textures.contains_key(&img_entry.id) {
                 continue;
             }
-            if let Some((buf16, _cs)) = self.session.image_buffers.get(&img_entry.id) {
-                let thumb_img = build_thumbnail_color_image(buf16, 360, 270);
+            if let Some((buf16, cs)) = self.session.image_buffers.get(&img_entry.id) {
+                let thumb_img = build_thumbnail_color_image(
+                    buf16,
+                    *cs,
+                    self.session.doc.color.resolved_display_space,
+                    360,
+                    270,
+                );
                 let tex = ctx.load_texture(
                     format!("thumb_{}", img_entry.id),
                     thumb_img,
@@ -1957,7 +1963,10 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             set_wayland_surface_color_space(wayland_mode);
             let status = wayland_color_management_status();
             let resolved = if status.protocol_supported {
-                match resolve_surface_color_space(wayland_mode) {
+                // Use the color space the surface actually carries, not the requested one: if the
+                // compositor rejects the image description, the surface stays sRGB and the
+                // preview must not be converted to a wide-gamut space it cannot display.
+                match status.active_surface_color_space {
                     WaylandSurfaceColorSpace::DisplayP3 => WorkingColorSpace::DisplayP3,
                     WaylandSurfaceColorSpace::AdobeRgb => WorkingColorSpace::AdobeRgb1998,
                     WaylandSurfaceColorSpace::Srgb | WaylandSurfaceColorSpace::Auto => {
@@ -1976,6 +1985,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             if self.session.doc.color.resolved_display_space != resolved {
                 self.session.doc.color.resolved_display_space = resolved;
                 self.dirty_preview = true;
+                // Image thumbnails are converted to the display space when they are built.
+                self.thumbnail_textures.clear();
             }
         }
     }
@@ -2106,8 +2117,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         self.poll_native_dialog(ctx);
         self.process_pending_print_job(ctx);
         self.handle_os_dropped_files(ctx);
-        self.ensure_thumbnails(ctx);
         self.sync_wayland_color_management();
+        self.ensure_thumbnails(ctx);
         self.refresh_preview_if_needed(ctx);
 
         self.last_slot_screen_rects.clear();
@@ -11701,7 +11712,15 @@ fn studio_card_frame(t: &Tokens) -> egui::Frame {
         .inner_margin(egui::Margin::same(10))
 }
 
-fn build_thumbnail_color_image(buf: &ImageBuffer16, max_w: u32, max_h: u32) -> ColorImage {
+/// Downscales `buf` (encoded in `src_space`) and converts it into the monitor color space
+/// `display_space`, so thumbnails match the color-managed page preview.
+fn build_thumbnail_color_image(
+    buf: &ImageBuffer16,
+    src_space: WorkingColorSpace,
+    display_space: WorkingColorSpace,
+    max_w: u32,
+    max_h: u32,
+) -> ColorImage {
     let src_w = buf.width.max(1);
     let src_h = buf.height.max(1);
     let scale = (max_w as f32 / src_w as f32)
@@ -11743,9 +11762,15 @@ fn build_thumbnail_color_image(buf: &ImageBuffer16, max_w: u32, max_h: u32) -> C
                 sy += step_y;
             }
             let div = count.max(1);
-            rgb8.push((((r_acc / div) + 128) / 257) as u8);
-            rgb8.push((((g_acc / div) + 128) / 257) as u8);
-            rgb8.push((((b_acc / div) + 128) / 257) as u8);
+            let avg = Rgb16 {
+                r: (r_acc / div) as u16,
+                g: (g_acc / div) as u16,
+                b: (b_acc / div) as u16,
+            };
+            let px = src_space.convert_pixel_to(avg, display_space);
+            rgb8.push(((u32::from(px.r) + 128) / 257) as u8);
+            rgb8.push(((u32::from(px.g) + 128) / 257) as u8);
+            rgb8.push(((u32::from(px.b) + 128) / 257) as u8);
         }
     }
     ColorImage::from_rgb([dst_w as usize, dst_h as usize], &rgb8)

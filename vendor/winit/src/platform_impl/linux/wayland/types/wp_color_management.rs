@@ -531,6 +531,11 @@ impl Dispatch<WpImageDescriptionV1, ImageDescriptionData, WinitState> for ColorM
                                 }
                             }
                         }
+                        // The app derives its preview color space from the active surface
+                        // space, so let it redraw once the new description is in effect.
+                        if let Some(req) = state.window_requests.get_mut().get(&window_id) {
+                            req.redraw_requested.store(true, Ordering::Relaxed);
+                        }
                         proxy.destroy();
                     },
                 }

@@ -74,6 +74,9 @@ Convenience mode for genuine manufacturer papers where color tuning is handled b
   - `Warm gallery light (3200K)` — warm museum / living room halogen lighting
 - **Gamut Warning (`⚠ Gamut warning`):** Highlights image regions that fall outside the reproducible color gamut of the selected paper-and-ink combination with a warning overlay.
 - **Monitor Color Management (`Settings` Menu at Top):** Global configuration of the monitor color space (`Automatic (Wayland / KWin)`, `Display P3`, `Adobe RGB`, `sRGB`) and live status of the Wayland color management protocol (`wp_color_manager_v1`) are located in the top **Settings** menu.
+  - **What happens:** With `Automatic (Wayland / KWin)`, LumaPrint tags its window with the monitor's color space at the compositor (KWin) (`Display P3` or `Adobe RGB` on wide-gamut monitors). The page preview, page thumbnails and image thumbnails are converted into that space and use the monitor's full gamut — no clipping to sRGB.
+  - **Known limitation — theme colors:** UI colors (themes, accent colors, icons) are sRGB values and are **not** converted. On a wide-gamut monitor, colored accents therefore look somewhat more saturated than intended; neutral grays are unaffected. This is deliberate: accurate image display in the monitor's full gamut takes priority. If you need an exactly color-accurate UI, choose `sRGB` — but the image preview is then clipped to sRGB as well.
+  - **Fallback:** If the compositor rejects the requested color space, the window stays sRGB and LumaPrint converts the preview to sRGB too (the preview always follows the color space actually in effect).
 
 ---
 

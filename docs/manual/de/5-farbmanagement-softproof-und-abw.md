@@ -74,6 +74,9 @@ Komfort-Modus für originale Hersteller-Papiere, bei dem die Farbabstimmung durc
   - `Galerie Warm (3200K)` – Warme Museums-/Wohnraumbeleuchtung
 - **Out-of-Gamut-Warnung:** Markiert Bildpartien, die außerhalb des darstellbaren Farbraums der gewählten Papier-/Tintenkombination liegen, mit einer Warnfarbe.
 - **Monitor-Farbraum & Wayland / KWin (`Einstellungen`-Menü oben):** Die globale Konfiguration des Monitor-Farbraums (`Automatisch Wayland`, `Display P3`, `Adobe RGB`, `sRGB`) sowie der Live-Status des Wayland-Farbmanagement-Protokolls (`wp_color_manager_v1`) befinden sich im oberen Menü **Einstellungen**.
+  - **Was dabei passiert:** Mit `Automatisch Wayland` meldet LumaPrint das Fenster beim Compositor (KWin) im Farbraum des Monitors an (`Display P3` oder `Adobe RGB` bei Wide-Gamut-Monitoren). Seitenvorschau, Seitenminiaturen und Bild-Thumbnails werden in diesen Farbraum umgerechnet und nutzen so den vollen Farbumfang des Monitors – ohne Beschneidung auf sRGB.
+  - **Bekannte Einschränkung – Theme-Farben:** Die Farben der Bedienoberfläche (Themes, Akzentfarben, Icons) sind sRGB-Werte und werden **nicht** umgerechnet. Auf einem Wide-Gamut-Monitor wirken farbige Akzente daher etwas kräftiger als vorgesehen; neutrale Grautöne bleiben unverändert. Das ist bewusst so: Vorrang hat die farbrichtige Bilddarstellung im vollen Monitor-Farbraum. Wer eine exakt farbtreue Oberfläche braucht, wählt `sRGB` – dann wird allerdings auch die Bildvorschau auf sRGB beschnitten.
+  - **Fallback:** Lehnt der Compositor den gewünschten Farbraum ab, bleibt das Fenster sRGB, und LumaPrint rechnet die Vorschau ebenfalls nach sRGB (angezeigt wird immer der tatsächlich aktive Farbraum).
 
 ---
 
