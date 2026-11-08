@@ -52,3 +52,12 @@ Designed for printing on canvas media that will subsequently be stretched onto a
   1. *Step 1: grid & bento wizard:* Creates custom grid layouts with **1 to 5 rows** and **1 to 5 columns**, adjustable outer margins and gutters (`Gutter H / V`), cell merging (*⊞ Merge cells*) for Bento layouts, and quick presets.
   2. *Step 2: free slot editor (one-way):* Free mouse placement, exact millimeter dimensions, magnetic snapping, corner cut marks (`✂ Corner cut marks at slots`), captions, and fit mode (*Show entire images* vs. *Fill area*).
 - Templates can be saved, edited (`✎ Edit current…`), and exported/imported as `.json` files.
+
+## 5. Gang Sheet (Auto Nesting / Collection Sheet)
+
+![LumaPrint – Gang Sheet Layout](images/ui_layout_gang.png)
+
+- Combines multiple images of equal or mixed sizes onto a single sheet (or automatically across multiple sheets) to minimize paper waste.
+- **Target Size (`Size (slot #)` / `Size (next)`):** Set individual millimeter dimensions or select standard photo sizes (`9 × 13 cm`, `10 × 15 cm`, `13 × 18 cm`, `15 × 20 cm`, `20 × 30 cm`, `Square 10 × 10 cm`) per slot or apply them to all images on the sheet (`Apply to all`).
+- **Auto Nesting & Orientation:** Automatically packs placed images onto the sheet according to *Sheet margin*, *Gap*, and optional automatic 90° rotation (*Rotate images 90° automatically if they fit better*). If additional images exceed the current sheet's capacity, LumaPrint automatically overflows them onto a new sheet.
+- **Cut Marks & Frame Line:** Optional corner cut marks (`Corner cut marks around each image`) and frame lines for easy trimming.

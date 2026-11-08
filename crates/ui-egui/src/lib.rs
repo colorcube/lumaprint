@@ -23,10 +23,11 @@ use lumaprint_color::{
 use lumaprint_doc::{
     CanvasBackdropTone, CanvasViewMode, CenteringMode, ColorManagementMode, CropSpec,
     DisplayColorSpaceMode, ExportColorSpace, ExportFileFormat, ExportSettings, FilmstripPosition,
-    FrameLineSpec, GalleryWrapEffect, GalleryWrapSpec, LayoutMode, LayoutTemplate, MEDIA_TYPES,
-    OutputSharpening, PageListPosition, PaperSource, PersistentSettings, PrintQuality, PrintScope,
-    SPOOL_DITHERING_OPTION, SizingCriterion, SlotCaptionMode, SourceImageEntry, StandardLayoutSpec,
-    TemplateLayoutSpec, find_media_type,
+    FrameLineSpec, FreeComposerSpec, GalleryWrapEffect, GalleryWrapSpec, LayoutMode,
+    LayoutTemplate, MEDIA_TYPES, OutputSharpening, PageListPosition, PaperSource,
+    PersistentSettings, PrintJobDocument, PrintQuality, PrintScope, SPOOL_DITHERING_OPTION,
+    SizingCriterion, SlotCaptionMode, SourceImageEntry, StandardLayoutSpec, TemplateLayoutSpec,
+    find_media_type,
 };
 use lumaprint_engine::{
     EngineCommand, Session, SettingsLoad, load_settings_file, save_settings_file,
@@ -2409,10 +2410,6 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                             ui.close_menu();
                         }
                         ui.separator();
-                        if ui.button(tr!("🧪 Load test images")).clicked() {
-                            self.exec(EngineCommand::AddDemoImages);
-                            ui.close_menu();
-                        }
                         if ui.button(tr!("🪄 Distribute pool onto sheets")).clicked() {
                             self.exec(EngineCommand::AutoDistributePoolImages {
                                 only_unassigned: true,
@@ -9814,21 +9811,38 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
     }
 
     fn configure_screenshot_scene(&mut self, idx: u8) {
-        let lang = if idx < 5 {
+        let lang = if idx < 6 {
             lumaprint_i18n::Language::English
         } else {
             lumaprint_i18n::Language::German
         };
-        let scene = idx % 5;
+        let scene = idx % 6;
+
+        let find_ids = |doc: &PrintJobDocument, needle: &str| -> Vec<u64> {
+            doc.images
+                .iter()
+                .filter(|img| {
+                    img.display_name.contains(needle) || img.path.contains(needle)
+                })
+                .map(|img| img.id)
+                .collect()
+        };
 
         if scene == 0 {
             self.set_ui_language(Some(lang));
             self.session = Session::new();
-            let _ = self.session.execute(EngineCommand::AddDemoImages);
             let _ = self.session.populate_demo_for_screenshots();
+            let all_ids: Vec<u64> = self.session.doc.images.iter().map(|i| i.id).collect();
+            let col_h_ids = find_ids(&self.session.doc, "format-col-h");
+            let first_col_h = find_ids(&self.session.doc, "IMG_7681")
+                .first()
+                .copied()
+                .or_else(|| col_h_ids.first().copied())
+                .or_else(|| all_ids.first().copied())
+                .unwrap_or(1);
             let _ = self
                 .session
-                .execute(EngineCommand::SetPaperSizeKey("A3+".into()));
+                .execute(EngineCommand::SetPaperSizeKey("A4".into()));
             let _ = self
                 .session
                 .execute(EngineCommand::SetMediaKey("VelvetFineArt".into()));
@@ -9840,51 +9854,105 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
                 .session
                 .execute(EngineCommand::SetLayoutMode(LayoutMode::Standard(std_spec)));
             let _ = self.session.execute(EngineCommand::PlacePoolImageOnSheet {
-                image_id: 2,
+                image_id: first_col_h,
                 page_index: 0,
                 slot_index: Some(0),
             });
-            let _ = self.session.execute(EngineCommand::AddPage {
-                initial_image_id: Some(3),
-            });
+            let second_id = col_h_ids
+                .iter()
+                .copied()
+                .find(|&id| id != first_col_h)
+                .or_else(|| all_ids.iter().copied().find(|&id| id != first_col_h));
+            if let Some(sec_id) = second_id {
+                let _ = self.session.execute(EngineCommand::AddPage {
+                    initial_image_id: Some(sec_id),
+                });
+            }
             let _ = self
                 .session
                 .execute(EngineCommand::SelectPage { page_index: 0 });
             self.session.doc.show_rulers = true;
-            self.session.doc.show_slot_guides = true;
+            self.session.doc.show_slot_guides = false;
+            self.slot_selected = false;
             self.page_texture = None;
             self.page_thumb_textures.clear();
             self.thumbnail_textures.clear();
             self.forced_dock_open = Some(&["printer", "layout", "color"]);
             self.dirty_preview = true;
         } else if scene == 1 {
+            let mut horiz_ids: Vec<u64> = find_ids(&self.session.doc, "format-col-h")
+                .into_iter()
+                .chain(find_ids(&self.session.doc, "format-bw-h"))
+                .chain(find_ids(&self.session.doc, "format-sw-h"))
+                .collect();
+            if horiz_ids.is_empty() {
+                horiz_ids = self
+                    .session
+                    .doc
+                    .images
+                    .iter()
+                    .filter(|img| img.meta.width >= img.meta.height)
+                    .map(|img| img.id)
+                    .collect();
+            }
+            if horiz_ids.is_empty() {
+                horiz_ids = self.session.doc.images.iter().map(|i| i.id).collect();
+            }
             let tpl = TemplateLayoutSpec {
                 orientation: Orientation::Landscape,
                 template_id: String::from("EPL_ThemeLayout4"),
-                cut_marks: true,
-                caption_mode: SlotCaptionMode::NumberAndFilename,
+                cut_marks: false,
+                caption_mode: SlotCaptionMode::None,
                 ..Default::default()
             };
             let _ = self
                 .session
                 .execute(EngineCommand::SetLayoutMode(LayoutMode::Template(tpl)));
-            for (slot_index, image_id) in [(0, 2), (1, 3), (2, 1), (3, 2)] {
-                let _ = self.session.execute(EngineCommand::AssignImageToPageSlot {
-                    page_index: 0,
-                    slot_index,
-                    image_id: Some(image_id),
-                });
+            if !horiz_ids.is_empty() {
+                for slot_index in 0..4 {
+                    let image_id = horiz_ids[slot_index % horiz_ids.len()];
+                    let _ = self.session.execute(EngineCommand::AssignImageToPageSlot {
+                        page_index: 0,
+                        slot_index,
+                        image_id: Some(image_id),
+                    });
+                }
             }
+            self.session.doc.show_slot_guides = false;
+            self.slot_selected = false;
             self.forced_dock_open = Some(&["layout"]);
             self.dirty_preview = true;
         } else if scene == 2 {
+            let col_v_id = find_ids(&self.session.doc, "format-col-v")
+                .first()
+                .copied()
+                .or_else(|| self.session.doc.images.first().map(|i| i.id))
+                .unwrap_or(1);
+            if let Some(img) = self
+                .session
+                .doc
+                .images
+                .iter()
+                .find(|i| i.id == col_v_id)
+                .cloned()
+            {
+                let mut crop = img.crop;
+                crop.rotation_deg = 0;
+                let _ = self.session.execute(EngineCommand::SetImageCrop {
+                    image_id: col_v_id,
+                    crop,
+                });
+            }
+            let _ = self
+                .session
+                .execute(EngineCommand::ClearPageSlots { page_index: 0 });
             let gw = GalleryWrapSpec {
                 canvas_size_mm: SizeMm {
-                    width_mm: 240.0,
-                    height_mm: 180.0,
+                    width_mm: 130.0,
+                    height_mm: 195.0,
                 },
-                thickness_mm: 25.0,
-                back_extension_mm: 6.0,
+                thickness_mm: 20.0,
+                back_extension_mm: 5.0,
                 cut_marks: true,
                 effect: GalleryWrapEffect::MirrorShaded { blur_percent: 35 },
             };
@@ -9894,11 +9962,82 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             let _ = self.session.execute(EngineCommand::AssignImageToPageSlot {
                 page_index: 0,
                 slot_index: 0,
-                image_id: Some(3),
+                image_id: Some(col_v_id),
             });
+            self.session.doc.show_slot_guides = false;
+            self.slot_selected = false;
             self.forced_dock_open = Some(&["layout"]);
             self.dirty_preview = true;
         } else if scene == 3 {
+            let ids: Vec<u64> = self.session.doc.images.iter().map(|i| i.id).collect();
+            for &img_id in &ids {
+                if let Some(img) = self
+                    .session
+                    .doc
+                    .images
+                    .iter()
+                    .find(|i| i.id == img_id)
+                    .cloned()
+                {
+                    let mut crop = img.crop;
+                    crop.rotation_deg = 0;
+                    let _ = self.session.execute(EngineCommand::SetImageCrop {
+                        image_id: img_id,
+                        crop,
+                    });
+                }
+            }
+            let _ = self
+                .session
+                .execute(EngineCommand::ClearPageSlots { page_index: 0 });
+            let comp = FreeComposerSpec {
+                orientation: Orientation::Landscape,
+                page_margin_mm: 10.0,
+                nest_gap_mm: 6.0,
+                allow_rotation_in_nest: false,
+                cut_marks: false,
+                default_size_mm: SizeMm {
+                    width_mm: 90.0,
+                    height_mm: 60.0,
+                },
+                ..Default::default()
+            };
+            let _ = self
+                .session
+                .execute(EngineCommand::SetLayoutMode(LayoutMode::FreeComposer(comp)));
+            for &img_id in &ids {
+                let _ = self.session.execute(EngineCommand::PlacePoolImageOnSheet {
+                    image_id: img_id,
+                    page_index: 0,
+                    slot_index: None,
+                });
+            }
+            let _ = self
+                .session
+                .execute(EngineCommand::SelectPage { page_index: 0 });
+            self.session.doc.show_slot_guides = false;
+            self.slot_selected = false;
+            self.forced_dock_open = Some(&["layout"]);
+            self.dirty_preview = true;
+        } else if scene == 4 {
+            let col_h_id = find_ids(&self.session.doc, "IMG_7681")
+                .first()
+                .copied()
+                .or_else(|| find_ids(&self.session.doc, "format-col-h").first().copied())
+                .or_else(|| self.session.doc.images.first().map(|i| i.id))
+                .unwrap_or(1);
+            while self.session.doc.pages.len() > 2 {
+                let last = self.session.doc.pages.len() - 1;
+                let _ = self
+                    .session
+                    .execute(EngineCommand::RemovePage { page_index: last });
+            }
+            let _ = self
+                .session
+                .execute(EngineCommand::SelectPage { page_index: 0 });
+            let _ = self
+                .session
+                .execute(EngineCommand::ClearPageSlots { page_index: 0 });
             let std_spec = StandardLayoutSpec {
                 orientation: Orientation::Landscape,
                 ..Default::default()
@@ -9909,7 +10048,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             let _ = self.session.execute(EngineCommand::AssignImageToPageSlot {
                 page_index: 0,
                 slot_index: 0,
-                image_id: Some(2),
+                image_id: Some(col_h_id),
             });
             let _ = self
                 .session
@@ -9925,9 +10064,22 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             sp.simulate_paper_white = true;
             sp.gamut_warning = false;
             let _ = self.session.execute(EngineCommand::SetSoftproof(sp));
+            self.session.doc.show_slot_guides = false;
+            self.slot_selected = false;
             self.forced_dock_open = Some(&["color", "ink"]);
             self.dirty_preview = true;
-        } else if scene == 4 {
+        } else if scene == 5 {
+            let bw_h_id = find_ids(&self.session.doc, "format-bw-h")
+                .into_iter()
+                .chain(find_ids(&self.session.doc, "format-sw-h"))
+                .next()
+                .or_else(|| self.session.doc.images.first().map(|i| i.id))
+                .unwrap_or(1);
+            let _ = self.session.execute(EngineCommand::AssignImageToPageSlot {
+                page_index: 0,
+                slot_index: 0,
+                image_id: Some(bw_h_id),
+            });
             let mut sp = self.session.doc.color.softproof;
             sp.enabled = false;
             let _ = self.session.execute(EngineCommand::SetSoftproof(sp));
@@ -9942,6 +10094,8 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             abw.contrast = 6;
             abw.shadow_toning = 4;
             let _ = self.session.execute(EngineCommand::SetAbwSettings(abw));
+            self.session.doc.show_slot_guides = false;
+            self.slot_selected = false;
             self.forced_dock_open = Some(&["color"]);
             self.dirty_preview = true;
         }
@@ -9953,7 +10107,7 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
         };
         let idx = step / 4;
         let sub = step % 4;
-        if idx >= 10 {
+        if idx >= 12 {
             self.screenshot_step = None;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;
@@ -9986,18 +10140,19 @@ if dlg.exec() == int(QDialog.DialogCode.Accepted):
             }
             _ => {
                 if let Some(img) = shot {
-                    let lang_dir = if idx < 5 { "en" } else { "de" };
-                    let filename = match idx % 5 {
+                    let lang_dir = if idx < 6 { "en" } else { "de" };
+                    let filename = match idx % 6 {
                         0 => "ui_overview_standard.png",
                         1 => "ui_layout_template.png",
                         2 => "ui_layout_gallery_wrap.png",
-                        3 => "ui_color_softproof.png",
+                        3 => "ui_layout_gang.png",
+                        4 => "ui_color_softproof.png",
                         _ => "ui_color_abw.png",
                     };
                     let path = format!("docs/manual/{lang_dir}/images/{filename}");
                     save_color_image_png(&img, Path::new(&path));
                     let next_idx = idx + 1;
-                    if next_idx >= 10 {
+                    if next_idx >= 12 {
                         self.screenshot_step = None;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     } else {

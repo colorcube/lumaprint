@@ -49,3 +49,12 @@ Für den Druck auf Canvas-Medien, die anschließend auf einen Holz-Keilrahmen ge
 - Enthält alle originalen Layout-Vorlagen aus Epson Print Layout (`AirAssetsTempleteJson`).
 - **Vorlagen-Editor:** Erstellt eigene Raster-Vorlagen mit **1 bis 5 Zeilen** und **1 bis 5 Spalten**, anpassbaren Slot-Größen, *Hintergrundfarbe* und der Option *Bilder ganz anzeigen* (Fit vs. Fill).
 - Vorlagen lassen sich als `.json`-Datei exportieren und importieren.
+
+## 5. Sammel (Sammelbogen & Auto-Nesting)
+
+![LumaPrint – Sammelbogen-Layout](images/ui_layout_gang.png)
+
+- Platziert mehrere Bilder gleicher oder unterschiedlicher Zielgrößen platzsparend auf einem gemeinsamen Druckbogen (oder verteilt sie bei Platzmangel automatisch auf Folge-Bögen).
+- **Zielgröße (`Größe (Slot #)` / `Größe (neu)`):** Millimetergenaue Vorgabe oder Auswahl gängiger Fotoformate (`9 × 13 cm`, `10 × 15 cm`, `13 × 18 cm`, `15 × 20 cm`, `20 × 30 cm`, `Quadrat 10 × 10 cm`) pro Bild oder für alle Bilder des Bogens (*Auf alle*).
+- **Auto-Nesting & Drehung:** Packt alle zugewiesenen Bilder unter Berücksichtigung von *Bogenrand*, *Abstand* und optionaler 90°-Drehung (*Bilder bei Bedarf automatisch um 90° drehen (bessere Ausnutzung)*) optimal auf das Blatt.
+- **Schnittmarken & Rahmenlinie:** Optionale Eck-Schnittmarken (*Eck-Schnittmarken um jedes Bild*) und Rahmenlinien für den präzisen Zuschnitt.
