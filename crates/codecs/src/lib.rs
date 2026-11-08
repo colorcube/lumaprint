@@ -10,7 +10,7 @@
     clippy::unreachable
 )]
 
-use image::{ColorType, DynamicImage, GenericImageView, ImageDecoder, ImageEncoder, ImageReader};
+use image::{ColorType, DynamicImage, ImageDecoder, ImageEncoder, ImageReader};
 use lumaprint_cms::{IccProfile, WorkingColorSpace};
 use lumaprint_color::{ImageBuffer16, Rgb16};
 use lumaprint_i18n::tr;
@@ -80,24 +80,29 @@ pub fn load_image_file(path: impl AsRef<Path>) -> Result<LoadedImage, CodecError
 
 /// Decodes an image from an in-memory byte slice.
 pub fn load_image_from_bytes(bytes: &[u8], source_label: &str) -> Result<LoadedImage, CodecError> {
-    let mut decoder_icc: Option<Vec<u8>> = None;
-    if let Ok(reader) = ImageReader::new(Cursor::new(bytes)).with_guessed_format() {
-        if let Ok(mut decoder) = reader.into_decoder() {
-            if let Ok(Some(icc)) = decoder.icc_profile() {
-                decoder_icc = Some(icc);
-            }
-        }
-    }
+    let mut reader = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|e| CodecError::Decode {
+            path: source_label.to_string(),
+            reason: e.to_string(),
+        })?;
+    reader.no_limits();
 
-    let dyn_img = image::load_from_memory(bytes).map_err(|e| CodecError::Decode {
+    let mut decoder = reader.into_decoder().map_err(|e| CodecError::Decode {
         path: source_label.to_string(),
         reason: e.to_string(),
     })?;
-    let (width, height) = dyn_img.dimensions();
+    let (width, height) = decoder.dimensions();
     // EPL Manual p. 52 max size: 32767 x 32767
     if width == 0 || height == 0 || width > 32767 || height > 32767 {
         return Err(CodecError::UnsupportedDimensions { width, height });
     }
+    let decoder_icc = decoder.icc_profile().ok().flatten();
+
+    let dyn_img = DynamicImage::from_decoder(decoder).map_err(|e| CodecError::Decode {
+        path: source_label.to_string(),
+        reason: e.to_string(),
+    })?;
 
     let bit_depth_per_channel = match dyn_img.color() {
         ColorType::L16 | ColorType::La16 | ColorType::Rgb16 | ColorType::Rgba16 => 16,
@@ -522,6 +527,35 @@ mod tests {
         assert_eq!(
             loaded_tif.buffer.get_pixel(42, 29),
             chart.buffer.get_pixel(42, 29)
+        );
+    }
+
+    #[test]
+    fn decodes_large_16bit_tiff_exceeding_default_256mib_limit() {
+        // 8640 x 5760 x 3 channels x 2 bytes = 298_598_400 bytes (~284.8 MiB > 256 MiB default tiff limit)
+        let width = 8640u32;
+        let height = 5760u32;
+        let samples = vec![32768u16; (width as usize) * (height as usize) * 3];
+        let mut tiff_bytes = Vec::new();
+        {
+            let img = image::ImageBuffer::<image::Rgb<u16>, Vec<u16>>::from_raw(
+                width, height, samples,
+            )
+            .unwrap();
+            let dyn_img = DynamicImage::ImageRgb16(img);
+            dyn_img
+                .write_to(&mut Cursor::new(&mut tiff_bytes), image::ImageFormat::Tiff)
+                .unwrap();
+        }
+        assert!(tiff_bytes.len() > 256 * 1024 * 1024);
+
+        let loaded = load_image_from_bytes(&tiff_bytes, "large_300mb_16bit.tif").unwrap();
+        assert_eq!(loaded.meta.width, width);
+        assert_eq!(loaded.meta.height, height);
+        assert_eq!(loaded.meta.bit_depth_per_channel, 16);
+        assert_eq!(
+            loaded.buffer.get_pixel(0, 0),
+            Some(Rgb16::new(32768, 32768, 32768))
         );
     }
 }

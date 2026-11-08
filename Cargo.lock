@@ -1260,7 +1260,7 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "lumaprint"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "eframe",
  "egui",
@@ -1272,7 +1272,7 @@ dependencies = [
 
 [[package]]
 name = "lumaprint-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "lumaprint-cms",
  "lumaprint-codecs",
@@ -1290,7 +1290,7 @@ dependencies = [
 
 [[package]]
 name = "lumaprint-cms"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "lumaprint-color",
  "lumaprint-i18n",
@@ -1301,7 +1301,7 @@ dependencies = [
 
 [[package]]
 name = "lumaprint-codecs"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "image",
  "lumaprint-cms",
@@ -1314,7 +1314,7 @@ dependencies = [
 
 [[package]]
 name = "lumaprint-color"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rayon",
  "serde",
@@ -1323,7 +1323,7 @@ dependencies = [
 
 [[package]]
 name = "lumaprint-cups"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "lumaprint-geom",
  "lumaprint-i18n",
@@ -1334,7 +1334,7 @@ dependencies = [
 
 [[package]]
 name = "lumaprint-doc"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "lumaprint-cms",
  "lumaprint-codecs",
@@ -1348,7 +1348,7 @@ dependencies = [
 
 [[package]]
 name = "lumaprint-engine"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "lumaprint-cms",
  "lumaprint-codecs",
@@ -1368,7 +1368,7 @@ dependencies = [
 
 [[package]]
 name = "lumaprint-geom"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -1376,11 +1376,11 @@ dependencies = [
 
 [[package]]
 name = "lumaprint-i18n"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "lumaprint-ipp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "lumaprint-color",
  "lumaprint-i18n",
@@ -1390,7 +1390,7 @@ dependencies = [
 
 [[package]]
 name = "lumaprint-layout"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "lumaprint-color",
  "lumaprint-doc",
@@ -1402,7 +1402,7 @@ dependencies = [
 
 [[package]]
 name = "lumaprint-render"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "lumaprint-cms",
  "lumaprint-color",
@@ -1415,7 +1415,7 @@ dependencies = [
 
 [[package]]
 name = "lumaprint-ui-egui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "eframe",
  "egui",

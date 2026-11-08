@@ -896,23 +896,60 @@ impl Session {
             }
             EngineCommand::ImportImageFiles { paths } => {
                 let mut count = 0usize;
+                let mut failed = 0usize;
+                let mut first_err: Option<EngineError> = None;
                 for p in paths {
-                    if self.import_single_image_into_pool(&p).is_ok() {
-                        count += 1;
+                    match self.import_single_image_into_pool(&p) {
+                        Ok(_) => count += 1,
+                        Err(e) => {
+                            failed += 1;
+                            if first_err.is_none() {
+                                first_err = Some(e);
+                            }
+                        }
                     }
                 }
-                self.status_message = tr!(
-                    "{count} image(s) imported into the image pool.",
-                    count = count
-                );
+                if count == 0
+                    && let Some(err) = first_err
+                {
+                    self.undo_stack.pop();
+                    return Err(err);
+                }
+                self.status_message = if let Some(err) = first_err {
+                    tr!(
+                        "{count} image(s) imported into the image pool ({failed} failed: {error}).",
+                        count = count,
+                        failed = failed,
+                        error = err
+                    )
+                } else {
+                    tr!(
+                        "{count} image(s) imported into the image pool.",
+                        count = count
+                    )
+                };
             }
             EngineCommand::ImportAndPlaceOnSheet { paths, target_slot } => {
                 self.doc.sync_active_page_to_list();
                 let mut imported_ids = Vec::new();
+                let mut failed = 0usize;
+                let mut first_err: Option<EngineError> = None;
                 for p in paths {
-                    if let Ok((id, _)) = self.import_single_image_into_pool(&p) {
-                        imported_ids.push(id);
+                    match self.import_single_image_into_pool(&p) {
+                        Ok((id, _)) => imported_ids.push(id),
+                        Err(e) => {
+                            failed += 1;
+                            if first_err.is_none() {
+                                first_err = Some(e);
+                            }
+                        }
                     }
+                }
+                if imported_ids.is_empty()
+                    && let Some(err) = first_err
+                {
+                    self.undo_stack.pop();
+                    return Err(err);
                 }
                 let start_page = target_slot
                     .map(|(pi, _)| pi)
@@ -939,11 +976,21 @@ impl Session {
                     self.doc.active_slot_index = placed_slot;
                 }
                 self.doc.load_active_page_from_list();
-                self.status_message = tr!(
-                    "{count} image(s) imported and placed on sheets ({pages} sheet(s) in total).",
-                    count = imported_ids.len(),
-                    pages = self.doc.pages.len()
-                );
+                self.status_message = if let Some(err) = first_err {
+                    tr!(
+                        "{count} image(s) imported and placed on sheets ({pages} sheet(s) in total; {failed} failed: {error}).",
+                        count = imported_ids.len(),
+                        pages = self.doc.pages.len(),
+                        failed = failed,
+                        error = err
+                    )
+                } else {
+                    tr!(
+                        "{count} image(s) imported and placed on sheets ({pages} sheet(s) in total).",
+                        count = imported_ids.len(),
+                        pages = self.doc.pages.len()
+                    )
+                };
                 return Ok(());
             }
             EngineCommand::PlacePoolImageOnSheet {

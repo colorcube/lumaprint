@@ -18,8 +18,16 @@ pub(crate) static DE: &[(&str, &str)] = &[
         "{count} Bild(er) in den Bilder-Pool importiert.",
     ),
     (
+        "{count} image(s) imported into the image pool ({failed} failed: {error}).",
+        "{count} Bild(er) in den Bilder-Pool importiert ({failed} fehlgeschlagen: {error}).",
+    ),
+    (
         "{count} image(s) imported and placed on sheets ({pages} sheet(s) in total).",
         "{count} Bild(er) importiert und auf Bögen platziert ({pages} Bogen/Bögen insgesamt).",
+    ),
+    (
+        "{count} image(s) imported and placed on sheets ({pages} sheet(s) in total; {failed} failed: {error}).",
+        "{count} Bild(er) importiert und auf Bögen platziert ({pages} Bogen/Bögen insgesamt; {failed} fehlgeschlagen: {error}).",
     ),
     (
         "Image '{name}' placed on sheet {page} (slot {slot}).",

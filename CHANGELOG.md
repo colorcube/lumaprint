@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.1 – 2026-11-08
+
+### Fixes & Improvements
+- **Large 16-bit TIFF support (#4):** Disabled the default 256 MiB / 512 MiB decoder allocation limit in `lumaprint-codecs` so large 16-bit TIFF files (e.g. 300+ MB high-resolution scans and camera exports up to `32767 × 32767` px) load cleanly.
+- **Import error feedback (#4):** Multi-file and drag-and-drop image imports (`ImportImageFiles`, `ImportAndPlaceOnSheet`) now surface decode/read errors in the status bar instead of silently reporting `0 image(s) imported`.
+- **Wide-gamut thumbnail color management:** Image pool thumbnails are now converted to the active monitor color space (`sRGB`, `Display P3`, `Adobe RGB (1998)`), matching the main canvas preview.
+- **UI & Documentation:** Removed the synthetic *Load test images* menu item (#3), added documentation and screenshots for the **Gang Sheet (Auto Nesting)** layout mode, and updated the online manual links.
+
 ## 0.1.0 – 2026-11-02 (beta)
 
 First public version.
