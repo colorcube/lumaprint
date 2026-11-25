@@ -467,6 +467,8 @@ impl Session {
         ];
         if let Some(home) = std::env::var_os("HOME") {
             let h = PathBuf::from(home);
+            icc_search_dirs.push(h.join(".local/share/color/icc"));
+            icc_search_dirs.push(h.join(".local/share/color/icc/epson-scp900"));
             icc_search_dirs.push(h.join(".local/share/icc"));
             icc_search_dirs.push(h.join(".color/icc"));
         }
@@ -511,7 +513,7 @@ impl Session {
     }
 
     /// Restores saved settings. A saved printer queue that no longer exists is replaced by the
-    /// detected default printer; media constraints are re-applied for the restored paper.
+    /// detected default printer; media constraints and custom ICC profiles are re-applied.
     pub fn apply_persistent_settings(&mut self, settings: &PersistentSettings) {
         let detected_queue = self.doc.printer.printer_queue.clone();
         settings.apply_to(&mut self.doc);
@@ -520,6 +522,32 @@ impl Session {
             || self.system_printers.iter().any(|p| &p.queue_name == queue);
         if !queue_known {
             self.doc.printer.printer_queue = detected_queue;
+        }
+        // Re-merge external custom_media.json entries so papers installed via ep-media-installer
+        // are not overwritten by an older settings.json snapshot.
+        self.discover_custom_media();
+        if let Some(custom_icc) = self.doc.color.custom_icc_profile_path.clone() {
+            self.ensure_icc_loaded(&custom_icc);
+        }
+        let cm_iccs: Vec<String> = self
+            .doc
+            .user_backup
+            .custom_media
+            .iter()
+            .filter_map(|cm| cm.icc_profile_path.clone())
+            .collect();
+        for icc in cm_iccs {
+            self.ensure_icc_loaded(&icc);
+        }
+        let preset_iccs: Vec<String> = self
+            .doc
+            .user_backup
+            .presets
+            .iter()
+            .filter_map(|p| p.color.custom_icc_profile_path.clone())
+            .collect();
+        for icc in preset_iccs {
+            self.ensure_icc_loaded(&icc);
         }
         self.apply_media_constraints();
     }
@@ -532,41 +560,89 @@ impl Session {
             .or_else(|| self.system_printers.first())
     }
 
+    /// Copies an externally chosen `.icc`/`.icm` file into `~/.local/share/color/icc/epson-scp900/`
+    /// so it remains permanently discoverable in `icc_search_dirs` across application restarts.
+    fn cache_external_icc_in_user_store(&self, path_str: &str) {
+        let src = Path::new(path_str);
+        if !src.is_file() {
+            return;
+        }
+        let Some(fname) = src.file_name() else {
+            return;
+        };
+        let Some(home) = std::env::var_os("HOME") else {
+            return;
+        };
+        let dst_dir = PathBuf::from(home).join(".local/share/color/icc/epson-scp900");
+        let dst = dst_dir.join(fname);
+        if src == dst || dst.is_file() {
+            return;
+        }
+        if std::fs::create_dir_all(&dst_dir).is_ok() {
+            let _ = std::fs::copy(src, &dst);
+        }
+    }
+
     /// Loads an ICC profile from disk into `self.icc_profiles` if not yet cached, indexing both by full path and basename.
     pub fn ensure_icc_loaded(&mut self, path_str: &str) {
         let p = Path::new(path_str);
-        if let Ok(prof) = IccProfile::from_file(p) {
+        let resolved_path = if p.is_file() {
+            Some(p.to_path_buf())
+        } else if let Some(fname) = p.file_name() {
+            self.icc_search_dirs
+                .iter()
+                .map(|dir| dir.join(fname))
+                .find(|cand| cand.is_file())
+        } else {
+            None
+        };
+        if let Some(target) = resolved_path
+            && let Ok(prof) = IccProfile::from_file(&target)
+        {
             self.icc_profiles
                 .entry(path_str.to_string())
                 .or_insert_with(|| prof.clone());
-            if let Some(fname) = p.file_name().and_then(|n| n.to_str()) {
+            if let Some(target_str) = target.to_str() {
+                self.icc_profiles
+                    .entry(target_str.to_string())
+                    .or_insert_with(|| prof.clone());
+            }
+            if let Some(fname) = target.file_name().and_then(|n| n.to_str()) {
                 self.icc_profiles.entry(fname.to_string()).or_insert(prof);
             }
         }
     }
 
-    /// Scans `icc_search_dirs` and PPD `*cupsICCProfile` entries for `.icc` / `.icm` profiles.
+    fn load_icc_files_in_dir(&mut self, dir: &Path, scan_subdirs: bool) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if scan_subdirs {
+                    self.load_icc_files_in_dir(&path, false);
+                }
+                continue;
+            }
+            let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+                continue;
+            };
+            if (ext.eq_ignore_ascii_case("icc") || ext.eq_ignore_ascii_case("icm"))
+                && let Some(fname) = path.file_name().and_then(|n| n.to_str())
+                && !self.icc_profiles.contains_key(fname)
+                && let Ok(prof) = IccProfile::from_file(&path)
+            {
+                self.icc_profiles.insert(fname.to_string(), prof);
+            }
+        }
+    }
+
+    /// Scans `icc_search_dirs` (including one level of subdirectories) and PPD `*cupsICCProfile` entries for `.icc` / `.icm` profiles.
     pub fn discover_icc_profiles(&mut self) {
         let dirs = self.icc_search_dirs.clone();
         for dir in &dirs {
-            let Ok(entries) = std::fs::read_dir(dir) else {
-                continue;
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
-                    continue;
-                };
-                if ext.eq_ignore_ascii_case("icc") || ext.eq_ignore_ascii_case("icm") {
-                    if let Some(fname) = path.file_name().and_then(|n| n.to_str()) {
-                        if !self.icc_profiles.contains_key(fname) {
-                            if let Ok(prof) = IccProfile::from_file(&path) {
-                                self.icc_profiles.insert(fname.to_string(), prof);
-                            }
-                        }
-                    }
-                }
-            }
+            self.load_icc_files_in_dir(dir, true);
         }
 
         let ppd_paths: Vec<String> = self
@@ -611,7 +687,13 @@ impl Session {
                 (!cm.key.is_empty() && cm.key.eq_ignore_ascii_case(&entry.key))
                     || cm.name.eq_ignore_ascii_case(&entry.name)
             }) {
+                // Preserve a user-assigned ICC profile if the external entry had none
+                let preserved_icc = spec
+                    .icc_profile_path
+                    .clone()
+                    .or_else(|| existing.icc_profile_path.clone());
                 *existing = spec;
+                existing.icc_profile_path = preserved_icc;
             } else {
                 self.doc.user_backup.custom_media.push(spec);
             }
@@ -1214,6 +1296,7 @@ impl Session {
                     cm.key = format!("Custom_{safe_name}");
                 }
                 if let Some(ref icc_path) = cm.icc_profile_path {
+                    self.cache_external_icc_in_user_store(icc_path);
                     self.ensure_icc_loaded(icc_path);
                 }
                 self.doc.printer.media_key = cm.key.clone();
@@ -1958,6 +2041,7 @@ impl Session {
             } => {
                 self.doc.color.auto_select_icc_for_media = auto_select;
                 if let Some(path) = custom_path {
+                    self.cache_external_icc_in_user_store(&path);
                     self.ensure_icc_loaded(&path);
                     self.doc.color.custom_icc_profile_path = Some(path.clone());
                     // Also link to currently active CustomMediaSpec if it didn't have an ICC profile yet
@@ -2063,6 +2147,9 @@ impl Session {
                 self.doc.printer = preset.printer;
                 self.doc.layout = preset.layout;
                 self.doc.color = preset.color;
+                if let Some(custom_icc) = self.doc.color.custom_icc_profile_path.clone() {
+                    self.ensure_icc_loaded(&custom_icc);
+                }
                 self.doc.active_preset_name = Some(preset.name.clone());
                 self.status_message = tr!("Preset '{name}' loaded.", name = preset.name);
             }
@@ -3016,8 +3103,26 @@ impl Session {
             save_png8_with_dpi(buf.width, buf.height, &rgb8, dpi, tmp.path())?;
 
             let mut req = self.build_cups_spool_request();
-            req.extra_options
-                .insert(String::from("ppi"), dpi.max(72).to_string());
+            let ppd_has_borderless_page_size = self.active_system_printer().is_some_and(|sp| {
+                let bl_code = format!("{}.Borderless", req.page_size);
+                let fb_code = format!("{}.FB", req.page_size);
+                sp.capabilities.page_sizes.iter().any(|c| {
+                    c.code.eq_ignore_ascii_case(&bl_code) || c.code.eq_ignore_ascii_case(&fb_code)
+                })
+            });
+            if req.borderless && !ppd_has_borderless_page_size {
+                // Standard PPDs have an 8.40 pt ImageableArea margin; passing `ppi=720` with a full-bleed
+                // image causes `cfFilterImageToRaster` to see `img > ImageableArea` and split the page 2x2.
+                req.extra_options
+                    .insert(String::from("scaling"), String::from("100"));
+            } else {
+                if req.borderless && ppd_has_borderless_page_size {
+                    let bl_code = format!("{}.Borderless", req.page_size);
+                    req.page_size = bl_code;
+                }
+                req.extra_options
+                    .insert(String::from("ppi"), dpi.max(72).to_string());
+            }
             if page_indices.len() > 1 {
                 req.job_title = format!("LumaPrint FineArt Sheet ({})", pi + 1);
             }
@@ -3712,5 +3817,57 @@ mod tests {
         assert!(out_tif.exists());
 
         let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
+
+    #[test]
+    fn custom_icc_profile_persists_across_session_restart() {
+        let mut s1 = Session::new();
+        let Some((existing_key, _)) = s1.available_icc_profile_list().into_iter().next() else {
+            return;
+        };
+        let Some(existing_prof) = s1.icc_profiles.get(&existing_key).cloned() else {
+            return;
+        };
+        let Some(src_path) = existing_prof.file_path else {
+            return;
+        };
+
+        let tmp_dir = std::env::temp_dir().join("lumaprint_icc_persist_test");
+        let _ = std::fs::create_dir_all(&tmp_dir);
+        let custom_icc_path = tmp_dir.join("Custom_User_Test_Paper.icc");
+        if std::fs::copy(&src_path, &custom_icc_path).is_err() {
+            return;
+        }
+        let custom_icc_str = custom_icc_path.to_str().unwrap().to_string();
+
+        s1.execute(EngineCommand::SetIccProfileSelection {
+            auto_select: false,
+            custom_path: Some(custom_icc_str.clone()),
+        })
+        .unwrap();
+        assert!(s1.active_icc_profile().is_some());
+
+        let saved_settings = s1.persistent_settings();
+
+        // Simulate a fresh application start with a new Session
+        let mut s2 = Session::new();
+        s2.apply_persistent_settings(&saved_settings);
+
+        assert!(!s2.doc.color.auto_select_icc_for_media);
+        assert_eq!(
+            s2.doc.color.custom_icc_profile_path.as_deref(),
+            Some(custom_icc_str.as_str())
+        );
+        assert!(
+            s2.active_icc_profile().is_some(),
+            "custom ICC profile must be reloaded after apply_persistent_settings"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+        if let Some(home) = std::env::var_os("HOME") {
+            let cached = PathBuf::from(home)
+                .join(".local/share/color/icc/epson-scp900/Custom_User_Test_Paper.icc");
+            let _ = std::fs::remove_file(cached);
+        }
     }
 }

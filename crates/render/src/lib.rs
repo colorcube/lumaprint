@@ -315,13 +315,60 @@ pub fn render_cups_spool_page_at_16bit(
         // CUPS PPD ImageableArea margin is 8.40 pt = 84 dots at 720 dpi on all 4 sides.
         let m_px = ((84u64 * u64::from(target_dpi) + 360) / 720) as u32;
         if full_w > 2 * m_px + 16 && full_h > 2 * m_px + 16 {
-            let crop_w = full_w - 2 * m_px;
-            let crop_h = full_h - 2 * m_px;
+            let mut crop_w = full_w - 2 * m_px;
+            let mut crop_h = full_h - 2 * m_px;
+            // Clamp to the exact integer CUPS PPD ImageableArea dot limit (`floor((pt - 16.80) * dpi / 72.0)`)
+            // so `cfFilterImageToRaster` with `-o ppi=720` never overflows by 0.2..4.0 px and never splits
+            // a sheet (such as A2, A3, A3+, A5, A6, 5x7) into 2x2 or 1x2 tiled pages.
+            if let Some((max_short, max_long)) =
+                ppd_max_imageable_dots(&doc.printer.paper_size_key, target_dpi)
+            {
+                if crop_w <= crop_h {
+                    crop_w = crop_w.min(max_short);
+                    crop_h = crop_h.min(max_long);
+                } else {
+                    crop_w = crop_w.min(max_long);
+                    crop_h = crop_h.min(max_short);
+                }
+            }
             page_buf = extract_subrect(&page_buf, m_px, m_px, crop_w, crop_h)?;
         }
     }
 
     Ok((page_buf, solved))
+}
+
+/// Returns `(min_dim_dots, max_dim_dots)` of the CUPS PPD `*ImageableArea` (`paper_pt - 16.80 pt`)
+/// at `target_dpi`, ensuring `cfFilterImageToRaster` (`ppi=target_dpi`) always formats `xpages=1, ypages=1`.
+fn ppd_max_imageable_dots(paper_size_key: &str, target_dpi: u32) -> Option<(u32, u32)> {
+    let trimmed = paper_size_key
+        .trim()
+        .trim_end_matches(".FB")
+        .trim_end_matches(".Borderless");
+    let (w_pt, h_pt) = match trimmed.to_ascii_lowercase().as_str() {
+        "a4" => (595.28_f64, 841.89_f64),
+        "a3" => (841.89, 1190.55),
+        "a3plus" | "a3+" | "superb" | "13x19" | "w936h1368" => (932.60, 1369.13),
+        "a2" => (1190.55, 1683.78),
+        "a5" => (419.53, 595.28),
+        "a6" => (297.64, 419.53),
+        "letter" => (612.00, 792.00),
+        "legal" => (612.00, 1008.00),
+        "4x6" | "4x6in" | "w288h432" => (288.00, 432.00),
+        "5x7" | "5x7in" | "w360h504" => (360.00, 504.00),
+        "8x10" | "8x10in" | "w576h720" => (576.00, 720.00),
+        "10x12" => (720.00, 864.00),
+        "11x14" => (792.00, 1008.00),
+        "12x12" => (864.00, 864.00),
+        "11x17" => (792.00, 1224.00),
+        "16x20" => (1152.00, 1440.00),
+        "17x22" | "usc_17x22" | "usc" | "w1224h1584" => (1224.00, 1584.00),
+        _ => return None,
+    };
+    let dpi_f = f64::from(target_dpi);
+    let img_w = (((w_pt - 16.80).max(1.0) * dpi_f) / 72.0).floor() as u32;
+    let img_h = (((h_pt - 16.80).max(1.0) * dpi_f) / 72.0).floor() as u32;
+    Some((img_w.min(img_h), img_w.max(img_h)))
 }
 
 fn apply_color_pipeline(
@@ -1079,8 +1126,9 @@ mod tests {
 
         let (spool_buf, _) = render_cups_spool_page_at_16bit(&doc, 0, &map, None, 50).unwrap();
         let m_px = ((84u64 * 50 + 360) / 720) as u32;
-        assert_eq!(spool_buf.width, full_buf.width - 2 * m_px);
-        assert_eq!(spool_buf.height, full_buf.height - 2 * m_px);
+        let (max_w, max_h) = ppd_max_imageable_dots("A4", 50).unwrap();
+        assert_eq!(spool_buf.width, (full_buf.width - 2 * m_px).min(max_w));
+        assert_eq!(spool_buf.height, (full_buf.height - 2 * m_px).min(max_h));
         assert_eq!(spool_buf.get_pixel(0, 0), Some(Rgb16::WHITE));
     }
 
@@ -1139,5 +1187,47 @@ mod tests {
         WorkingColorSpace::AdobeRgb1998.convert_buffer_to(&mut expected, WorkingColorSpace::Srgb);
         doc.color.abw.apply_to_buffer(&mut expected);
         assert_eq!(out.get_pixel(0, 0), expected.get_pixel(0, 0));
+    }
+
+    #[test]
+    fn cups_spool_page_dimensions_never_overflow_ppd_imageable_area() {
+        use lumaprint_doc::{LayoutMode, StandardLayoutSpec};
+        use lumaprint_geom::Orientation;
+
+        let map = HashMap::new();
+        for (key, max_w_720, max_h_720) in [
+            ("A2", 11737u32, 16669u32),
+            ("A3", 8250, 11737),
+            ("A3Plus", 9158, 13523),
+            ("A4", 5784, 8250),
+            ("A5", 4027, 5784),
+            ("A6", 2808, 4027),
+            ("5x7", 3432, 4872),
+        ] {
+            let mut doc = PrintJobDocument::default();
+            doc.printer.paper_size_key = key.into();
+            doc.printer.borderless = false;
+
+            // Portrait at 72 dpi (1/10th of 720 dpi for fast test execution) and verify ppd_max_imageable_dots at 720 dpi
+            let (short_720, long_720) = ppd_max_imageable_dots(key, 720).unwrap();
+            assert_eq!(
+                (short_720, long_720),
+                (max_w_720, max_h_720),
+                "mismatch for {key}"
+            );
+
+            let (buf_p, _) = render_cups_spool_page_at_16bit(&doc, 0, &map, None, 72).unwrap();
+            let (max_s_72, max_l_72) = ppd_max_imageable_dots(key, 72).unwrap();
+            assert!(buf_p.width <= max_s_72 && buf_p.height <= max_l_72);
+
+            // Landscape
+            doc.layout = LayoutMode::Standard(StandardLayoutSpec {
+                orientation: Orientation::Landscape,
+                ..Default::default()
+            });
+            doc.sync_active_page_to_list();
+            let (buf_l, _) = render_cups_spool_page_at_16bit(&doc, 0, &map, None, 72).unwrap();
+            assert!(buf_l.width <= max_l_72 && buf_l.height <= max_s_72);
+        }
     }
 }
